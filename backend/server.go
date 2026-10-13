@@ -35,16 +35,22 @@ type Config struct {
 	Mailer        VerificationMailer
 	EmailFrom     string
 	EmailSecurity string
+	UploadDir     string
+	NoticeMailer  NoticeMailer
+	JudgeURL      string
+	JudgeToken    string
 }
 type attempt struct {
 	count int
 	since time.Time
 }
 type App struct {
-	store    *Store
-	config   Config
-	attempts map[string]attempt
-	rateMu   sync.Mutex
+	store      *Store
+	config     Config
+	attempts   map[string]attempt
+	rateMu     sync.Mutex
+	platformMu sync.Mutex
+	judgeSlots chan struct{}
 }
 type apiError struct {
 	status            int
@@ -72,7 +78,7 @@ func respond(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 func decode(r *http.Request, v any) error {
-	d := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	d := json.NewDecoder(io.LimitReader(r.Body, 4<<20))
 	d.DisallowUnknownFields()
 	if err := d.Decode(v); err != nil {
 		return fail(400, "请求数据格式不正确")
@@ -146,7 +152,13 @@ func (a *App) wrapWithMutationLock(auth, mutationLock bool, handler func(http.Re
 					return
 				}
 			}
-			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+			limit := int64(1 << 20)
+			if r.URL.Path == "/api/files" {
+				limit = 26 << 20
+			} else if r.URL.Path == "/api/auth/register" || r.URL.Path == "/api/profile" {
+				limit = 4 << 20
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
 			body, readErr := io.ReadAll(r.Body)
 			if readErr != nil {
 				respond(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "请求过大或读取失败"})
@@ -218,6 +230,9 @@ func (a *App) Handler() http.Handler {
 	m.HandleFunc("GET /api/settings", a.wrap(true, a.getSettings))
 	m.HandleFunc("GET /api/settings/email", a.wrap(true, a.emailSettings))
 	m.HandleFunc("PATCH /api/settings", a.wrap(true, a.updateSettings))
+	a.registerPlatformRoutes(m)
+	a.registerTaskPlatformRoutes(m)
+	m.HandleFunc("GET /api/workspace-summary", a.wrap(true, a.workspaceSummary))
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, 404, map[string]string{"error": "接口不存在"})
 	})
@@ -578,6 +593,13 @@ func (a *App) memberList() ([]User, error) {
 		return nil, err
 	}
 	admitted := map[string]bool{}
+	memberships, err := readAll[Membership](a.store, "SELECT payload FROM team_memberships")
+	if err != nil {
+		return nil, err
+	}
+	for _, membership := range memberships {
+		admitted[membership.UserID] = true
+	}
 	for _, v := range applications {
 		if v.Status == "accepted" {
 			admitted[v.UserID] = true
@@ -600,7 +622,40 @@ func (a *App) members(w http.ResponseWriter, r *http.Request, u User) error {
 	if err != nil {
 		return err
 	}
-	respond(w, 200, map[string]any{"items": items})
+	teams, err := readAll[Team](a.store, "SELECT payload FROM teams")
+	if err != nil {
+		return err
+	}
+	memberships, err := readAll[Membership](a.store, "SELECT payload FROM team_memberships")
+	if err != nil {
+		return err
+	}
+	type memberTeam struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Competition string `json:"competition"`
+		Direction   string `json:"direction"`
+	}
+	type memberEntry struct {
+		User
+		Teams []memberTeam `json:"teams"`
+	}
+	teamMap := map[string]Team{}
+	for _, team := range teams {
+		teamMap[team.ID] = team
+	}
+	result := []memberEntry{}
+	for _, member := range items {
+		entry := memberEntry{User: member, Teams: []memberTeam{}}
+		for _, membership := range memberships {
+			if membership.UserID == member.ID {
+				team := teamMap[membership.TeamID]
+				entry.Teams = append(entry.Teams, memberTeam{team.ID, team.Name, team.Competition, membership.Direction})
+			}
+		}
+		result = append(result, entry)
+	}
+	respond(w, 200, map[string]any{"items": result})
 	return nil
 }
 func (a *App) getSettings(w http.ResponseWriter, r *http.Request, u User) error {
@@ -675,7 +730,11 @@ func (a *App) tasksFor(u User) ([]Task, error) {
 	}
 	result := []Task{}
 	for _, t := range tasks {
-		if !taskVisible(t, u) {
+		visible, visibilityErr := a.taskVisibleTo(t, u)
+		if visibilityErr != nil {
+			return nil, visibilityErr
+		}
+		if !visible {
 			continue
 		}
 		seen := map[string]bool{}
@@ -694,7 +753,7 @@ func (a *App) tasksFor(u User) ([]Task, error) {
 				t.MySubmission = &copy
 			}
 		}
-		result = append(result, t)
+		result = append(result, publicTask(t, u))
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt > result[j].CreatedAt })
 	return result, nil
@@ -729,6 +788,9 @@ func (a *App) createTask(w http.ResponseWriter, r *http.Request, u User) error {
 	case "入门", "进阶", "挑战":
 	default:
 		return fail(400, "无效的任务难度")
+	}
+	if err := a.validateTaskPlatform(&t, u); err != nil {
+		return err
 	}
 	t.ID = randomID()
 	t.CreatedBy = u.ID
@@ -769,43 +831,38 @@ func (a *App) submitTask(w http.ResponseWriter, r *http.Request, u User) error {
 	if u.Role != "student" {
 		return fail(403, "只有录取成员可提交任务")
 	}
-	application, err := readOne[Applicant](a.store, "SELECT payload FROM applicants WHERE user_id=?", u.ID)
-	if errors.Is(err, sql.ErrNoRows) || err == nil && application.Status != "accepted" {
-		return fail(403, "录取后才可提交培养任务")
-	}
-	if err != nil {
-		return err
-	}
 	t, err := a.store.task(r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	if (t.Team != "" && t.Team != u.Team) || (t.Direction != "" && t.Direction != u.Direction) {
-		return fail(403, "该任务不属于你的赛队或技术方向")
-	}
-	if expired(t.DueAt) {
-		return fail(409, "该任务已截止")
+	if err = a.requireTaskSubmission(t, u); err != nil {
+		return err
 	}
 	var in struct {
-		Content     string `json:"content"`
-		RepoURL     string `json:"repoUrl"`
-		ArtifactURL string `json:"artifactUrl"`
+		FileIDs     []string `json:"fileIds"`
+		JudgeRunID  string   `json:"judgeRunId"`
+		Content     string   `json:"content"`
+		RepoURL     string   `json:"repoUrl"`
+		ArtifactURL string   `json:"artifactUrl"`
 	}
 	if err = decode(r, &in); err != nil {
 		return err
 	}
 	in.Content = strings.TrimSpace(in.Content)
-	if in.Content == "" && in.RepoURL == "" && in.ArtifactURL == "" {
+	if in.Content == "" && in.RepoURL == "" && in.ArtifactURL == "" && len(in.FileIDs) == 0 {
 		return fail(400, "请填写提交说明或成果链接")
 	}
 	if len(in.Content) > 50000 || !validURL(in.RepoURL) || !validURL(in.ArtifactURL) {
 		return fail(400, "提交说明过长或链接无效")
 	}
+	if err = a.validateSubmissionFiles(t, u, in.FileIDs, in.JudgeRunID); err != nil {
+		return err
+	}
 	var version int
 	if err = a.store.row("SELECT COALESCE(MAX(version),0) FROM submissions WHERE task_id=? AND user_id=?", t.ID, u.ID).Scan(&version); err != nil {
 		return err
 	}
-	s := Submission{ID: randomID(), TaskID: t.ID, UserID: u.ID, UserName: u.Name, Content: in.Content, RepoURL: in.RepoURL, ArtifactURL: in.ArtifactURL, Version: version + 1, Status: "pending", CreatedAt: now()}
+	s := Submission{FileIDs: normalizedIDs(in.FileIDs), JudgeRunID: in.JudgeRunID, ID: randomID(), TaskID: t.ID, UserID: u.ID, UserName: u.Name, Content: in.Content, RepoURL: in.RepoURL, ArtifactURL: in.ArtifactURL, Version: version + 1, Status: "pending", CreatedAt: now()}
 	if err = a.store.exec("INSERT INTO submissions(id,task_id,user_id,version,payload) VALUES(?,?,?,?,?)", s.ID, s.TaskID, s.UserID, s.Version, encoded(s)); err != nil {
 		return err
 	}
@@ -945,7 +1002,7 @@ func (a *App) dashboard(w http.ResponseWriter, r *http.Request, u User) error {
 }
 
 func newApp(store *Store, config Config) *App {
-	return &App{store: store, config: config, attempts: map[string]attempt{}}
+	return &App{store: store, config: config, attempts: map[string]attempt{}, judgeSlots: make(chan struct{}, 2)}
 }
 func env(name, fallback string) string {
 	v := os.Getenv(name)
@@ -968,8 +1025,18 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	app := newApp(store, Config{Mailer: mailer, EmailFrom: emailConfig.From, EmailSecurity: emailConfig.Security, Demo: demo, Secure: os.Getenv("SESSION_SECURE") == "true", PublicOrigin: os.Getenv("PUBLIC_ORIGIN"), WebDir: env("WEB_DIR", "../frontend/dist")})
-	server := &http.Server{Addr: env("ADDR", "127.0.0.1:8080"), Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
+	var noticeMailer NoticeMailer
+	if value, ok := mailer.(NoticeMailer); ok {
+		noticeMailer = value
+	}
+	app := newApp(store, Config{Mailer: mailer, NoticeMailer: noticeMailer, EmailFrom: emailConfig.From, EmailSecurity: emailConfig.Security, Demo: demo, Secure: os.Getenv("SESSION_SECURE") == "true", PublicOrigin: os.Getenv("PUBLIC_ORIGIN"), WebDir: env("WEB_DIR", "../frontend/dist"), UploadDir: env("UPLOAD_DIR", filepath.Join(env("DATA_DIR", "./data"), "uploads")), JudgeURL: os.Getenv("JUDGE_URL"), JudgeToken: os.Getenv("JUDGE_TOKEN")})
+	if err = validateJudgeURL(app.config.JudgeURL); err != nil {
+		log.Fatal(err)
+	}
+	if err = app.recoverPlatformJobs(); err != nil {
+		log.Fatal(err)
+	}
+	server := &http.Server{Addr: env("ADDR", "127.0.0.1:8080"), Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 120 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	log.Printf("Robot Team Hub listening on %s (demo=%v)", server.Addr, demo)
 	if err = server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(fmt.Errorf("serve: %w", err))

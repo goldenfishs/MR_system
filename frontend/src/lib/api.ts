@@ -25,15 +25,29 @@ async function request<T>(
   path: string,
   method = "GET",
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`/api${path}`, {
       method,
       credentials: "same-origin",
-      headers: body === undefined ? {} : { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(20000),
+      headers:
+        body === undefined || body instanceof FormData
+          ? {}
+          : { "Content-Type": "application/json" },
+      body:
+        body === undefined
+          ? undefined
+          : body instanceof FormData
+            ? body
+            : JSON.stringify(body),
+      signal: signal
+        ? AbortSignal.any([
+            signal,
+            AbortSignal.timeout(body instanceof FormData ? 120000 : 20000),
+          ])
+        : AbortSignal.timeout(body instanceof FormData ? 120000 : 20000),
     });
   } catch {
     throw new ApiError(
@@ -63,6 +77,8 @@ async function request<T>(
   return data as T;
 }
 export const api = {
+  upload: <T>(path: string, body: FormData, signal?: AbortSignal) =>
+    request<T>(path, "POST", body, signal),
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) => request<T>(path, "POST", body),
   patch: <T>(path: string, body: unknown) => request<T>(path, "PATCH", body),

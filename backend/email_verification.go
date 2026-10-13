@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -190,10 +191,12 @@ func (a *App) reserveVerificationSend(ctx context.Context, email, ipHash string,
 
 func (a *App) register(w http.ResponseWriter, r *http.Request, _ User) error {
 	var in struct {
-		Name             string `json:"name"`
-		Email            string `json:"email"`
-		Password         string `json:"password"`
-		VerificationCode string `json:"verificationCode"`
+		Name             string        `json:"name"`
+		Email            string        `json:"email"`
+		Password         string        `json:"password"`
+		VerificationCode string        `json:"verificationCode"`
+		Profile          ProfileFields `json:"profile"`
+		Photo            PhotoInput    `json:"photo"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -209,8 +212,16 @@ func (a *App) register(w http.ResponseWriter, r *http.Request, _ User) error {
 	if !validVerificationCode(in.VerificationCode) {
 		return fail(400, "请填写 6 位邮箱验证码")
 	}
+	profile := profileFromFields(in.Name, in.Profile)
+	if err := validateProfile(profile); err != nil {
+		return err
+	}
 	if !a.rateAllowed(r, email) {
 		return rateLimit("尝试次数过多，请 15 分钟后重试", 900)
+	}
+	photo, photoData, err := preparePhoto(in.Photo, "")
+	if err != nil {
+		return err
 	}
 	tx, err := a.store.db.BeginTx(r.Context(), nil)
 	if err != nil {
@@ -262,6 +273,24 @@ func (a *App) register(w http.ResponseWriter, r *http.Request, _ User) error {
 	if err = s.exec("INSERT INTO users(id,email,password_hash,payload) VALUES(?,?,?,?)", u.ID, email, string(passwordHash), encoded(u)); err != nil {
 		return err
 	}
+	photo.OwnerID = u.ID
+	photoPath, err := a.persistAsset(s, photo, photoData)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			os.Remove(photoPath)
+		}
+	}()
+	profile.UserID = u.ID
+	profile.PhotoFileID = photo.ID
+	profile.UpdatedAt = verifiedAt
+	profile.Complete = true
+	if err = s.saveProfile(profile); err != nil {
+		return err
+	}
 	if err = s.exec("DELETE FROM email_verifications WHERE email=?", email); err != nil {
 		return err
 	}
@@ -272,6 +301,7 @@ func (a *App) register(w http.ResponseWriter, r *http.Request, _ User) error {
 	if err = tx.Commit(); err != nil {
 		return err
 	}
+	committed = true
 	http.SetCookie(w, cookie)
 	a.clearRate(r, email)
 	a.activity(u, "验证邮箱并注册账号", u.Name)
@@ -283,6 +313,6 @@ func (a *App) emailSettings(w http.ResponseWriter, _ *http.Request, u User) erro
 	if u.Role != "admin" {
 		return fail(403, "只有管理员可查看邮箱服务配置")
 	}
-	respond(w, 200, map[string]any{"configured": a.config.Mailer != nil, "from": a.config.EmailFrom, "security": a.config.EmailSecurity})
+	respond(w, 200, map[string]any{"configured": a.config.Mailer != nil, "from": a.config.EmailFrom, "security": a.config.EmailSecurity, "supportsBulk": a.config.NoticeMailer != nil})
 	return nil
 }

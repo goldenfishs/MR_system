@@ -11,6 +11,7 @@ dist/
 
 # Database, logs, local binaries, and test artifacts
 data/
+uploads/
 *.db
 *.db-shm
 *.db-wal
@@ -22,6 +23,7 @@ test-results/
 playwright-report/
 backend/server
 backend/mr-system
+backend/backend
 bin/
 
 # Editors and OS metadata

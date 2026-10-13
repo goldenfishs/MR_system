@@ -1,215 +1,187 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { api } from "../lib/api";
 import { auth } from "../lib/auth";
-import type { Settings } from "../lib/types";
+import type { Settings, Task } from "../lib/types";
+import { dateTime, type JudgeService } from "../lib/platform";
 const settings = ref<Settings | null>(null),
-  error = ref(""),
-  loading = ref(true);
+  service = ref<JudgeService | null>(null),
+  tasks = ref<Task[]>([]),
+  loading = ref(true),
+  error = ref("");
+const exams = computed(() =>
+  tasks.value.filter((t) => t.judge?.enabled || t.kind === "quiz"),
+);
 async function load() {
-  error.value = "";
   loading.value = true;
+  error.value = "";
   try {
-    settings.value = (
-      await api.get<{ settings: Settings }>("/settings")
-    ).settings;
+    const [s, j, t] = await Promise.all([
+      api.get<{ settings: Settings }>("/settings"),
+      api.get<JudgeService>("/judge/config"),
+      api.get<{ items: Task[] }>("/tasks"),
+    ]);
+    settings.value = s.settings;
+    service.value = j;
+    tasks.value = t.items;
   } catch (e) {
     error.value = (e as Error).message;
   } finally {
     loading.value = false;
   }
 }
+const state = (task: Task) =>
+  task.startsAt && Date.parse(task.startsAt) > Date.now()
+    ? "未开始"
+    : task.dueAt && Date.parse(task.dueAt) < Date.now()
+      ? "已截止"
+      : "进行中";
 onMounted(load);
 </script>
 <template>
   <div class="page-content assessment-page">
-    <h1 class="page-title">在线测评</h1>
-    <p class="page-subtitle">进入战队题库，完成编程练习与能力测评。</p>
-    <v-alert v-if="error" type="error" variant="tonal" class="mb-5"
-      >{{ error }}<v-btn variant="text" @click="load">重试</v-btn></v-alert
-    >
-    <v-progress-linear v-if="loading" color="primary" indeterminate />
-    <v-card v-else-if="settings" class="hydro-card">
-      <div class="hydro-heading">
-        <div class="hydro-icon"><v-icon size="35">mdi-code-braces</v-icon></div>
-        <div>
-          <h2>Hydro 在线评测</h2>
-          <p>编程、算法与自动判题</p>
-        </div>
-        <v-chip v-if="settings.hydroUrl" color="success" size="small"
-          >已配置</v-chip
-        >
+    <div class="assessment-heading">
+      <div>
+        <h1 class="page-title">在线测评与考试</h1>
+        <p class="page-subtitle">
+          查看题目、上传源码，在线编译并运行测试用例。
+        </p>
       </div>
-      <p class="hydro-description">
-        战队编程练习由独立的 Hydro
-        平台提供。机械、电控实机和文档任务，请在「学习与任务」中提交成果，由导师验收。
-      </p>
-      <template v-if="settings.hydroUrl"
-        ><v-btn
-          :href="settings.hydroUrl"
-          target="_blank"
-          rel="noopener noreferrer"
-          color="primary"
-          append-icon="mdi-open-in-new"
-          >进入测评平台</v-btn
-        >
-        <p class="integration-note">
-          在新页面打开，使用 Hydro 账号登录。成绩暂不自动同步。
-        </p></template
-      >
-      <template v-else
-        ><v-alert type="info" variant="tonal" density="compact" class="mb-5"
-          >尚未配置 Hydro 站点，培养任务仍可正常使用。</v-alert
-        ><v-btn
-          v-if="auth.user?.role === 'admin'"
-          to="/settings"
-          color="primary"
-          prepend-icon="mdi-cog-outline"
-          >配置测评入口</v-btn
-        ><v-btn v-else to="/learning" color="primary"
-          >查看培养任务</v-btn
-        ></template
-      >
-    </v-card>
-    <div class="assessment-grid">
-      <router-link
-        v-for="item in [
-          {
-            title: '代码项目',
-            description: '基础编程、数据结构与算法练习',
-            icon: 'mdi-code-json',
-            color: '#1976d2',
-            kind: 'code',
-          },
-          {
-            title: '工程与实机',
-            description: '图纸、固件与实机实验成果',
-            icon: 'mdi-robot-outline',
-            color: '#43a047',
-            kind: 'hardware',
-          },
-          {
-            title: '规则与知识',
-            description: '赛季规则阅读与知识检验',
-            icon: 'mdi-book-check-outline',
-            color: '#f39c28',
-            kind: 'quiz',
-          },
-        ]"
-        :key="item.kind"
-        :to="{ path: '/learning', query: { kind: item.kind } }"
-        class="assessment-link"
-        ><div>
-          <h3>{{ item.title }}</h3>
-          <p>{{ item.description }}</p>
-        </div>
-        <v-icon :color="item.color" size="38">{{
-          item.icon
-        }}</v-icon></router-link
+      <v-btn
+        v-if="['admin', 'mentor'].includes(auth.user?.role || '')"
+        to="/learning"
+        color="primary"
+        >发布任务与考试</v-btn
       >
     </div>
+    <v-alert v-if="error" type="error" variant="tonal" class="mb-4"
+      >{{ error }}<v-btn variant="text" @click="load">重试</v-btn></v-alert
+    ><v-progress-linear v-if="loading" indeterminate /><template v-else
+      ><v-alert
+        :type="service?.configured ? 'success' : 'info'"
+        variant="tonal"
+        class="mb-5"
+        >{{
+          service?.configured
+            ? "代码编译服务已连接，可以在支持自动评测的任务中运行代码。"
+            : "代码编译服务尚未配置。作业上传和管理员人工评分仍可使用。"
+        }}</v-alert
+      >
+      <div v-if="exams.length" class="assessment-grid">
+        <v-card v-for="task in exams" :key="task.id" class="exam-card"
+          ><div class="d-flex align-center ga-2 mb-3">
+            <v-icon color="primary">mdi-code-braces</v-icon
+            ><v-chip size="small">{{
+              task.kind === "quiz" ? "考试测验" : "代码练习"
+            }}</v-chip
+            ><v-chip
+              :color="state(task) === '进行中' ? 'success' : 'grey'"
+              size="small"
+              class="ml-auto"
+              >{{ state(task) }}</v-chip
+            >
+          </div>
+          <h2>{{ task.title }}</h2>
+          <p>{{ task.description }}</p>
+          <div class="exam-meta">
+            <span
+              >{{ task.direction || "所有方向" }} · 满分
+              {{ task.maxScore }}</span
+            ><span v-if="task.startsAt"
+              >开始：{{ dateTime(task.startsAt) }}</span
+            ><span v-if="task.dueAt">截止：{{ dateTime(task.dueAt) }}</span
+            ><span v-if="task.judge?.enabled"
+              >{{
+                task.judge.totalCases || task.judge.testCases.length
+              }}
+              个测试用例</span
+            >
+          </div>
+          <v-btn
+            :to="{ path: '/learning', query: { task: task.id } }"
+            color="primary"
+            variant="text"
+            append-icon="mdi-arrow-right"
+            class="mt-4 align-self-end"
+            >查看题目与提交</v-btn
+          ></v-card
+        >
+      </div>
+      <v-card v-else class="pa-10 text-center text-medium-emphasis mb-5"
+        >暂时没有代码测评或考试。管理员发布后会显示在这里。</v-card
+      ><v-card v-if="settings?.hydroUrl" class="pa-5 mt-6"
+        ><div class="d-flex align-center flex-wrap ga-4">
+          <v-icon size="32" color="primary">mdi-open-in-new</v-icon>
+          <div>
+            <h2 class="text-subtitle-1">Hydro 外部题库</h2>
+            <p class="text-caption text-medium-emphasis">
+              在独立平台登录，成绩暂不自动同步。
+            </p>
+          </div>
+          <v-spacer /><v-btn
+            :href="settings.hydroUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            color="primary"
+            variant="tonal"
+            >打开外部题库</v-btn
+          >
+        </div></v-card
+      ></template
+    >
   </div>
 </template>
 <style scoped>
 .assessment-page {
-  max-width: 1250px;
+  max-width: 1300px;
 }
-.hydro-card {
-  padding: 28px;
-  margin-bottom: 24px;
-}
-.hydro-heading {
+.assessment-heading {
   display: flex;
-  gap: 18px;
-  align-items: center;
-  margin-bottom: 22px;
-}
-.hydro-icon {
-  width: 65px;
-  height: 65px;
-  background: #1976d2;
-  color: white;
-  border-radius: 6px;
-  display: grid;
-  place-items: center;
-  box-shadow: 0 3px 8px #1976d230;
-}
-.hydro-heading h2 {
-  font-size: 22px;
-  font-weight: 400;
-  margin: 0 0 5px;
-}
-.hydro-heading p {
-  color: #757575;
-  font-size: 13px;
-  margin: 0;
-}
-.hydro-heading .v-chip {
-  margin-left: auto;
-}
-.hydro-description {
-  font-size: 14px;
-  line-height: 1.9;
-  color: #616161;
-  max-width: 760px;
-  margin-bottom: 23px;
-}
-.integration-note {
-  font-size: 12px;
-  color: #757575;
-  margin-top: 15px;
-  margin-bottom: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
 }
 .assessment-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: 1fr 1fr;
   gap: 18px;
 }
-.assessment-link {
+.exam-card {
+  padding: 22px;
   display: flex;
-  align-items: center;
-  gap: 10px;
-  justify-content: space-between;
-  padding: 24px;
-  color: inherit;
-  text-decoration: none;
-  background: white;
-  border: 1px solid #e7e7e7;
-  border-radius: 6px;
-  box-shadow: 0 1px 3px #0000000a;
+  flex-direction: column;
 }
-.assessment-link:hover {
-  border-color: #90caf9;
-}
-.assessment-link h3 {
+.exam-card h2 {
   font-size: 18px;
-  font-weight: 400;
-  margin: 0 0 9px;
+  font-weight: 500;
+  margin-bottom: 10px;
 }
-.assessment-link p {
-  color: #757575;
+.exam-card > p {
+  color: #616161;
+  font-size: 14px;
+  line-height: 1.8;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  margin-bottom: 18px;
+}
+.exam-meta {
   font-size: 12px;
-  line-height: 1.7;
-  margin: 0;
+  color: #757575;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: auto;
 }
-@media (max-width: 1100px) {
+@media (max-width: 700px) {
+  .assessment-heading {
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+  }
   .assessment-grid {
     grid-template-columns: 1fr;
-  }
-}
-@media (max-width: 600px) {
-  .hydro-card {
-    padding: 22px;
-  }
-  .hydro-heading h2 {
-    font-size: 19px;
-  }
-  .hydro-heading {
-    gap: 13px;
-  }
-  .hydro-icon {
-    width: 52px;
-    height: 52px;
   }
 }
 </style>

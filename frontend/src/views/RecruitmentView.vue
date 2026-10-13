@@ -898,7 +898,7 @@ onMounted(load);
                   :items="['大一', '大二', '大三', '大四', '研究生', '其他']"
                   variant="outlined"
                   hide-details="auto"
-                  required /></v-col
+                  aria-required="true" /></v-col
             ></v-row>
             <h3 class="form-section-title">意向赛队与方向</h3>
             <v-row

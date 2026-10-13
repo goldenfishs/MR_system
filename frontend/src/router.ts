@@ -20,6 +20,31 @@ const router = createRouter({
       meta: { title: "招新管理", subtitle: "让每一份热爱，找到合适的位置。" },
     },
     {
+      path: "/teams",
+      component: () => import("./views/TeamsView.vue"),
+      meta: { title: "团队招募" },
+    },
+    {
+      path: "/profile",
+      component: () => import("./views/ProfileView.vue"),
+      meta: { title: "个人资料" },
+    },
+    {
+      path: "/records",
+      component: () => import("./views/RecordsView.vue"),
+      meta: { title: "个人档案" },
+    },
+    {
+      path: "/files",
+      component: () => import("./views/FilesView.vue"),
+      meta: { title: "文件中心" },
+    },
+    {
+      path: "/mail",
+      component: () => import("./views/MailView.vue"),
+      meta: { title: "批量邮件", admin: true },
+    },
+    {
       path: "/learning",
       component: () => import("./views/LearningView.vue"),
       meta: {

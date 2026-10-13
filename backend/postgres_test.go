@@ -63,7 +63,8 @@ func TestPostgreSQLPersistence(t *testing.T) {
 	}
 
 	mailer := &testMailer{}
-	app := newApp(store, Config{Demo: true, WebDir: t.TempDir(), Mailer: mailer})
+	uploadDir := t.TempDir()
+	app := newApp(store, Config{Demo: true, WebDir: t.TempDir(), Mailer: mailer, UploadDir: uploadDir})
 	client := &testClient{t: t, handler: app.Handler(), mailer: mailer}
 	client.login("admin")
 	client.request("GET", "/api/auth/me", nil, 200)
@@ -117,6 +118,42 @@ func TestPostgreSQLPersistence(t *testing.T) {
 		"status": "approved", "score": 96, "feedback": "数据库集成验证通过",
 	}, 200)
 
+	// Exercise v3 relational writes and file metadata with real PostgreSQL before
+	// reopening: a published team, admission, file-backed work and award grants.
+	client.login("admin")
+	team := unmarshal[Team](t, client.request("POST", "/api/teams", map[string]any{
+		"name": "PostgreSQL 校赛队", "competition": "ROBOCON", "directions": []string{"机械"},
+	}, 201)["item"])
+	certificate := uploadForTest(t, client, "pg-certificate.pdf", []byte("%PDF-1.7\ncertificate"), 201)
+	material := uploadForTest(t, client, "assembly.md", []byte("机械装配任务材料"), 201)
+	client.request("POST", "/api/auth/login", map[string]string{"email": email, "password": password}, 200)
+	resume := uploadForTest(t, client, "pg-resume.pdf", []byte("%PDF-1.7\nresume"), 201)
+	teamApplication := unmarshal[TeamApplication](t, client.request("POST", "/api/teams/"+team.ID+"/applications", map[string]string{
+		"direction": "机械", "resumeFileId": resume.ID, "motivation": "验证新团队入队流程",
+	}, 201)["item"])
+	// Repeated application writes exercise the unique team/user upsert.
+	client.request("POST", "/api/teams/"+team.ID+"/applications", map[string]string{
+		"direction": "机械", "resumeFileId": resume.ID, "motivation": "补充团队报名说明",
+	}, 201)
+	client.login("admin")
+	for i := 0; i < 2; i++ {
+		client.request("PATCH", "/api/team-applications/"+teamApplication.ID, map[string]string{"status": "accepted"}, 200)
+	}
+	fileTask := unmarshal[Task](t, client.request("POST", "/api/tasks", map[string]any{
+		"title": "PostgreSQL 文件任务", "description": "上传机械成果", "teamId": team.ID, "direction": "机械",
+		"kind": "document", "difficulty": "入门", "maxScore": 100, "submissionType": "project", "fileIds": []string{material.ID},
+	}, 201)["item"])
+	award := unmarshal[Record](t, client.request("POST", "/api/records", map[string]any{
+		"userId": registered.ID, "title": "数据库集成完成奖状", "kind": "certificate", "fileIds": []string{certificate.ID},
+	}, 201)["item"])
+	client.request("POST", "/api/auth/login", map[string]string{"email": email, "password": password}, 200)
+	project := uploadForTest(t, client, "pg-project.zip", []byte("opaque engineering project"), 201)
+	fileSubmission := unmarshal[Submission](t, client.request("POST", "/api/tasks/"+fileTask.ID+"/submissions", map[string]any{
+		"content": "机械项目成果", "fileIds": []string{project.ID},
+	}, 201)["item"])
+	downloadForTest(t, client, material.ID, "download", 200)
+	client.login("mentor")
+
 	// Reopen the SQL connection and application instance, retaining the original
 	// session cookie to prove both business records and sessions are persistent.
 	if err = store.db.Close(); err != nil {
@@ -130,7 +167,7 @@ func TestPostgreSQLPersistence(t *testing.T) {
 	if err = initialize(reopened, true); err != nil {
 		t.Fatalf("initialize after reconnect: %v", err)
 	}
-	client.handler = newApp(reopened, Config{Demo: true, WebDir: t.TempDir(), Mailer: mailer}).Handler()
+	client.handler = newApp(reopened, Config{Demo: true, WebDir: t.TempDir(), Mailer: mailer, UploadDir: uploadDir}).Handler()
 	client.request("GET", "/api/auth/me", nil, 200)
 	history := unmarshal[[]Submission](t, client.request("GET", "/api/tasks/"+task.ID+"/submissions", nil, 200)["items"])
 	if len(history) != 2 || history[0].ID != latest.ID || history[0].Status != "approved" || history[0].Score == nil || *history[0].Score != 96 || history[0].Feedback != "数据库集成验证通过" {
@@ -148,6 +185,25 @@ func TestPostgreSQLPersistence(t *testing.T) {
 	if len(own) != 1 || own[0].ID != application.ID || own[0].Status != "accepted" || own[0].Notes != "" || own[0].Score != nil {
 		t.Fatal("application persistence or student privacy failed after reconnect")
 	}
+	memberships := unmarshal[[]Membership](t, client.request("GET", "/api/memberships", nil, 200)["items"])
+	if len(memberships) != 1 || memberships[0].TeamID != team.ID || memberships[0].Direction != "机械" {
+		t.Fatalf("PostgreSQL team membership persistence failed: %+v", memberships)
+	}
+	records := unmarshal[[]Record](t, client.request("GET", "/api/records", nil, 200)["items"])
+	if len(records) != 1 || records[0].ID != award.ID {
+		t.Fatal("PostgreSQL award record not persisted")
+	}
+	downloadForTest(t, client, certificate.ID, "download", 200)
+	downloadForTest(t, client, material.ID, "download", 200)
+	fileHistory := unmarshal[[]Submission](t, client.request("GET", "/api/tasks/"+fileTask.ID+"/submissions", nil, 200)["items"])
+	if len(fileHistory) != 1 || fileHistory[0].ID != fileSubmission.ID || len(fileHistory[0].FileIDs) != 1 || fileHistory[0].FileIDs[0] != project.ID {
+		t.Fatal("PostgreSQL file-backed submission not persisted")
+	}
+	profile := unmarshal[Profile](t, client.request("GET", "/api/profile", nil, 200)["profile"])
+	if !profile.Complete || profile.StudentNumber == "" {
+		t.Fatal("PostgreSQL registration profile not persisted")
+	}
+	downloadForTest(t, client, profile.PhotoFileID, "preview", 200)
 	if err = reopened.row("SELECT COUNT(*) FROM applicants").Scan(&count); err != nil || count != 11 {
 		t.Fatalf("reinitialization changed application count: count=%d err=%v", count, err)
 	}

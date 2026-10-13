@@ -4,7 +4,10 @@ import { api } from "../lib/api";
 import { auth, roleNames } from "../lib/auth";
 import { dateTime } from "../lib/format";
 import type { User } from "../lib/types";
-const members = ref<User[]>([]),
+type Member = User & {
+  teams: { id: string; name: string; competition: string; direction: string }[];
+};
+const members = ref<Member[]>([]),
   loading = ref(true),
   saving = ref(false),
   error = ref(""),
@@ -25,8 +28,12 @@ const draft = reactive({
 const filtered = computed(() =>
   members.value.filter(
     (u) =>
-      (team.value === "全部赛队" || u.team === team.value) &&
-      (direction.value === "全部方向" || u.direction === direction.value) &&
+      (team.value === "全部赛队" ||
+        u.team === team.value ||
+        u.teams?.some((t) => t.competition === team.value)) &&
+      (direction.value === "全部方向" ||
+        u.direction === direction.value ||
+        u.teams?.some((t) => t.direction === direction.value)) &&
       `${u.name} ${u.email}`.toLowerCase().includes(search.value.toLowerCase()),
   ),
 );
@@ -34,7 +41,8 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    members.value = (await api.get<{ items: User[] }>("/members")).items || [];
+    members.value =
+      (await api.get<{ items: Member[] }>("/members")).items || [];
   } catch (e) {
     error.value = (e as Error).message;
   } finally {
@@ -123,7 +131,7 @@ onMounted(load);
     <div v-else-if="!filtered.length" class="empty-state">
       <v-icon size="46">mdi-account-search-outline</v-icon>
       <p>没有找到符合条件的成员</p>
-      <small>调整筛选条件，或在招新管理中录取新成员。</small>
+      <small>调整筛选条件，或在团队招募中审核新成员。</small>
     </div>
     <div v-else class="members-grid">
       <v-card v-for="u in filtered" :key="u.id" class="member-card"
@@ -140,7 +148,17 @@ onMounted(load);
         </div>
         <h3>{{ u.name }}</h3>
         <p class="member-email">{{ u.email }}</p>
-        <div class="d-flex ga-2 mt-4">
+        <div v-if="u.teams?.length" class="d-flex flex-wrap ga-2 mt-4">
+          <v-chip
+            v-for="membership in u.teams"
+            :key="membership.id"
+            size="small"
+            variant="tonal"
+            color="primary"
+            >{{ membership.name }} · {{ membership.direction }}组</v-chip
+          >
+        </div>
+        <div v-else class="d-flex ga-2 mt-4">
           <v-chip size="small" variant="outlined" color="primary">{{
             u.team || "跨赛队"
           }}</v-chip

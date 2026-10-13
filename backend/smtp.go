@@ -80,6 +80,23 @@ func (m *smtpMailer) SendVerification(ctx context.Context, recipient, code strin
 	if _, valid := normalizedEmail(recipient); !valid || !validVerificationCode(code) {
 		return errors.New("invalid verification email")
 	}
+	return m.send(ctx, recipient, verificationMessage(m.config, recipient, code))
+}
+
+// A failed final DATA response can mean the server accepted the message but the
+// acknowledgement was lost. Bulk retry must not silently duplicate that mail.
+type uncertainDeliveryError struct{ cause error }
+
+func (e *uncertainDeliveryError) Error() string { return "SMTP delivery acknowledgement unavailable" }
+func (e *uncertainDeliveryError) Unwrap() error { return e.cause }
+
+func (m *smtpMailer) SendMessage(ctx context.Context, recipient, subject, body string) error {
+	if _, valid := normalizedEmail(recipient); !valid || strings.TrimSpace(subject) == "" || len(subject) > 200 || strings.ContainsAny(subject, "\r\n") || strings.TrimSpace(body) == "" || len(body) > 50000 {
+		return errors.New("invalid notification email")
+	}
+	return m.send(ctx, recipient, mailMessage(m.config, recipient, subject, body))
+}
+func (m *smtpMailer) send(ctx context.Context, recipient string, message []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	cfg := m.config
@@ -139,12 +156,13 @@ func (m *smtpMailer) SendVerification(ctx context.Context, recipient, code strin
 	if err != nil {
 		return err
 	}
-	if _, err = writer.Write(verificationMessage(cfg, recipient, code)); err != nil {
-		writer.Close()
+	if _, err = writer.Write(message); err != nil {
+		// Do not terminate DATA after a partial write: the connection closes
+		// without the final dot, so the server cannot accept truncated mail.
 		return err
 	}
 	if err = writer.Close(); err != nil {
-		return err
+		return &uncertainDeliveryError{cause: err}
 	}
 	// DATA was accepted. A failed QUIT must not invalidate an accepted message.
 	_ = client.Quit()
@@ -152,9 +170,13 @@ func (m *smtpMailer) SendVerification(ctx context.Context, recipient, code strin
 }
 
 func verificationMessage(cfg SMTPConfig, recipient, code string) []byte {
+	body := fmt.Sprintf("你正在注册竞跃协作系统。\r\n\r\n邮箱验证码：%s\r\n\r\n验证码 10 分钟内有效，仅限本次邮箱注册使用。请勿将验证码告诉他人。\r\n如非本人操作，请忽略此邮件。\r\n", code)
+	return mailMessage(cfg, recipient, "竞跃 · 邮箱注册验证码", body)
+}
+func mailMessage(cfg SMTPConfig, recipient, subject, body string) []byte {
 	from := (&mail.Address{Name: cfg.FromName, Address: cfg.From}).String()
 	to := (&mail.Address{Address: recipient}).String()
-	body := fmt.Sprintf("你正在注册竞跃协作系统。\r\n\r\n邮箱验证码：%s\r\n\r\n验证码 10 分钟内有效，仅限本次邮箱注册使用。请勿将验证码告诉他人。\r\n如非本人操作，请忽略此邮件。\r\n", code)
+	body = strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "\n", "\r\n")
 	encodedBody := base64.StdEncoding.EncodeToString([]byte(body))
 	var wrapped strings.Builder
 	for len(encodedBody) > 76 {
@@ -163,5 +185,5 @@ func verificationMessage(cfg SMTPConfig, recipient, code string) []byte {
 	}
 	wrapped.WriteString(encodedBody + "\r\n")
 	domain := cfg.From[strings.LastIndex(cfg.From, "@")+1:]
-	return []byte("From: " + from + "\r\nTo: " + to + "\r\nSubject: " + mime.BEncoding.Encode("UTF-8", "竞跃 · 邮箱注册验证码") + "\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\nMessage-ID: <" + randomID() + "@" + domain + ">\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" + wrapped.String())
+	return []byte("From: " + from + "\r\nTo: " + to + "\r\nSubject: " + mime.BEncoding.Encode("UTF-8", subject) + "\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\nMessage-ID: <" + randomID() + "@" + domain + ">\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" + wrapped.String())
 }

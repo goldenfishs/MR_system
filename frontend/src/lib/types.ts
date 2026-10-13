@@ -1,12 +1,9 @@
+import type { JudgeConfig } from "./platform";
 export type Role = "admin" | "mentor" | "interviewer" | "student";
 export type Team = "RoboMaster" | "ROBOCON";
 export type Direction = "机械" | "电控" | "视觉算法" | "硬件" | "运营";
 export type ApplicantStatus =
-  | "submitted"
-  | "screening"
-  | "interview"
-  | "accepted"
-  | "rejected";
+  "submitted" | "screening" | "interview" | "accepted" | "rejected";
 export interface User {
   id: string;
   name: string;
@@ -41,6 +38,11 @@ export interface Applicant {
   updatedAt: string;
 }
 export interface Task {
+  teamId?: string;
+  fileIds?: string[];
+  submissionType?: "files" | "code" | "project";
+  startsAt?: string;
+  judge?: JudgeConfig;
   id: string;
   title: string;
   description: string;
@@ -58,6 +60,8 @@ export interface Task {
   mySubmission: Submission | null;
 }
 export interface Submission {
+  fileIds?: string[];
+  judgeRunId?: string;
   id: string;
   taskId: string;
   userId: string;

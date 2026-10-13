@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -56,7 +60,10 @@ func (c *testClient) verification(email string) string {
 func (c *testClient) register(name, email, password string) map[string]json.RawMessage {
 	c.t.Helper()
 	code := c.verification(email)
-	return c.request("POST", "/api/auth/register", map[string]string{"name": name, "email": email, "password": password, "verificationCode": code}, 201)
+	body := registrationBody(email, code)
+	body["name"] = name
+	body["password"] = password
+	return c.request("POST", "/api/auth/register", body, 201)
 }
 func emailSetup(t *testing.T) (*App, *testClient) {
 	t.Helper()
@@ -72,8 +79,18 @@ func emailSetup(t *testing.T) (*App, *testClient) {
 	a := newApp(s, Config{Demo: true, Mailer: mailer, EmailFrom: "sender@example.test", EmailSecurity: "starttls", WebDir: t.TempDir()})
 	return a, &testClient{t: t, handler: a.Handler(), mailer: mailer}
 }
-func registrationBody(email, code string) map[string]string {
-	return map[string]string{"name": "验证学员", "email": email, "password": "StrongPassword!2026", "verificationCode": code}
+func testPhoto() PhotoInput {
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		panic(err)
+	}
+	return PhotoInput{Name: "profile.png", ContentBase64: base64.StdEncoding.EncodeToString(buf.Bytes())}
+}
+func testProfileFields() ProfileFields {
+	return ProfileFields{Gender: "其他", University: "测试大学", Major: "自动化", ClassName: "自动化 1 班", StudentNumber: "20260001", Phone: "13800000000"}
+}
+func registrationBody(email, code string) map[string]any {
+	return map[string]any{"name": "验证学员", "email": email, "password": "StrongPassword!2026", "verificationCode": code, "profile": testProfileFields(), "photo": testPhoto()}
 }
 func requireRetry(t *testing.T, c *testClient, result map[string]json.RawMessage) {
 	t.Helper()
@@ -254,7 +271,7 @@ func TestEmailSettingsVisibilityAndLegacyLogin(t *testing.T) {
 	a.config.EmailFrom = "sender@example.com"
 	a.config.EmailSecurity = "tls"
 	result := c.request("GET", "/api/settings/email", nil, 200)
-	if len(result) != 3 || !unmarshal[bool](t, result["configured"]) || unmarshal[string](t, result["from"]) != "sender@example.com" {
+	if len(result) != 4 || !unmarshal[bool](t, result["configured"]) || unmarshal[string](t, result["from"]) != "sender@example.com" {
 		t.Fatal("unsafe or missing SMTP status fields")
 	}
 }
@@ -281,7 +298,7 @@ func TestEmailVerificationSurvivesDatabaseReopen(t *testing.T) {
 	requireRetry(t, c, c.request("POST", "/api/auth/send-verification-code", map[string]string{"email": email}, 429))
 	c.request("POST", "/api/auth/register", registrationBody(email, code), 201)
 	var version int
-	if err = s.row("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil || version != 2 {
+	if err = s.row("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil || version < 2 {
 		t.Fatal("email migration v2 missing")
 	}
 }

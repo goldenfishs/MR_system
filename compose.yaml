@@ -24,6 +24,7 @@ services:
       ADDR: 0.0.0.0:8080
       DATABASE_URL: postgres://mr_system:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/mr_system?sslmode=disable
       DATA_DIR: /app/data
+      UPLOAD_DIR: /app/data/uploads
       WEB_DIR: /app/web
       DEMO_MODE: "false"
       SESSION_SECURE: ${SESSION_SECURE:-true}
@@ -38,6 +39,8 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-}
       SMTP_FROM_NAME: ${SMTP_FROM_NAME:-竞跃}
+      JUDGE_URL: ${JUDGE_URL:-}
+      JUDGE_TOKEN: ${JUDGE_TOKEN:-}
     ports:
       - ${APP_BIND:-127.0.0.1:8080}:8080
     volumes:

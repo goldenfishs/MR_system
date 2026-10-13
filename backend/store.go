@@ -19,6 +19,7 @@ type Store struct {
 	db       *sql.DB
 	tx       *sql.Tx
 	postgres bool
+	fileDir  string
 	mu       sync.Mutex
 }
 
@@ -37,7 +38,7 @@ func openStore(databaseURL, dataDir string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	s := &Store{db: db, postgres: driver == "pgx"}
+	s := &Store{db: db, postgres: driver == "pgx", fileDir: filepath.Join(dataDir, "uploads")}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err = db.PingContext(ctx); err != nil {
@@ -68,6 +69,19 @@ func openStore(databaseURL, dataDir string) (*Store, error) {
 		`CREATE INDEX IF NOT EXISTS verification_email_time ON verification_send_events(email,created_at)`,
 		`CREATE INDEX IF NOT EXISTS verification_ip_time ON verification_send_events(ip_hash,created_at)`,
 		`INSERT INTO schema_migrations(version,applied_at) VALUES (2, CURRENT_TIMESTAMP) ON CONFLICT(version) DO NOTHING`,
+		`CREATE TABLE IF NOT EXISTS profiles (user_id TEXT PRIMARY KEY REFERENCES users(id), payload TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), size BIGINT NOT NULL, payload TEXT NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS files_owner ON files(owner_id)`,
+		`CREATE TABLE IF NOT EXISTS file_grants (file_id TEXT NOT NULL REFERENCES files(id), user_id TEXT NOT NULL REFERENCES users(id), PRIMARY KEY(file_id,user_id))`,
+		`CREATE TABLE IF NOT EXISTS teams (id TEXT PRIMARY KEY, payload TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS team_applications (id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id), user_id TEXT NOT NULL REFERENCES users(id), payload TEXT NOT NULL, UNIQUE(team_id,user_id))`,
+		`CREATE TABLE IF NOT EXISTS team_memberships (team_id TEXT NOT NULL REFERENCES teams(id), user_id TEXT NOT NULL REFERENCES users(id), direction TEXT NOT NULL, joined_at TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(team_id,user_id))`,
+		`CREATE TABLE IF NOT EXISTS records (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), payload TEXT NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS records_user ON records(user_id)`,
+		`CREATE TABLE IF NOT EXISTS mail_campaigns(id TEXT PRIMARY KEY, status TEXT NOT NULL, created_by TEXT NOT NULL, payload TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS judge_runs(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, user_id TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS judge_runs_owner ON judge_runs(user_id,task_id)`,
+		`INSERT INTO schema_migrations(version,applied_at) VALUES (3, CURRENT_TIMESTAMP) ON CONFLICT(version) DO NOTHING`,
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {

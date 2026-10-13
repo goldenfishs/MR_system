@@ -34,23 +34,30 @@ type Applicant struct {
 	UpdatedAt       string   `json:"updatedAt"`
 }
 type Task struct {
-	ID              string      `json:"id"`
-	Title           string      `json:"title"`
-	Description     string      `json:"description"`
-	Direction       string      `json:"direction"`
-	Team            string      `json:"team"`
-	Kind            string      `json:"kind"`
-	Difficulty      string      `json:"difficulty"`
-	DueAt           string      `json:"dueAt"`
-	ResourcesURL    string      `json:"resourcesUrl"`
-	MaxScore        float64     `json:"maxScore"`
-	Required        bool        `json:"required"`
-	CreatedBy       string      `json:"createdBy"`
-	CreatedAt       string      `json:"createdAt"`
-	SubmissionCount int         `json:"submissionCount"`
-	MySubmission    *Submission `json:"mySubmission"`
+	TeamID          string       `json:"teamId,omitempty"`
+	FileIDs         []string     `json:"fileIds"`
+	SubmissionType  string       `json:"submissionType,omitempty"`
+	StartsAt        string       `json:"startsAt,omitempty"`
+	Judge           *JudgeConfig `json:"judge,omitempty"`
+	ID              string       `json:"id"`
+	Title           string       `json:"title"`
+	Description     string       `json:"description"`
+	Direction       string       `json:"direction"`
+	Team            string       `json:"team"`
+	Kind            string       `json:"kind"`
+	Difficulty      string       `json:"difficulty"`
+	DueAt           string       `json:"dueAt"`
+	ResourcesURL    string       `json:"resourcesUrl"`
+	MaxScore        float64      `json:"maxScore"`
+	Required        bool         `json:"required"`
+	CreatedBy       string       `json:"createdBy"`
+	CreatedAt       string       `json:"createdAt"`
+	SubmissionCount int          `json:"submissionCount"`
+	MySubmission    *Submission  `json:"mySubmission"`
 }
 type Submission struct {
+	FileIDs     []string `json:"fileIds"`
+	JudgeRunID  string   `json:"judgeRunId,omitempty"`
 	ID          string   `json:"id"`
 	TaskID      string   `json:"taskId"`
 	UserID      string   `json:"userId"`

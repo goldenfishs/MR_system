@@ -1,121 +1,39 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import { useRouter } from "vue-router";
+import { onMounted, ref } from "vue";
 import { api } from "../lib/api";
 import { auth } from "../lib/auth";
-import { dateTime, relativeTime } from "../lib/format";
-import type { Dashboard, Settings, Task } from "../lib/types";
+import type { Task } from "../lib/types";
+import type { TeamSpace } from "../lib/platform";
 
-const router = useRouter();
-const data = ref<Dashboard | null>(null);
-const settings = ref<Settings | null>(null);
+type Summary = {
+  stats: Record<string, number>;
+  pipeline: { status: string; label: string; count: number }[];
+  profileComplete: boolean;
+};
+const summary = ref<Summary | null>(null);
+const teams = ref<TeamSpace[]>([]);
 const tasks = ref<Task[]>([]);
 const loading = ref(true);
 const error = ref("");
-const student = computed(() => auth.user?.role === "student");
+const isAdmin = auth.user?.role === "admin";
+const canManage = ["admin", "mentor"].includes(auth.user?.role || "");
 const today = new Intl.DateTimeFormat("zh-CN", {
   month: "long",
   day: "numeric",
   weekday: "long",
 }).format(new Date());
-const shortcuts = computed(() => [
-  {
-    label: student.value ? "我的报名" : "招新管理",
-    value: data.value?.stats.applicants ?? 0,
-    unit: "份报名",
-    detail: student.value ? "查看报名与面试进度" : "报名审核、面试安排与录取",
-    icon: "mdi-account-multiple",
-    color: "#42a5f5",
-    path: "/recruitment",
-  },
-  {
-    label: student.value ? "任务反馈" : "提交审核",
-    value: data.value?.stats.pendingReviews ?? 0,
-    unit: "项待审核",
-    detail: student.value
-      ? "查看提交记录与导师反馈"
-      : "查看学员提交，记录培养反馈",
-    icon: "mdi-clipboard-check",
-    color: "#ef5350",
-    path: "/learning",
-  },
-  {
-    label: "学习培养",
-    value: data.value?.stats.activeTasks ?? 0,
-    unit: "项进行中",
-    detail: "编程实践、文档与实机任务",
-    icon: "mdi-school",
-    color: "#26a69a",
-    path: "/learning",
-  },
-  {
-    label: student.value ? "成员状态" : "战队成员",
-    value: data.value?.stats.members ?? 0,
-    unit: student.value ? "" : "位成员",
-    detail: student.value
-      ? "录取后开启战队培养任务"
-      : "查看赛队、方向与成员信息",
-    icon: "mdi-account-group",
-    color: "#ab47bc",
-    path: student.value ? "/recruitment" : "/members",
-  },
-]);
-const total = computed(
-  () => data.value?.pipeline.reduce((sum, stage) => sum + stage.count, 0) || 0,
-);
-const stageColors: Record<string, string> = {
-  submitted: "#a5d6a7",
-  screening: "#66bb6a",
-  interview: "#43a047",
-  accepted: "#1b5e20",
-  rejected: "#dce8dd",
-};
-const circumference = 2 * Math.PI * 61;
-const chartSegments = computed(() => {
-  let offset = 0;
-  return (data.value?.pipeline || []).map((stage) => {
-    const length = total.value
-      ? (stage.count / total.value) * circumference
-      : 0;
-    const segment = { ...stage, length, offset };
-    offset += length;
-    return segment;
-  });
-});
-const kindIcons: Record<string, string> = {
-  code: "mdi-code-braces",
-  document: "mdi-file-document-outline",
-  hardware: "mdi-cube-outline",
-  quiz: "mdi-text-box-check-outline",
-};
-const kindLabels: Record<string, string> = {
-  code: "编程实践",
-  document: "文档作业",
-  hardware: "实机任务",
-  quiz: "知识测评",
-};
-const taskDistribution = computed(() =>
-  Object.entries(kindLabels).map(([kind, label]) => ({
-    kind,
-    label,
-    count: tasks.value.filter((task) => task.kind === kind).length,
-  })),
-);
-const taskMaximum = computed(() =>
-  Math.max(1, ...taskDistribution.value.map((item) => item.count)),
-);
-const recentTasks = computed(() => tasks.value.slice(0, 4));
+
 async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const [dashboard, space, learning] = await Promise.all([
-      api.get<Dashboard>("/dashboard"),
-      api.get<{ settings: Settings }>("/settings"),
+    const [space, teamList, learning] = await Promise.all([
+      api.get<Summary>("/workspace-summary"),
+      api.get<{ items: TeamSpace[] }>("/teams"),
       api.get<{ items: Task[] }>("/tasks"),
     ]);
-    data.value = dashboard;
-    settings.value = space.settings;
+    summary.value = space;
+    teams.value = teamList.items || [];
     tasks.value = learning.items || [];
   } catch (e) {
     error.value = (e as Error).message;
@@ -123,6 +41,7 @@ async function load() {
     loading.value = false;
   }
 }
+const counts = (key: string) => summary.value?.stats[key] ?? 0;
 onMounted(load);
 </script>
 
@@ -131,335 +50,231 @@ onMounted(load);
     <header class="welcome-row">
       <div class="welcome-person">
         <v-avatar size="48" color="primary" variant="tonal"
-          ><v-icon size="29">mdi-account</v-icon></v-avatar
+          ><v-icon size="27">mdi-robot-outline</v-icon></v-avatar
         >
         <div>
           <h1>你好，{{ auth.user?.name }}</h1>
-          <p>
-            {{ settings?.organization || "机器人实验室" }} ·
-            {{ settings?.season || "战队协作台" }}
-          </p>
+          <p>团队协作台 · {{ today }}</p>
         </div>
       </div>
-      <div class="date-label">
-        <span>{{ today }}</span
-        ><v-btn
-          icon="mdi-refresh"
-          size="small"
-          variant="text"
-          aria-label="刷新工作台"
-          :loading="loading"
-          @click="load"
-        />
-      </div>
+      <v-btn
+        icon="mdi-refresh"
+        variant="text"
+        aria-label="刷新工作台"
+        :loading="loading"
+        @click="load"
+      />
     </header>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-5"
-      ><div class="d-flex align-center justify-space-between">
-        {{ error }}<v-btn variant="text" @click="load">重试</v-btn>
-      </div></v-alert
+      >{{ error }} <v-btn variant="text" @click="load">重试</v-btn></v-alert
     >
+    <v-alert
+      v-if="
+        auth.user?.role === 'student' && summary && !summary.profileComplete
+      "
+      type="warning"
+      variant="tonal"
+      class="profile-alert mb-5"
+    >
+      完成个人资料后即可申请加入团队。姓名、学校、专业、班级、学号、联系电话和照片为必填。
+      <v-btn to="/profile" color="primary" variant="text">补全资料</v-btn>
+    </v-alert>
+
     <div class="shortcut-grid">
-      <router-link
-        v-for="entry in shortcuts"
-        :key="entry.label"
-        :to="entry.path"
-        class="shortcut-card"
+      <router-link to="/teams" class="shortcut-card"
+        ><div>
+          <span class="eyebrow">团队招募</span>
+          <h2>{{ isAdmin ? "团队与申请" : "开放团队" }}</h2>
+          <p>
+            {{ isAdmin ? "发布团队并审核简历" : "选择方向，提交 PDF 简历" }}
+          </p>
+          <strong>{{
+            loading
+              ? "—"
+              : isAdmin
+                ? counts("pendingApplications") + " 份待审"
+                : counts("openTeams") + " 个开放"
+          }}</strong>
+        </div>
+        <v-icon color="primary" size="43"
+          >mdi-account-multiple-outline</v-icon
+        ></router-link
       >
-        <div class="shortcut-copy">
-          <h2>{{ entry.label }}</h2>
-          <p>{{ entry.detail }}</p>
-          <div class="shortcut-count">
-            <template v-if="student && entry.label === '成员状态'"
-              ><strong>{{
-                loading ? "—" : entry.value ? "已录取" : "待录取"
-              }}</strong></template
-            >
-            <template v-else
-              ><strong>{{ loading ? "—" : entry.value }}</strong
-              ><span>{{ entry.unit }}</span></template
-            >
+      <router-link to="/learning" class="shortcut-card"
+        ><div>
+          <span class="eyebrow">任务培养</span>
+          <h2>{{ canManage ? "任务与评阅" : "我的作业" }}</h2>
+          <p>{{ canManage ? "发布作业、批改提交" : "查看任务、上传成果" }}</p>
+          <strong>{{
+            loading
+              ? "—"
+              : canManage
+                ? counts("pendingReviews") + " 项待评"
+                : counts("activeTasks") + " 项进行中"
+          }}</strong>
+        </div>
+        <v-icon color="teal" size="43"
+          >mdi-clipboard-text-outline</v-icon
+        ></router-link
+      >
+      <router-link to="/records" class="shortcut-card"
+        ><div>
+          <span class="eyebrow">个人档案</span>
+          <h2>{{ isAdmin ? "档案发放" : "我的奖状与通知" }}</h2>
+          <p>
+            {{
+              isAdmin ? "将证书和奖励发给指定成员" : "统一查询个人奖励与材料"
+            }}
+          </p>
+          <strong>{{
+            loading
+              ? "—"
+              : isAdmin
+                ? counts("members") + " 位团队成员"
+                : counts("records") + " 份个人档案"
+          }}</strong>
+        </div>
+        <v-icon color="deep-purple" size="43"
+          >mdi-certificate-outline</v-icon
+        ></router-link
+      >
+      <router-link to="/files" class="shortcut-card"
+        ><div>
+          <span class="eyebrow">文件中心</span>
+          <h2>我的文件</h2>
+          <p>简历、图片、代码和项目附件</p>
+          <strong>{{ loading ? "—" : counts("files") + " 个文件" }}</strong>
+        </div>
+        <v-icon color="orange-darken-1" size="43"
+          >mdi-folder-multiple-outline</v-icon
+        ></router-link
+      >
+    </div>
+
+    <div class="main-grid">
+      <v-card class="dashboard-card">
+        <div class="card-heading">
+          <h2>
+            <v-icon color="primary" size="20">mdi-account-group-outline</v-icon
+            >{{ isAdmin ? "团队申请进度" : "招募中的团队" }}
+          </h2>
+          <v-btn to="/teams" variant="text" size="small" color="primary"
+            >{{ isAdmin ? "管理团队" : "浏览全部"
+            }}<v-icon end>mdi-chevron-right</v-icon></v-btn
+          >
+        </div>
+        <div v-if="isAdmin" class="pipeline">
+          <div
+            v-for="stage in summary?.pipeline"
+            :key="stage.status"
+            class="pipeline-row"
+          >
+            <span>{{ stage.label }}</span>
+            <div class="track">
+              <i
+                :style="{
+                  width: `${Math.min(100, (stage.count / Math.max(1, counts('applications'))) * 100)}%`,
+                }"
+              />
+            </div>
+            <strong>{{ stage.count }}</strong>
+          </div>
+          <p class="privacy-note">
+            只统计新团队报名流程；历史面试记录可在「面试记录」中查询。
+          </p>
+        </div>
+        <div v-else-if="teams.length" class="team-list">
+          <router-link
+            v-for="team in teams
+              .filter((item) => item.status === 'open')
+              .slice(0, 4)"
+            :key="team.id"
+            :to="'/teams'"
+            class="team-row"
+          >
+            <span class="team-mark"><v-icon>mdi-trophy-outline</v-icon></span
+            ><span class="team-copy"
+              ><strong>{{ team.name }}</strong
+              ><small
+                >{{ team.competition }} ·
+                {{ team.directions.join("、") }}</small
+              ></span
+            ><v-chip size="small" variant="tonal" color="success"
+              >{{ team.memberCount }} 位成员</v-chip
+            ><v-icon size="18" color="grey">mdi-chevron-right</v-icon>
+          </router-link>
+          <div
+            v-if="!teams.some((item) => item.status === 'open')"
+            class="empty-state"
+          >
+            <v-icon size="30">mdi-account-search-outline</v-icon>
+            <p>当前暂无开放报名的团队</p>
           </div>
         </div>
-        <v-icon class="shortcut-icon" size="55" :color="entry.color">{{
-          entry.icon
-        }}</v-icon>
-      </router-link>
-    </div>
-    <div class="main-grid">
-      <div class="main-column">
-        <v-card class="dashboard-card tasks-panel">
-          <div class="card-heading">
-            <h2>
-              <v-icon size="21" color="primary"
-                >mdi-book-open-page-variant-outline</v-icon
-              >{{ student ? "我的学习任务" : "近期培养任务" }}
-            </h2>
-            <v-btn size="small" variant="text" color="primary" to="/learning"
-              >全部任务<v-icon end size="16">mdi-chevron-right</v-icon></v-btn
-            >
-          </div>
-          <div v-if="!tasks.length" class="empty-state">
-            <v-icon size="30">mdi-book-open-outline</v-icon>
-            <p>{{ loading ? "正在加载任务…" : "暂无培养任务" }}</p>
-            <v-btn
-              v-if="
-                !loading &&
-                (auth.user?.role === 'admin' || auth.user?.role === 'mentor')
-              "
-              to="/learning"
-              variant="text"
-              color="primary"
-              >发布培养任务</v-btn
-            >
-          </div>
+        <div v-else class="empty-state">
+          <v-icon size="32">mdi-account-search-outline</v-icon>
+          <p>
+            {{ loading ? "正在加载团队…" : "暂无团队，等候管理员发布招募" }}
+          </p>
+          <v-btn v-if="isAdmin" to="/teams" color="primary" variant="text"
+            >发布团队</v-btn
+          >
+        </div>
+      </v-card>
+
+      <v-card class="dashboard-card">
+        <div class="card-heading">
+          <h2>
+            <v-icon color="teal" size="20">mdi-clipboard-list-outline</v-icon
+            >{{ canManage ? "近期培养任务" : "可参与的任务" }}
+          </h2>
+          <v-btn to="/learning" variant="text" size="small" color="primary"
+            >全部任务<v-icon end>mdi-chevron-right</v-icon></v-btn
+          >
+        </div>
+        <div v-if="tasks.length" class="task-list">
           <router-link
-            v-for="task in recentTasks"
+            v-for="task in tasks.slice(0, 4)"
             :key="task.id"
             :to="{ path: '/learning', query: { task: task.id } }"
             class="task-row"
           >
-            <div class="task-kind" :class="task.kind">
-              <v-icon size="23">{{ kindIcons[task.kind] }}</v-icon>
-            </div>
-            <div class="task-main">
-              <h3>{{ task.title }}</h3>
-              <p>
-                {{ task.team || "全部赛队" }}<span>·</span
-                >{{ task.direction || "通用基础" }}<span>·</span
-                >{{ kindLabels[task.kind] }}
-              </p>
-            </div>
-            <div class="task-meta">
-              <v-chip
-                size="x-small"
-                variant="tonal"
-                :color="task.difficulty === '入门' ? 'success' : 'primary'"
-                >{{ task.difficulty }}</v-chip
-              ><small>{{
-                task.dueAt ? dateTime(task.dueAt) + " 截止" : "长期开放"
-              }}</small>
-            </div>
-            <v-icon class="task-arrow" size="19">mdi-chevron-right</v-icon>
+            <span class="task-mark"
+              ><v-icon>{{
+                task.kind === "code"
+                  ? "mdi-code-braces"
+                  : task.kind === "hardware"
+                    ? "mdi-cube-outline"
+                    : task.kind === "quiz"
+                      ? "mdi-text-box-check-outline"
+                      : "mdi-file-document-outline"
+              }}</v-icon></span
+            >
+            <span class="task-copy"
+              ><strong>{{ task.title }}</strong
+              ><small
+                >{{ task.team || "所有团队" }} ·
+                {{ task.direction || "综合方向"
+                }}{{
+                  task.dueAt
+                    ? ` · 截止 ${new Date(task.dueAt).toLocaleDateString("zh-CN")}`
+                    : ""
+                }}</small
+              ></span
+            ><v-icon size="18" color="grey">mdi-chevron-right</v-icon>
           </router-link>
-        </v-card>
-        <v-card class="dashboard-card interview-panel">
-          <div class="card-heading">
-            <h2>
-              <v-icon size="21" color="primary"
-                >mdi-calendar-clock-outline</v-icon
-              >近期面试
-            </h2>
-            <span class="card-caption"
-              >{{ data?.upcomingInterviews.length || 0 }} 场待进行</span
-            >
-          </div>
-          <v-table v-if="data?.upcomingInterviews.length"
-            ><thead>
-              <tr>
-                <th>候选人</th>
-                <th>意向方向</th>
-                <th>面试时间</th>
-                <th aria-label="操作"></th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="applicant in data.upcomingInterviews.slice(0, 4)"
-                :key="applicant.id"
-              >
-                <td>
-                  <div class="person-name">
-                    <span>{{ applicant.name.slice(-1) }}</span
-                    >{{ applicant.name }}
-                  </div>
-                </td>
-                <td>
-                  {{ applicant.direction
-                  }}<small class="d-block muted">{{ applicant.team }}</small>
-                </td>
-                <td class="interview-date">
-                  {{ dateTime(applicant.interviewAt) }}
-                </td>
-                <td>
-                  <v-btn
-                    variant="text"
-                    size="small"
-                    color="primary"
-                    :to="{
-                      path: '/recruitment',
-                      query: { applicant: applicant.id },
-                    }"
-                    >查看</v-btn
-                  >
-                </td>
-              </tr>
-            </tbody></v-table
+        </div>
+        <div v-else class="empty-state">
+          <v-icon size="32">mdi-book-open-outline</v-icon>
+          <p>{{ loading ? "正在加载任务…" : "暂无培养任务" }}</p>
+          <v-btn v-if="canManage" to="/learning" color="primary" variant="text"
+            >发布作业</v-btn
           >
-          <div v-else class="empty-state py-7">
-            <v-icon size="28">mdi-calendar-check-outline</v-icon>
-            <p>{{ loading ? "正在加载面试安排…" : "暂无待进行的面试" }}</p>
-          </div>
-        </v-card>
-        <v-card class="dashboard-card announcement">
-          <div class="card-heading">
-            <h2>
-              <v-icon size="21" color="primary">mdi-bullhorn-outline</v-icon
-              >战队公告
-            </h2>
-            <span class="card-caption">{{ settings?.organization }}</span>
-          </div>
-          <p>{{ settings?.announcement || "暂无公告" }}</p>
-          <div v-if="settings?.applicationOpen" class="announcement-status">
-            <v-icon size="17" color="success">mdi-check-circle-outline</v-icon
-            >本期招新报名开放中<span v-if="settings.applicationDeadline">
-              · {{ dateTime(settings.applicationDeadline) }} 截止</span
-            >
-          </div>
-        </v-card>
-      </div>
-      <aside class="aside-column">
-        <v-card class="dashboard-card recruitment-chart">
-          <div class="card-heading">
-            <h2>{{ student ? "我的报名进度" : "招新状态分布" }}</h2>
-            <v-btn
-              icon="mdi-dots-horizontal"
-              size="x-small"
-              variant="text"
-              to="/recruitment"
-              aria-label="查看招新详情"
-            />
-          </div>
-          <div v-if="total" class="donut-chart">
-            <div
-              class="donut-figure"
-              role="img"
-              :aria-label="`报名共 ${total} 份。${data?.pipeline.map((stage) => `${stage.label} ${stage.count} 份`).join('，')}`"
-            >
-              <svg viewBox="0 0 158 158" aria-hidden="true">
-                <circle
-                  cx="79"
-                  cy="79"
-                  r="61"
-                  fill="none"
-                  stroke="#eef4ee"
-                  stroke-width="24"
-                />
-                <circle
-                  v-for="stage in chartSegments"
-                  :key="stage.status"
-                  cx="79"
-                  cy="79"
-                  r="61"
-                  fill="none"
-                  :stroke="stageColors[stage.status]"
-                  stroke-width="24"
-                  :stroke-dasharray="`${stage.length} ${circumference - stage.length}`"
-                  :stroke-dashoffset="-stage.offset"
-                  transform="rotate(-90 79 79)"
-                />
-              </svg>
-              <div class="donut-total">
-                <strong>{{ total }}</strong
-                ><span>{{ student ? "我的报名" : "报名总数" }}</span>
-              </div>
-            </div>
-            <div class="chart-legend">
-              <button
-                v-for="stage in data?.pipeline"
-                :key="stage.status"
-                @click="
-                  router.push({
-                    path: '/recruitment',
-                    query: { status: stage.status },
-                  })
-                "
-              >
-                <span
-                  ><i :style="{ background: stageColors[stage.status] }" />{{
-                    stage.label
-                  }}</span
-                ><strong>{{ stage.count }}</strong>
-              </button>
-            </div>
-          </div>
-          <div v-else class="empty-state py-7">
-            <v-icon size="30">mdi-chart-donut</v-icon>
-            <p>{{ loading ? "正在加载报名数据…" : "暂无报名记录" }}</p>
-            <v-btn
-              v-if="student && !loading"
-              variant="text"
-              color="primary"
-              to="/recruitment"
-              >填写报名</v-btn
-            >
-          </div>
-          <div class="chart-footer">
-            {{ student ? "仅展示你自己的报名数据" : "按当前报名状态统计" }}
-          </div>
-        </v-card>
-        <v-card class="dashboard-card task-chart">
-          <div class="card-heading">
-            <h2>培养任务分布</h2>
-            <span class="card-caption">共 {{ tasks.length }} 项</span>
-          </div>
-          <div
-            class="bar-chart"
-            role="img"
-            :aria-label="
-              taskDistribution
-                .map((item) => `${item.label} ${item.count} 项`)
-                .join('，')
-            "
-          >
-            <div
-              v-for="item in taskDistribution"
-              :key="item.kind"
-              class="bar-row"
-            >
-              <span>{{ item.label }}</span>
-              <div class="bar-track">
-                <div
-                  :style="{ width: `${(item.count / taskMaximum) * 100}%` }"
-                />
-              </div>
-              <strong>{{ loading ? "—" : item.count }}</strong>
-            </div>
-          </div>
-          <div class="chart-footer">
-            {{
-              student ? "按你可参与的任务类型统计" : "按已发布的任务类型统计"
-            }}
-          </div>
-        </v-card>
-        <v-card class="dashboard-card activity-panel">
-          <div class="card-heading">
-            <h2>最近动态</h2>
-            <v-icon size="20" color="grey">mdi-history</v-icon>
-          </div>
-          <div v-if="!data?.recentActivity.length" class="empty-state py-5">
-            <p>{{ loading ? "正在加载动态…" : "暂无动态" }}</p>
-          </div>
-          <div class="activity-list">
-            <div
-              v-for="activity in data?.recentActivity.slice(0, 4)"
-              :key="activity.id"
-              class="activity-row"
-            >
-              <span class="activity-dot" />
-              <div>
-                <p>
-                  <strong>{{ activity.actor }}</strong> {{ activity.action }}
-                </p>
-                <span>{{ activity.target }}</span>
-              </div>
-              <small>{{ relativeTime(activity.createdAt) }}</small>
-            </div>
-          </div>
-        </v-card>
-      </aside>
+        </div>
+      </v-card>
     </div>
     <footer class="dashboard-footer">
-      <span>{{ settings?.organization || "机器人实验室" }} · 战队协作台</span
+      <span>竞跃 · RoboMaster / ROBOCON 团队协作台</span
       ><span v-if="auth.demoMode">演示空间 · 数据均为虚构</span>
     </footer>
   </div>
@@ -467,555 +282,259 @@ onMounted(load);
 
 <style scoped>
 .dashboard {
-  color: #424242;
+  color: #364153;
 }
 .welcome-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 24px;
+  margin-bottom: 22px;
 }
 .welcome-person {
   display: flex;
   align-items: center;
-  gap: 15px;
+  gap: 14px;
 }
 .welcome-person h1 {
-  font-size: 24px;
-  font-weight: 500;
-  letter-spacing: 0;
+  font-size: 23px;
+  font-weight: 600;
   margin: 0 0 4px;
-  color: #303030;
+  color: #263348;
 }
 .welcome-person p {
+  font-size: 12px;
+  color: #8490a3;
   margin: 0;
-  color: #757575;
-  font-size: 13px;
 }
-.date-label {
+.profile-alert {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  color: #757575;
-  white-space: nowrap;
+  gap: 6px;
 }
 .shortcut-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 18px;
-  margin-bottom: 22px;
+  gap: 15px;
+  margin-bottom: 20px;
 }
 .shortcut-card {
-  min-height: 137px;
-  background: #fff;
-  border-radius: 6px;
-  border: 1px solid #e8e8e8;
-  box-shadow: 0 2px 5px #00000009;
-  text-decoration: none;
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  padding: 19px 20px;
+  align-items: center;
+  gap: 8px;
+  min-height: 148px;
+  padding: 19px 18px;
+  background: white;
+  border: 1px solid #e7eaf0;
+  border-radius: 10px;
+  box-shadow: 0 3px 12px #27344b08;
+  text-decoration: none;
   color: inherit;
-  transition:
-    box-shadow 0.16s,
-    border-color 0.16s;
+  transition: 0.18s;
 }
 .shortcut-card:hover {
-  border-color: #bbdefb;
-  box-shadow: 0 3px 10px #00000013;
+  transform: translateY(-2px);
+  border-color: #b9d8eb;
+  box-shadow: 0 8px 20px #27344b12;
 }
-.shortcut-copy {
+.shortcut-card > div {
   min-width: 0;
 }
-.shortcut-copy h2 {
-  font-size: 17px;
-  font-weight: 500;
-  color: #333;
-  margin: 0 0 7px;
+.eyebrow {
+  font-size: 10px;
+  color: #8190a4;
+  letter-spacing: 0.04em;
 }
-.shortcut-copy p {
-  font-size: 12px;
-  line-height: 1.65;
-  margin: 0 0 11px;
-  color: #858585;
+.shortcut-card h2 {
+  font-size: 16px;
+  margin: 7px 0 4px;
+  font-weight: 600;
 }
-.shortcut-count {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
+.shortcut-card p {
+  font-size: 11px;
+  color: #8a95a5;
+  margin: 0 0 12px;
+  white-space: nowrap;
 }
-.shortcut-count strong {
-  font-size: 22px;
-  font-weight: 400;
-  color: #424242;
-  line-height: 1;
-}
-.shortcut-count span {
-  font-size: 12px;
-  color: #757575;
-}
-.shortcut-icon {
-  flex-shrink: 0;
-  opacity: 0.95;
+.shortcut-card strong {
+  font-size: 14px;
+  color: #397ca2;
+  font-weight: 600;
 }
 .main-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(320px, 1fr);
-  gap: 22px;
-}
-.main-column,
-.aside-column {
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
-  min-width: 0;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
 }
 .dashboard-card {
-  border: 1px solid #e7e7e7 !important;
-  border-radius: 6px !important;
-  box-shadow: 0 2px 5px #00000008 !important;
+  border: 1px solid #e7eaf0 !important;
+  border-radius: 10px !important;
+  box-shadow: 0 3px 12px #27344b08 !important;
+  min-width: 0;
 }
 .card-heading {
-  min-height: 60px;
+  min-height: 59px;
+  padding: 13px 18px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 14px 20px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid #eff1f5;
 }
 .card-heading h2 {
   display: flex;
   align-items: center;
-  gap: 9px;
-  font-size: 16px;
-  font-weight: 500;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
   margin: 0;
-  color: #424242;
 }
-.card-caption {
-  font-size: 12px;
-  color: #8a8a8a;
-}
+.team-row,
 .task-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 17px 20px;
-  min-height: 82px;
+  padding: 14px 17px;
+  min-height: 68px;
   color: inherit;
   text-decoration: none;
-  border-bottom: 1px solid #f2f2f2;
+  border-bottom: 1px solid #f0f2f5;
 }
+.team-row:last-child,
 .task-row:last-child {
-  border-bottom: 0;
+  border: 0;
 }
+.team-row:hover,
 .task-row:hover {
-  background: #fafafa;
+  background: #f8fafc;
 }
-.task-kind {
-  width: 39px;
-  height: 39px;
-  border-radius: 50%;
-  background: #e3f2fd;
-  color: #1976d2;
+.team-mark,
+.task-mark {
+  width: 37px;
+  height: 37px;
+  border-radius: 10px;
+  background: #edf5fb;
+  color: #4083a8;
   display: grid;
   place-items: center;
   flex-shrink: 0;
 }
-.task-kind.document {
-  background: #fff3e0;
-  color: #ef8b16;
+.task-mark {
+  background: #eaf6f4;
+  color: #378e7c;
 }
-.task-kind.hardware {
-  background: #e8f5e9;
-  color: #43a047;
-}
-.task-kind.quiz {
-  background: #f3e5f5;
-  color: #9c27b0;
-}
-.task-main {
-  min-width: 0;
+.team-copy,
+.task-copy {
   flex: 1;
+  min-width: 0;
 }
-.task-main h3 {
-  font-size: 14px;
-  font-weight: 500;
-  margin: 0 0 5px;
+.team-copy strong,
+.task-copy strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.task-main p {
-  font-size: 12px;
-  color: #8a8a8a;
-  margin: 0;
-}
-.task-main p span {
-  margin: 0 5px;
-}
-.task-meta {
-  text-align: right;
-  flex-shrink: 0;
-}
-.task-meta small {
+.team-copy small,
+.task-copy small {
   display: block;
   font-size: 11px;
-  color: #999;
+  color: #8691a1;
   margin-top: 5px;
-}
-.task-arrow {
-  color: #aaa;
-}
-.person-name {
-  display: flex;
-  align-items: center;
-  gap: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.person-name > span {
-  width: 29px;
-  height: 29px;
-  display: grid;
-  place-items: center;
-  background: #e3f2fd;
-  color: #1976d2;
-  border-radius: 50%;
-  font-size: 12px;
-}
-.interview-panel :deep(td) {
-  height: 63px !important;
-  font-size: 13px;
-}
-.interview-date {
-  white-space: nowrap;
-}
-.announcement > p {
-  padding: 18px 20px;
-  font-size: 14px;
-  line-height: 1.9;
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: #616161;
-}
-.announcement-status {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 5px;
-  font-size: 12px;
-  padding: 0 20px 18px;
-  color: #757575;
-}
-.donut-chart {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 20px;
-  padding: 19px 20px;
-  min-height: 208px;
-}
-.donut-figure {
-  position: relative;
-  width: 158px;
-  height: 158px;
-  flex-shrink: 0;
-}
-.donut-figure svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-.donut-total {
-  position: absolute;
-  inset: 0;
+.empty-state {
+  min-height: 155px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  pointer-events: none;
-}
-.donut-total strong {
-  font-size: 30px;
-  line-height: 1.1;
-  font-weight: 400;
-  color: #424242;
-}
-.donut-total span {
-  font-size: 11px;
-  color: #9e9e9e;
-  margin-top: 5px;
-}
-.chart-legend {
-  min-width: 115px;
-  flex: 1;
-  max-width: 168px;
-}
-.chart-legend button {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  padding: 6px 3px;
-  gap: 15px;
-  border-radius: 3px;
-  font-size: 12px;
-  color: #616161;
-}
-.chart-legend button:hover {
-  background: #f5f5f5;
-}
-.chart-legend button > span {
-  display: flex;
-  align-items: center;
   gap: 8px;
+  color: #a0aaba;
 }
-.chart-legend i {
-  width: 9px;
-  height: 9px;
-  border-radius: 2px;
+.empty-state p {
+  font-size: 12px;
+  margin: 0;
 }
-.chart-legend strong {
-  font-size: 13px;
-  font-weight: 500;
-  color: #424242;
+.pipeline {
+  padding: 21px 20px 14px;
 }
-.chart-footer {
-  padding: 10px 20px;
-  border-top: 1px solid #f1f1f1;
-  color: #9e9e9e;
-  font-size: 11px;
-}
-.bar-chart {
-  padding: 16px 22px 19px;
-}
-.bar-row {
-  display: flex;
+.pipeline-row {
+  display: grid;
+  grid-template-columns: 70px 1fr 28px;
   align-items: center;
-  gap: 13px;
-  min-height: 34px;
-}
-.bar-row > span {
+  gap: 12px;
+  min-height: 36px;
   font-size: 12px;
-  color: #757575;
-  width: 52px;
-  flex-shrink: 0;
+  color: #667387;
 }
-.bar-track {
-  height: 10px;
-  flex: 1;
-  background: #fce4ec;
-  border-radius: 2px;
-  overflow: hidden;
-}
-.bar-track > div {
-  height: 100%;
-  background: #e91e63;
-  border-radius: 2px;
-}
-.bar-row strong {
-  min-width: 14px;
-  font-size: 12px;
-  font-weight: 500;
+.pipeline-row strong {
   text-align: right;
+  font-weight: 600;
+  color: #354257;
 }
-.activity-list {
-  padding: 7px 20px 12px;
-}
-.activity-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 11px 0;
-}
-.activity-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #42a5f5;
-  flex-shrink: 0;
-  margin-top: 7px;
-}
-.activity-row > div {
-  flex: 1;
-  min-width: 0;
-}
-.activity-row p {
-  font-size: 12px;
-  margin: 0 0 4px;
-  color: #616161;
-}
-.activity-row strong {
-  font-weight: 500;
-  color: #424242;
-}
-.activity-row div > span {
-  display: block;
-  color: #9e9e9e;
-  font-size: 12px;
+.track {
+  height: 8px;
+  background: #edf1f5;
+  border-radius: 9px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.activity-row small {
-  font-size: 11px;
-  color: #aaa;
-  white-space: nowrap;
-  padding-top: 2px;
+.track i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #39a7a1, #387cb0);
+  border-radius: 9px;
+}
+.privacy-note {
+  margin: 13px 0 0;
+  color: #98a2b0;
+  font-size: 10px;
 }
 .dashboard-footer {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
-  margin-top: 26px;
-  color: #9e9e9e;
-  font-size: 11px;
+  gap: 10px;
+  margin-top: 22px;
+  color: #9aa3b0;
+  font-size: 10px;
 }
-@media (max-width: 1280px) {
+@media (max-width: 1100px) {
   .shortcut-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .shortcut-card {
-    min-height: 125px;
-  }
-  .task-meta small {
-    max-width: 100px;
-  }
-  .task-arrow {
-    display: none;
-  }
-}
-@media (max-width: 1050px) {
   .main-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .aside-column {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-items: start;
-  }
-  .activity-panel {
-    grid-column: 1 / -1;
-  }
-  .donut-chart {
-    gap: 10px;
-  }
-  .donut-figure {
-    width: 140px;
-    height: 140px;
-  }
-  .task-meta small {
-    max-width: none;
+    grid-template-columns: 1fr;
   }
 }
-@media (max-width: 650px) {
+@media (max-width: 600px) {
   .welcome-row {
-    align-items: flex-start;
-  }
-  .welcome-person {
-    gap: 10px;
-  }
-  .welcome-person h1 {
-    font-size: 21px;
-  }
-  .welcome-person p {
-    font-size: 12px;
-    max-width: 210px;
-  }
-  .date-label > span {
-    display: none;
-  }
-  .shortcut-grid {
-    gap: 12px;
     margin-bottom: 16px;
   }
-  .shortcut-card {
-    padding: 15px;
-    min-height: 136px;
-    position: relative;
-    align-items: flex-start;
-  }
-  .shortcut-copy h2 {
-    font-size: 16px;
-  }
-  .shortcut-copy p {
-    max-width: 115px;
-    font-size: 11px;
-    padding-right: 10px;
-  }
-  .shortcut-icon {
-    position: absolute;
-    bottom: 14px;
-    right: 12px;
-    font-size: 33px !important;
-  }
-  .shortcut-count strong {
+  .welcome-person h1 {
     font-size: 20px;
   }
-  .shortcut-count span {
-    font-size: 11px;
+  .shortcut-grid {
+    gap: 10px;
   }
-  .main-grid,
-  .main-column,
-  .aside-column {
-    gap: 16px;
+  .shortcut-card {
+    min-height: 133px;
+    padding: 14px;
   }
-  .aside-column {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .activity-panel {
-    grid-column: auto;
-  }
-  .card-heading {
-    padding: 12px 15px;
-    min-height: 57px;
-  }
-  .card-heading h2 {
-    font-size: 15px;
-  }
-  .task-row {
-    padding: 14px 15px;
-    gap: 9px;
-    flex-wrap: wrap;
-  }
-  .task-kind {
-    width: 34px;
-    height: 34px;
-  }
-  .task-main h3 {
+  .shortcut-card p {
     white-space: normal;
-    font-size: 13px;
   }
-  .task-main p {
-    font-size: 11px;
+  .shortcut-card > :deep(.v-icon) {
+    font-size: 34px !important;
   }
-  .task-meta {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding-left: 43px;
-    text-align: left;
-  }
-  .task-meta small {
-    margin: 0;
-  }
-  .donut-chart {
-    gap: 28px;
+  .main-grid {
+    gap: 14px;
   }
   .dashboard-footer {
     flex-direction: column;
-    gap: 6px;
-  }
-  .interview-panel :deep(td),
-  .interview-panel :deep(th) {
-    padding: 0 10px !important;
   }
 }
 </style>

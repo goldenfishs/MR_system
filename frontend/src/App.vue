@@ -20,8 +20,8 @@ const navigation = computed(() => [
     tag: "OVERVIEW",
   },
   {
-    path: "/recruitment",
-    title: auth.user?.role === "student" ? "我的报名" : "招新管理",
+    path: "/teams",
+    title: "团队招募",
     icon: "mdi-account-multiple-plus-outline",
   },
   {
@@ -30,12 +30,31 @@ const navigation = computed(() => [
     icon: "mdi-book-open-page-variant-outline",
   },
   { path: "/assessment", title: "在线测评", icon: "mdi-code-braces" },
+  { path: "/files", title: "文件中心", icon: "mdi-folder-outline" },
+  {
+    path: "/records",
+    title: auth.user?.role === "admin" ? "档案发放" : "我的档案",
+    icon: "mdi-certificate-outline",
+  },
+  { path: "/profile", title: "个人资料", icon: "mdi-account-outline" },
+  ...(auth.user?.role === "admin"
+    ? [{ path: "/mail", title: "批量邮件", icon: "mdi-email-multiple-outline" }]
+    : []),
   ...(auth.user?.role !== "student"
     ? [
         {
           path: "/members",
           title: "战队成员",
           icon: "mdi-account-group-outline",
+        },
+      ]
+    : []),
+  ...(auth.user?.role !== "student"
+    ? [
+        {
+          path: "/recruitment",
+          title: "面试记录",
+          icon: "mdi-account-clock-outline",
         },
       ]
     : []),
@@ -130,7 +149,7 @@ function selectTab(value: unknown) {
 }
 function directionLink(direction: string) {
   return {
-    path: auth.user?.role === "student" ? "/learning" : "/recruitment",
+    path: "/learning",
     query: { direction },
   };
 }
