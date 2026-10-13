@@ -46,12 +46,12 @@ interface FileAsset {
 | `POST /files` | multipart/form-data，唯一文件字段 `file` → 201 `{item:FileAsset}` | 必须登录；单文件 25 MiB，个人累计 250 MiB，不接受空文件 |
 | `GET /files` | `{items:FileAsset[]}` | 默认仅本人；管理员 `?all=true` 可查询全部 |
 | `GET /files/:id` | `{item:FileAsset}` | 同下载权限，方便附件显示名称和大小 |
-| `GET /files/:id/download` | 二进制下载 | 本人、管理员、个人档案指定收件人，或有任务材料／成果访问权限者 |
+| `GET /files/:id/download` | 二进制下载 | 本人、管理员、个人档案指定收件人，或有任务材料／成果／知识库访问权限者 |
 | `GET /files/:id/preview` | JPEG/PNG、PDF、MP4/WebM | 同下载权限；图片须清洗，视频支持 Range 请求 |
 
 文件存储于 `UPLOAD_DIR`（默认 `DATA_DIR/uploads`），API 不暴露磁盘路径。支持 PDF、Office 文档、文字、ZIP/7z/RAR、常用源代码、图片、PCB/原理图/Gerber、CAD/STEP、SolidWorks、MP4/WebM 等扩展名。具体白名单见 `backend/platform_core.go` 的 `allowedExtension`。PDF 检查 `%PDF-` 文件头；JPEG/PNG 限制尺寸和像素数并重新编码，去除原始元数据及附加内容。PDF 和 MP4/WebM 支持鉴权预览；其他文件仅保存，不解压、不执行；SVG 仅附件下载，不作为页面渲染。下载带 `Content-Disposition: attachment`、`nosniff` 和限制性 CSP。文件内容不经过杀毒扫描。
 
-文件引用每次最多 20 个，不允许重复；普通用户只能引用自己上传的文件，管理员可引用已上传文件。任务材料权限根据当前团队成员关系和方向即时判断，录取撤销后不再具有团队材料权限。个人档案附件通过明确的用户授权记录共享。当前没有公开删除文件接口。
+文件引用每次最多 20 个，不允许重复；普通用户只能引用自己上传的文件，管理员可引用已上传文件。任务材料权限根据当前入队状态、团队成员关系和方向即时判断；知识库附件同样要求学习访问权限。失去入队资格后撤销这些来源的访问权，本人上传的文件及个人档案明确授权的附件仍可访问。当前没有公开删除文件接口。
 
 ## 团队与报名
 
@@ -76,8 +76,11 @@ interface Membership { teamId: string; userId: string; direction: Direction; joi
 - `GET /teams/:id/applications` → `{items:TeamApplication[]}`。管理员可读本团队全部申请及 `profile`；其他用户仅本人申请，不附加他人资料。
 - `PATCH /team-applications/:id`：`{status:'accepted'|'rejected',feedback}` → `{item:TeamApplication}`，仅管理员。录取与成员关系写入原子提交；重复录取不产生重复成员，撤销录取删除相应成员关系。
 - `GET /memberships` → `{items:Membership[]}`，普通用户自己的，管理员全部。
+- `GET /learning-access` → `{allowed:boolean}`，必须登录。管理员、导师和面试官返回 true；学员只有存在当前团队成员关系，或历史面试记录状态为 accepted 时返回 true。未报名、待审核、未通过且没有其他有效入队记录的学员返回 false。根据数据库中的当前状态判断，无需重新登录即可反映审核或撤销结果。
 
 `User.team` 是旧面试流程的赛事字段；新团队的实体 ID 为 `Team.id`／`Task.teamId`。一个用户可以加入多个团队，不用覆盖旧字段表达多团队关系。
+
+学员通过审核后，前端开放“学习与任务”和“技术分组”，未开放时直接访问 `/learning` 或 `/assessment` 转至团队报名页。报名、个人资料、个人荣誉和讨论区仍可使用；有学习访问权限不代表可提交任意任务，具体团队、方向和时间限制继续生效。
 
 ## 荣誉中心与个人档案
 
@@ -118,19 +121,19 @@ interface Submission {
 }
 ```
 
-- `GET /tasks` → `{items:Task[]}`。学员只能看到所属团队与方向的任务；工作人员保留全队管理视图。学员响应隐藏 `hidden:true` 的输入和预期输出，保留 `totalCases`。
+- `GET /tasks` → `{items:Task[]}`。未取得学习访问权限的学员返回空列表；已入队学员按任务的团队与方向规则筛选，工作人员保留全队管理视图。学员响应隐藏 `hidden:true` 的输入和预期输出，保留 `totalCases`。
 - `POST /tasks`：Task 的非服务器管理字段 → 201 `{item:Task}`，管理员或导师。`fileIds` 为教材或题目附件；`submissionType` 区分一般文件、工程项目和单文件代码。`teamId` 指定发布团队，`team` 为兼容旧数据的赛事字段。
-- `GET /tasks/:id/submissions` → `{items:Submission[]}`，学员仅自己，管理员／导师全部。
+- `GET /tasks/:id/submissions` → `{items:Submission[]}`，学员必须仍有该任务的访问权限，且仅返回本人记录；管理员／导师全部，面试官不可评阅。入队资格撤销后，不再凭历史提交获得任务记录访问权。
 - `POST /tasks/:id/submissions`：`{content,repoUrl?,artifactUrl?,fileIds?,judgeRunId?}` → 201 `{item:Submission}`。必须已加入对应团队／方向，在开始与截止时间内；每次创建新版本。声明提交形式的任务必须上传文件，启用判题时必须引用本任务、本人、完成状态的判题记录以及对应代码文件；源代码哈希须一致。
 - `PATCH /submissions/:id`：`{status:'approved'|'changes_requested',score,feedback}` → `{item:Submission}`，管理员／导师，只可审核最新版本，分值范围为 0 至 task.maxScore。
 
-旧任务不含 `teamId` 时，沿用旧报名录取及赛事／方向校验。机械说明书、工程 ZIP、PCB、运营图片统一使用附件；这些文件由人工评分，工程 ZIP 不自动编译。
+旧任务不含 `teamId` 时，先校验学习访问权限，再沿用 `User.team`／`User.direction` 的赛事和方向规则；新任务应指定 `teamId`，通过当前成员关系判断。机械说明书、工程 ZIP、PCB、运营图片统一使用附件；这些文件由人工评分，工程 ZIP 不自动编译。
 
 ## 在线编译测试
 
-- `GET /judge/config` → `{configured:boolean,languages:{id:number,name:string}[]}`。服务未配置时返回 false 和空列表；配置后由独立 Judge0 兼容 API 读取语言，服务不可用返回 503。
+- `GET /judge/config` → `{configured:boolean,languages:{id:number,name:string}[]}`，要求学习访问权限，未取得权限返回 403。服务未配置时返回 false 和空列表；配置后由独立 Judge0 兼容 API 读取语言，服务不可用返回 503。
 - `POST /tasks/:id/judge`：`{sourceFileId,languageId}` → 202 `{item:JudgeRun}`。仅对应已入队学员，在允许的时间段、语言及启用判题的任务下发起。源代码必须本人上传，UTF-8 文本、1 字节至 64 KiB。每用户每分钟最多 5 次，进程最多同时处理 2 个请求。
-- `GET /judge-runs/:id` → `{item:JudgeRun}`，本人或管理员。前端轮询状态；不会因查询而重复编译。
+- `GET /judge-runs/:id` → `{item:JudgeRun}`，本人或管理员，且必须仍有对应任务的访问权限。前端轮询状态；不会因查询而重复编译。
 
 ```ts
 interface JudgeRun {
@@ -172,7 +175,7 @@ interface MailCampaign {
 ## 设置、统计与兼容接口
 
 - `GET /health` → `{status:'ok'}`，验证数据库连接。
-- `GET /workspace-summary` → `{stats:{openTeams,applications,pendingApplications,members,records,files,activeTasks,pendingReviews},pipeline:{status,label,count}[],profileComplete}`。新团队统计；非管理员报名和个人档案限本人，文件数始终仅本人。
+- `GET /workspace-summary` → `{stats:{openTeams,applications,pendingApplications,members,records,files,activeTasks,pendingReviews},pipeline:{status,label,count}[],profileComplete}`。新团队统计；非管理员报名和个人档案限本人，文件数始终仅本人。没有学习访问权限时，培养任务及待评阅统计为 0。
 - `GET /settings` → `{settings:{organization,season,applicationOpen,applicationDeadline,hydroUrl,announcement,brandName,logoUrl,teamName,secondaryTeamName,competitions}}`。
 - `PATCH /settings`：上述字段部分更新 → `{settings}`，仅管理员。
 - `POST /settings/logo`：`{name,contentBase64}` → `{settings}`，仅管理员；上传 PNG/JPEG，最大 2 MiB、单边 6000 像素且总像素不超过 2000 万，服务端清洗重编码并更新 logoUrl。
@@ -205,11 +208,11 @@ interface KnowledgeResource {
 }
 ```
 
-- `GET /knowledge-base?direction=&search=` → `{resources:KnowledgeResource[]}`，已登录用户；按方向筛选时也包含 direction 为空的共享资料。
+- `GET /knowledge-base?direction=&search=` → `{resources:KnowledgeResource[]}`，要求学习访问权限，未入队学员返回 403；按方向筛选时也包含 direction 为空的共享资料。
 - `POST /knowledge-base`：`{title,description?,direction?,kind,fileIds?,url?}` → 201 `{resource}`，管理员／导师；至少一个附件或 HTTP(S) 资料链接。PDF 类型的附件必须为 PDF。
 - `PATCH /knowledge-base/:id` → `{resource}`；`DELETE /knowledge-base/:id` → `{deleted:true}`。管理员全部可维护，导师仅自己发布的资料。
 
-知识库面向全体已登录用户，组别用于内容分类，不是成员访问限制。附件授权依据仍存在的知识库引用动态判断，移除引用后立即撤销该来源授权；原上传者、管理员或仍有其他合法引用者保留访问权。
+知识库面向已入队学员及工作人员，组别用于内容分类。附件授权依据当前学习访问权限及仍存在的知识库引用动态判断，失去入队资格或移除引用后立即撤销该来源授权；原上传者、管理员或仍有其他合法引用者保留访问权。
 
 ## 讨论区
 

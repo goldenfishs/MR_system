@@ -751,6 +751,13 @@ func taskVisible(t Task, u User) bool {
 	return (t.Team == "" || u.Team == "" || sameCompetition(t.Team, u.Team)) && (t.Direction == "" || u.Direction == "" || t.Direction == u.Direction)
 }
 func (a *App) tasksFor(u User) ([]Task, error) {
+	allowed, err := a.learningAllowed(u)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return []Task{}, nil
+	}
 	tasks, err := readAll[Task](a.store, "SELECT payload FROM tasks")
 	if err != nil {
 		return nil, err
@@ -876,8 +883,16 @@ func (a *App) listSubmissions(w http.ResponseWriter, r *http.Request, u User) er
 	if u.Role == "interviewer" {
 		return fail(403, "面试官没有作业评阅权限")
 	}
-	if _, err := a.store.task(r.PathValue("id")); err != nil {
+	task, err := a.store.task(r.PathValue("id"))
+	if err != nil {
 		return err
+	}
+	visible, err := a.taskVisibleTo(task, u)
+	if err != nil {
+		return err
+	}
+	if !visible {
+		return fail(403, "没有权限查看此任务的提交记录")
 	}
 	items, err := a.store.submissions(r.PathValue("id"))
 	if err != nil {

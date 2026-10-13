@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, ref, watch } from "vue";
 import { api } from "../lib/api";
 import { auth } from "../lib/auth";
+import { canAccessLearning, learningAccess, refreshLearningAccess } from "../lib/learning-access";
 import type { Task, Settings } from "../lib/types";
 import type { TeamSpace } from "../lib/platform";
 
@@ -33,10 +34,13 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
+    await refreshLearningAccess();
     const [space, teamList, learning, settings] = await Promise.all([
       api.get<Summary>("/workspace-summary"),
       api.get<{ items: TeamSpace[] }>("/teams"),
-      api.get<{ items: Task[] }>("/tasks"),
+      canAccessLearning.value
+        ? api.get<{ items: Task[] }>("/tasks")
+        : Promise.resolve({ items: [] as Task[] }),
       api.get<{ settings: Settings }>("/settings"),
     ]);
     summary.value = space;
@@ -50,11 +54,14 @@ async function load() {
   }
 }
 const counts = (key: string) => summary.value?.stats[key] ?? 0;
+watch(canAccessLearning, () => {
+  if (!loading.value) void load();
+});
 onMounted(load);
 </script>
 
 <template>
-  <div class="page-content dashboard">
+  <div class="page-content dashboard" :style="{ '--shortcut-columns': canAccessLearning ? 4 : 3, '--main-columns': canAccessLearning ? 2 : 1 }">
     <header class="welcome-row">
       <div class="welcome-person">
         <v-avatar size="48" color="primary" variant="tonal"
@@ -88,6 +95,12 @@ onMounted(load);
       <v-btn to="/profile" color="primary" variant="text">补全资料</v-btn>
     </v-alert>
 
+    <v-alert v-if="auth.user?.role === 'student' && !canAccessLearning" :type="learningAccess.error ? 'warning' : 'info'" variant="tonal" class="mb-5">
+      {{ learningAccess.error || "报名审核通过后，技术分组、知识库、作业和考试将向你开放。" }}
+      <v-btn v-if="learningAccess.error" variant="text" @click="load">重试</v-btn>
+      <v-btn v-else to="/teams" color="primary" variant="text">查看团队报名</v-btn>
+    </v-alert>
+
     <div class="shortcut-grid">
       <router-link to="/teams" class="shortcut-card"
         ><div>
@@ -108,7 +121,7 @@ onMounted(load);
           >mdi-account-multiple-outline</v-icon
         ></router-link
       >
-      <router-link to="/learning" class="shortcut-card"
+      <router-link v-if="canAccessLearning" to="/learning" class="shortcut-card"
         ><div>
           <span class="eyebrow">任务培养</span>
           <h2>{{ canManage ? "任务与评阅" : "我的作业" }}</h2>
@@ -230,7 +243,7 @@ onMounted(load);
         </div>
       </v-card>
 
-      <v-card class="dashboard-card">
+      <v-card v-if="canAccessLearning" class="dashboard-card">
         <div class="card-heading">
           <h2>
             <v-icon color="teal" size="20">mdi-clipboard-list-outline</v-icon
@@ -321,7 +334,7 @@ onMounted(load);
 }
 .shortcut-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--shortcut-columns), minmax(0, 1fr));
   gap: 15px;
   margin-bottom: 20px;
 }
@@ -371,7 +384,7 @@ onMounted(load);
 }
 .main-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(var(--main-columns), minmax(0, 1fr));
   gap: 18px;
 }
 .dashboard-card {

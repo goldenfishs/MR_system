@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { auth, loadSession } from "./lib/auth";
+import { canAccessLearning, refreshLearningAccess } from "./lib/learning-access";
 const router = createRouter({
   history: createWebHistory(),
   scrollBehavior: () => ({ top: 0 }),
@@ -90,6 +91,9 @@ router.beforeEach(async (to) => {
   if (auth.user && to.path === "/login") return "/";
   if (to.meta.admin && auth.user?.role !== "admin") return "/";
   if (to.meta.staff && auth.user?.role === "student") return "/";
+  await refreshLearningAccess();
+  if (["/learning", "/assessment"].includes(to.path) && !canAccessLearning.value)
+    return { path: "/teams", query: { admissionRequired: "1" } };
   document.title = `${to.meta.title || "工作台"} · QUT机器人战队`;
 });
 export default router;

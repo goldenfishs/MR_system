@@ -393,7 +393,7 @@ func (a *App) canDownloadFile(u User, id string) (bool, error) {
 	if err != nil || allowed {
 		return allowed, err
 	}
-	return a.knowledgeFileAccess(id)
+	return a.knowledgeFileAccess(u, id)
 }
 func validAssetName(name string) bool {
 	if len(name) == 0 || len(name) > 240 || strings.ContainsAny(name, "/\\") {

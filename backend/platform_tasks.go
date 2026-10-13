@@ -60,6 +60,10 @@ func (a *App) taskVisibleTo(t Task, u User) (bool, error) {
 		return true, nil
 	}
 	if t.TeamID == "" {
+		allowed, err := a.learningAllowed(u)
+		if err != nil || !allowed {
+			return false, err
+		}
 		return taskVisible(t, u), nil
 	}
 	var direction string
@@ -76,14 +80,10 @@ func (a *App) requireTaskSubmission(t Task, u User) error {
 	if u.Role != "student" {
 		return fail(403, "只有团队成员可提交任务")
 	}
+	if err := a.requireLearningAccess(u); err != nil {
+		return err
+	}
 	if t.TeamID == "" {
-		application, err := readOne[Applicant](a.store, "SELECT payload FROM applicants WHERE user_id=?", u.ID)
-		if errors.Is(err, sql.ErrNoRows) || err == nil && application.Status != "accepted" {
-			return fail(403, "录取后才可提交培养任务")
-		}
-		if err != nil {
-			return err
-		}
 		if t.Team != "" && !sameCompetition(t.Team, u.Team) || t.Direction != "" && t.Direction != u.Direction {
 			return fail(403, "该任务不属于你的赛队或技术方向")
 		}

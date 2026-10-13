@@ -221,10 +221,7 @@ func TestSubmissionAdmissionScopeAndDeadline(t *testing.T) {
 	c.request("POST", "/api/tasks/"+own.ID+"/submissions", map[string]string{"content": "late"}, 409)
 	c.register("未录取学生", "unaccepted@example.com", "LongPassword!123")
 	c.request("POST", "/api/tasks/"+other.ID+"/submissions", map[string]string{"content": "test"}, 403)
-	mine := unmarshal[[]Submission](t, c.request("GET", "/api/tasks/"+own.ID+"/submissions", nil, 200)["items"])
-	if len(mine) != 0 {
-		t.Fatal("student can see other users submissions")
-	}
+	c.request("GET", "/api/tasks/"+own.ID+"/submissions", nil, 403)
 }
 func TestSettingsTaskValidationAndDashboard(t *testing.T) {
 	_, c := setup(t)

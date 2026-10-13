@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useDisplay } from "vuetify";
 import { auth, roleNames, signOut } from "./lib/auth";
+import { canAccessLearning, refreshLearningAccess } from "./lib/learning-access";
 import { api } from "./lib/api";
 import type { Settings } from "./lib/types";
 const route = useRoute(),
@@ -24,11 +25,11 @@ const navigation = computed(() => [
     title: "团队报名",
     icon: "mdi-account-multiple-plus-outline",
   },
-  {
+  ...(canAccessLearning.value ? [{
     path: "/learning",
     title: "学习与任务",
     icon: "mdi-book-open-page-variant-outline",
-  },
+  }] : []),
   { path: "/discussions", title: "讨论区", icon: "mdi-forum-outline" },
   {
     path: "/records",
@@ -98,13 +99,25 @@ function expired() {
     query: { expired: "1", redirect: route.fullPath },
   });
 }
+async function refreshAccess() {
+  await refreshLearningAccess();
+  if (auth.user && !canAccessLearning.value && ["/learning", "/assessment"].includes(route.path))
+    await router.replace({ path: "/teams", query: { admissionRequired: "1" } });
+}
+function refreshVisibleAccess() {
+  if (document.visibilityState === "visible") void refreshAccess();
+}
 onMounted(() => {
   window.addEventListener("session-expired", expired);
   window.addEventListener("settings-updated", loadSettings);
+  window.addEventListener("focus", refreshAccess);
+  document.addEventListener("visibilitychange", refreshVisibleAccess);
 });
 onUnmounted(() => {
   window.removeEventListener("session-expired", expired);
   window.removeEventListener("settings-updated", loadSettings);
+  window.removeEventListener("focus", refreshAccess);
+  document.removeEventListener("visibilitychange", refreshVisibleAccess);
 });
 
 const directions = [
@@ -198,6 +211,7 @@ function directionLink(direction: string) {
             rounded="0"
           />
         </v-list>
+        <template v-if="canAccessLearning">
         <v-divider class="mx-4 my-2" />
         <div class="nav-caption">技术分组</div>
         <v-list
@@ -230,6 +244,7 @@ function directionLink(direction: string) {
             >
           </v-list-item>
         </v-list>
+        </template>
         <template #append>
           <div class="sidebar-bottom">
             <v-btn

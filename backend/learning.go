@@ -62,6 +62,7 @@ func taskLocked(t Task, u User) bool {
 	return err != nil || time.Now().Before(start)
 }
 func (a *App) registerLearningRoutes(m *http.ServeMux) {
+	m.HandleFunc("GET /api/learning-access", a.wrap(true, a.getLearningAccess))
 	m.HandleFunc("GET /api/knowledge-base", a.wrap(true, a.listKnowledge))
 	m.HandleFunc("POST /api/knowledge-base", a.wrap(true, a.createKnowledge))
 	m.HandleFunc("PATCH /api/knowledge-base/{id}", a.wrap(true, a.updateKnowledge))
@@ -73,7 +74,59 @@ func (a *App) registerLearningRoutes(m *http.ServeMux) {
 	m.HandleFunc("PATCH /api/tasks/{id}", a.wrap(true, a.updateTask))
 	m.HandleFunc("DELETE /api/tasks/{id}", a.wrap(true, a.deleteTask))
 }
-func (a *App) listKnowledge(w http.ResponseWriter, r *http.Request, _ User) error {
+
+// Resolve access from current enrollment records. Profile direction and cached
+// login data are not proof of admission, and revocation takes effect immediately.
+func (a *App) learningAllowed(u User) (bool, error) {
+	if canManage(u) || u.Role == "interviewer" {
+		return true, nil
+	}
+	if u.Role != "student" {
+		return false, nil
+	}
+	var memberships int
+	if err := a.store.row("SELECT COUNT(*) FROM team_memberships WHERE user_id=?", u.ID).Scan(&memberships); err != nil {
+		return false, err
+	}
+	if memberships > 0 {
+		return true, nil
+	}
+	applicants, err := readAll[Applicant](a.store, "SELECT payload FROM applicants WHERE user_id=?", u.ID)
+	if err != nil {
+		return false, err
+	}
+	for _, applicant := range applicants {
+		if applicant.Status == "accepted" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (a *App) requireLearningAccess(u User) error {
+	allowed, err := a.learningAllowed(u)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return fail(http.StatusForbidden, "报名审核通过后才可访问技术分组")
+	}
+	return nil
+}
+
+func (a *App) getLearningAccess(w http.ResponseWriter, _ *http.Request, u User) error {
+	allowed, err := a.learningAllowed(u)
+	if err != nil {
+		return err
+	}
+	respond(w, http.StatusOK, map[string]any{"allowed": allowed})
+	return nil
+}
+
+func (a *App) listKnowledge(w http.ResponseWriter, r *http.Request, u User) error {
+	if err := a.requireLearningAccess(u); err != nil {
+		return err
+	}
 	items, err := readAll[KnowledgeResource](a.store, "SELECT payload FROM knowledge_resources")
 	if err != nil {
 		return err
@@ -208,7 +261,11 @@ func (a *App) deleteKnowledge(w http.ResponseWriter, r *http.Request, u User) er
 	respond(w, 200, map[string]any{"deleted": true})
 	return nil
 }
-func (a *App) knowledgeFileAccess(fileID string) (bool, error) {
+func (a *App) knowledgeFileAccess(u User, fileID string) (bool, error) {
+	allowed, err := a.learningAllowed(u)
+	if err != nil || !allowed {
+		return false, err
+	}
 	items, err := readAll[KnowledgeResource](a.store, "SELECT payload FROM knowledge_resources")
 	if err != nil {
 		return false, err

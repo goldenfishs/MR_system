@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useDisplay } from "vuetify";
 import { api } from "../lib/api";
 import { auth } from "../lib/auth";
+import { canAccessLearning, learningAccess, refreshLearningAccess } from "../lib/learning-access";
 import {
   directions,
   dateTime,
@@ -81,10 +82,15 @@ async function load() {
       api.get<{ items: TeamSpace[] }>("/teams"),
       api.get<{ profile: Profile }>("/profile"),
       api.get<{ settings: Settings }>("/settings"),
+      refreshLearningAccess(),
     ]);
     teams.value = data.items;
     profile.value = p.profile;
     brand.value = settings.settings;
+    if (selected.value) {
+      selected.value = teams.value.find(team => team.id === selected.value?.id) || null;
+      if (selected.value) await loadApplications(selected.value.id);
+    }
   } catch (e) {
     error.value = (e as Error).message;
   } finally {
@@ -186,6 +192,7 @@ async function apply() {
     teams.value = teams.value.map((t) => (t.id === id ? selected.value! : t));
     notice.value = "报名已提交，审核结果会显示在这里。";
     await loadApplications(id);
+    await refreshLearningAccess();
   } catch (e) {
     detailError.value = (e as Error).message;
   } finally {
@@ -212,6 +219,9 @@ async function review(item: TeamApplication, status: "accepted" | "rejected") {
     saving.value = false;
   }
 }
+watch(canAccessLearning, () => {
+  if (!loading.value) void load();
+});
 onMounted(load);
 </script>
 <template>
@@ -233,7 +243,12 @@ onMounted(load);
     </div>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4"
       >{{ error }}<v-btn variant="text" @click="load">重试</v-btn></v-alert
-    ><v-alert
+    >
+    <v-alert v-if="canApply && !canAccessLearning" :type="learningAccess.error ? 'warning' : 'info'" variant="tonal" class="mb-4">
+      {{ learningAccess.error || "报名审核通过后，侧栏将显示技术分组，并开放知识库、作业和考试。" }}
+      <v-btn variant="text" :loading="loading" @click="load">刷新审核状态</v-btn>
+    </v-alert>
+    <v-alert
       v-if="profile && !profile.complete && !isAdmin"
       type="info"
       variant="tonal"
@@ -263,7 +278,7 @@ onMounted(load);
         </div>
         <h2>{{ team.name }}</h2>
         <p class="description">{{ team.description }}</p>
-        <div class="d-flex flex-wrap ga-2 mb-4">
+        <div v-if="canAccessLearning" class="d-flex flex-wrap ga-2 mb-4">
           <v-chip
             v-for="d in team.directions"
             :key="d"

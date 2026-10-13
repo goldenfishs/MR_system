@@ -270,7 +270,7 @@ const selectedSubmission = computed(() => selected.value?.mySubmission);
 const eligibility = computed(() => {
   if (!isStudent.value || !selected.value) return "";
   if (!admitted.value)
-    return "加入并通过审核后可提交学习任务。你现在可以先了解任务要求与学习资料。";
+    return "报名审核通过后，才能访问知识库、作业和考试。";
   if (
     selected.value.teamId &&
     !memberships.value.some(

@@ -163,7 +163,8 @@ func TestMailAndJudgeDisabledAndRecovery(t *testing.T) {
 	if err := a.saveMailCampaign(campaign); err != nil {
 		t.Fatal(err)
 	}
-	run := JudgeRun{ID: randomID(), TaskID: "test-task", UserID: "demo-student", Status: "running", CreatedAt: now()}
+	task := taskForTest(t, c, taskForm())
+	run := JudgeRun{ID: randomID(), TaskID: task.ID, UserID: "demo-student", Status: "running", CreatedAt: now()}
 	if err := a.store.exec("INSERT INTO judge_runs(id,task_id,user_id,status,payload) VALUES(?,?,?,?,?)", run.ID, run.TaskID, run.UserID, run.Status, encoded(run)); err != nil {
 		t.Fatal(err)
 	}

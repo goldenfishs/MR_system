@@ -189,7 +189,10 @@ func (a *App) judgeRequest(ctx context.Context, method, path string, body any, o
 	}
 	return nil
 }
-func (a *App) getJudgeConfig(w http.ResponseWriter, r *http.Request, _ User) error {
+func (a *App) getJudgeConfig(w http.ResponseWriter, r *http.Request, u User) error {
+	if err := a.requireLearningAccess(u); err != nil {
+		return err
+	}
 	if a.config.JudgeURL == "" {
 		respond(w, 200, map[string]any{"configured": false, "languages": []JudgeLanguage{}})
 		return nil
@@ -353,6 +356,17 @@ func (a *App) getJudgeRun(w http.ResponseWriter, r *http.Request, u User) error 
 	}
 	if run.UserID != u.ID && u.Role != "admin" {
 		return fail(403, "没有权限查看此判题记录")
+	}
+	task, err := a.store.task(run.TaskID)
+	if err != nil {
+		return err
+	}
+	visible, err := a.taskVisibleTo(task, u)
+	if err != nil {
+		return err
+	}
+	if !visible {
+		return fail(403, "没有权限查看此任务的判题记录")
 	}
 	respond(w, 200, map[string]any{"item": publicJudgeRun(run, u)})
 	return nil
