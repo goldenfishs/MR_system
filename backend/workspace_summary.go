@@ -16,13 +16,7 @@ func (a *App) workspaceSummary(w http.ResponseWriter, _ *http.Request, u User) e
 	if err != nil {
 		return err
 	}
-	q := "SELECT payload FROM team_applications"
-	args := []any{}
-	if u.Role != "admin" {
-		q += " WHERE user_id=?"
-		args = append(args, u.ID)
-	}
-	applications, err := readAll[TeamApplication](a.store, q, args...)
+	applications, err := a.scopedTeamApplications(u, "")
 	if err != nil {
 		return err
 	}
@@ -33,7 +27,7 @@ func (a *App) workspaceSummary(w http.ResponseWriter, _ *http.Request, u User) e
 		}
 	}
 	pipeline := []map[string]any{}
-	for _, stage := range []struct{ status, label string }{{"pending", "待审核"}, {"accepted", "已入队"}, {"rejected", "未通过"}} {
+	for _, stage := range []struct{ status, label string }{{"pending", "待审核"}, {"accepted", "报名通过"}, {"rejected", "未通过"}} {
 		count := 0
 		for _, application := range applications {
 			if application.Status == stage.status {
@@ -45,41 +39,37 @@ func (a *App) workspaceSummary(w http.ResponseWriter, _ *http.Request, u User) e
 			stats["pendingApplications"] = count
 		}
 	}
-	memberQuery := "SELECT COUNT(DISTINCT user_id) FROM team_memberships"
-	memberArgs := []any{}
-	if u.Role != "admin" {
-		memberQuery = "SELECT COUNT(*) FROM team_memberships WHERE user_id=?"
-		memberArgs = append(memberArgs, u.ID)
-	}
-	if err = scanCount(a.store, stats, "members", memberQuery, memberArgs...); err != nil {
+	memberships, err := a.scopedMemberships(u, "members")
+	if err != nil {
 		return err
 	}
+	seenMembers := map[string]bool{}
+	for _, m := range memberships {
+		seenMembers[m.UserID] = true
+	}
+	stats["members"] = len(seenMembers)
 	// Personal files always count only the current user's library, including for administrators.
 	if err = scanCount(a.store, stats, "files", "SELECT COUNT(*) FROM files WHERE owner_id=?", u.ID); err != nil {
 		return err
 	}
-	recordQuery := "SELECT COUNT(*) FROM records"
-	recordArgs := []any{}
-	if u.Role != "admin" {
-		recordQuery += " WHERE user_id=?"
-		recordArgs = append(recordArgs, u.ID)
-	}
-	if err = scanCount(a.store, stats, "records", recordQuery, recordArgs...); err != nil {
+	records, err := a.scopedRecords(u)
+	if err != nil {
 		return err
 	}
+	stats["records"] = len(records)
 	tasks, err := a.tasksFor(u)
 	if err != nil {
 		return err
 	}
-	visible := map[string]bool{}
+	visible := map[string]Task{}
 	for _, task := range tasks {
-		visible[task.ID] = true
+		visible[task.ID] = task
 		start, _ := time.Parse(time.RFC3339, task.StartsAt)
 		if !expired(task.DueAt) && (task.StartsAt == "" || !time.Now().Before(start)) {
 			stats["activeTasks"]++
 		}
 	}
-	if canManage(u) || u.Role == "student" {
+	{
 		subs, e := readAll[Submission](a.store, "SELECT payload FROM submissions ORDER BY version DESC")
 		if e != nil {
 			return e
@@ -91,7 +81,7 @@ func (a *App) workspaceSummary(w http.ResponseWriter, _ *http.Request, u User) e
 				continue
 			}
 			seen[key] = true
-			if visible[sub.TaskID] && (canManage(u) || sub.UserID == u.ID) && sub.Status == "pending" {
+			if task, ok := visible[sub.TaskID]; ok && (hasPermission(u, task.Direction, "tasks") || sub.UserID == u.ID) && sub.Status == "pending" {
 				stats["pendingReviews"]++
 			}
 		}

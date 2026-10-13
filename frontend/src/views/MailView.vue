@@ -55,7 +55,7 @@ async function load() {
       api.get<{ items: MailCampaign[]; configured: boolean }>(
         "/mail-campaigns",
       ),
-      api.get<{ items: UserWithProfile[] }>("/users"),
+      api.get<{ items: UserWithProfile[] }>("/users?permission=mail"),
     ]);
     campaigns.value = c.items;
     configured.value = c.configured;

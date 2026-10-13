@@ -207,12 +207,19 @@ func TestTaskAttachmentsMembershipAndDirections(t *testing.T) {
 	c.request("POST", "/api/tasks", form, 400)
 	c.login("student")
 	tasks := unmarshal[[]Task](t, c.request("GET", "/api/tasks", nil, 200)["items"])
+	found := false
 	for _, item := range tasks {
 		if item.ID == task.ID {
-			t.Fatal("nonmember saw team task")
+			found = true
+			if item.CanSubmit {
+				t.Fatal("nonmember can submit a team task")
+			}
 		}
 	}
-	c.request("GET", "/api/files/"+resource.ID, nil, 403)
+	if !found {
+		t.Fatal("admitted learner cannot browse group content")
+	}
+	c.request("GET", "/api/files/"+resource.ID, nil, 200)
 	c.request("POST", "/api/tasks/"+task.ID+"/submissions", map[string]string{"content": "link only"}, 403)
 	membership := Membership{TeamID: team.ID, UserID: "demo-student", Direction: "机械", JoinedAt: now()}
 	if err := a.store.exec("INSERT INTO team_memberships(team_id,user_id,direction,joined_at,payload) VALUES(?,?,?,?,?)", team.ID, membership.UserID, membership.Direction, membership.JoinedAt, encoded(membership)); err != nil {
@@ -353,7 +360,7 @@ func TestJudgeSandboxProjectionAndSubmissionAuthenticity(t *testing.T) {
 		t.Fatal("judge should remain separate from manual grading")
 	}
 	c.login("mentor")
-	c.request("GET", "/api/judge-runs/"+run.ID, nil, 403)
+	c.request("GET", "/api/judge-runs/"+run.ID, nil, 200)
 	c.login("admin")
 	adminRun := unmarshal[JudgeRun](t, c.request("GET", "/api/judge-runs/"+run.ID, nil, 200)["item"])
 	if adminRun.Results[1].Stdout != "hidden-secret-928" {

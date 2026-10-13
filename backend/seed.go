@@ -16,6 +16,7 @@ func createUser(s *Store, name, email, password, role, team, direction string) (
 	if roleID, ok := map[string]string{"admin@demo.local": "demo-admin", "mentor@demo.local": "demo-mentor", "interviewer@demo.local": "demo-interviewer", "student@demo.local": "demo-student"}[email]; ok {
 		u.ID = roleID
 	}
+	normalizeUser(&u)
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return u, err
@@ -50,6 +51,9 @@ func initialize(s *Store, demo bool) error {
 		return err
 	}
 	if err = migrateDefaultLogo(s); err != nil {
+		return err
+	}
+	if err = migrateRoles(s); err != nil {
 		return err
 	}
 	if demo {

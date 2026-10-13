@@ -81,18 +81,21 @@ type Team struct {
 	MyApplication *TeamApplication `json:"myApplication,omitempty"`
 }
 type TeamApplication struct {
-	ID           string   `json:"id"`
-	TeamID       string   `json:"teamId"`
-	UserID       string   `json:"userId"`
-	UserName     string   `json:"userName"`
-	Direction    string   `json:"direction"`
-	ResumeFileID string   `json:"resumeFileId"`
-	Motivation   string   `json:"motivation"`
-	Status       string   `json:"status"`
-	Feedback     string   `json:"feedback"`
-	CreatedAt    string   `json:"createdAt"`
-	UpdatedAt    string   `json:"updatedAt"`
-	Profile      *Profile `json:"profile,omitempty"`
+	TrainingStatus     string   `json:"trainingStatus,omitempty"`
+	TrainingStageTitle string   `json:"trainingStageTitle,omitempty"`
+	TrainingCycle      int      `json:"trainingCycle,omitempty"`
+	ID                 string   `json:"id"`
+	TeamID             string   `json:"teamId"`
+	UserID             string   `json:"userId"`
+	UserName           string   `json:"userName"`
+	Direction          string   `json:"direction"`
+	ResumeFileID       string   `json:"resumeFileId"`
+	Motivation         string   `json:"motivation"`
+	Status             string   `json:"status"`
+	Feedback           string   `json:"feedback"`
+	CreatedAt          string   `json:"createdAt"`
+	UpdatedAt          string   `json:"updatedAt"`
+	Profile            *Profile `json:"profile,omitempty"`
 }
 type Membership struct {
 	TeamID    string `json:"teamId"`
@@ -131,6 +134,7 @@ func (a *App) registerPlatformRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/users", a.wrap(true, a.listUsers))
 	m.HandleFunc("GET /api/records", a.wrap(true, a.listRecords))
 	m.HandleFunc("POST /api/records", a.wrap(true, a.createRecord))
+	a.registerTrainingRoutes(m)
 }
 func trimProfile(p *Profile) {
 	p.Name = strings.TrimSpace(p.Name)
@@ -393,6 +397,10 @@ func (a *App) canDownloadFile(u User, id string) (bool, error) {
 	if err != nil || allowed {
 		return allowed, err
 	}
+	allowed, err = a.contextualFileAccess(u, id)
+	if err != nil || allowed {
+		return allowed, err
+	}
 	return a.knowledgeFileAccess(u, id)
 }
 func validAssetName(name string) bool {
@@ -554,6 +562,9 @@ func (a *App) listTeams(w http.ResponseWriter, r *http.Request, u User) error {
 		}
 		ap, e := readOne[TeamApplication](a.store, "SELECT payload FROM team_applications WHERE team_id=? AND user_id=?", teams[i].ID, u.ID)
 		if e == nil {
+			if err = annotateTrainingApplication(a.store, &ap); err != nil {
+				return err
+			}
 			teams[i].MyApplication = &ap
 		} else if !errors.Is(e, sql.ErrNoRows) {
 			return e
@@ -648,8 +659,8 @@ func (a *App) updateTeam(w http.ResponseWriter, r *http.Request, u User) error {
 	return nil
 }
 func (a *App) applyToTeam(w http.ResponseWriter, r *http.Request, u User) error {
-	if u.Role != "student" {
-		return fail(403, "只有学员账号可提交报名")
+	if u.Role == "admin" {
+		return fail(403, "请以成员账号提交报名")
 	}
 	t, err := readOne[Team](a.store, "SELECT payload FROM teams WHERE id=?", r.PathValue("id"))
 	if err != nil {
@@ -710,40 +721,21 @@ func (a *App) applyToTeam(w http.ResponseWriter, r *http.Request, u User) error 
 	return nil
 }
 func (a *App) listTeamApplications(w http.ResponseWriter, r *http.Request, u User) error {
-	q := "SELECT payload FROM team_applications WHERE team_id=?"
-	args := []any{r.PathValue("id")}
-	if u.Role != "admin" {
-		q += " AND user_id=?"
-		args = append(args, u.ID)
-	}
-	apps, err := readAll[TeamApplication](a.store, q, args...)
+	apps, err := a.scopedTeamApplications(u, r.PathValue("id"))
 	if err != nil {
 		return err
-	}
-	if u.Role == "admin" {
-		for i := range apps {
-			user, e := a.store.user(apps[i].UserID)
-			if e != nil {
-				return e
-			}
-			p, e := a.store.profile(user)
-			if e != nil {
-				return e
-			}
-			apps[i].Profile = &p
-			apps[i].UserName = user.Name
-		}
 	}
 	respond(w, 200, map[string]any{"items": apps})
 	return nil
 }
 func (a *App) reviewTeamApplication(w http.ResponseWriter, r *http.Request, u User) error {
-	if u.Role != "admin" {
-		return fail(403, "只有管理员可审核报名")
+	if !hasAnyPermission(u, "recruitment") {
+		return fail(403, "没有报名审核权限")
 	}
 	var in struct {
-		Status   string `json:"status"`
-		Feedback string `json:"feedback"`
+		Status         string `json:"status"`
+		Feedback       string `json:"feedback"`
+		ReopenTraining bool   `json:"reopenTraining"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -761,12 +753,21 @@ func (a *App) reviewTeamApplication(w http.ResponseWriter, r *http.Request, u Us
 	if err != nil {
 		return err
 	}
+	if ap.UserID == u.ID && u.Role != "admin" {
+		return fail(403, "组管理员不能审核自己的报名")
+	}
+	if err = requirePermission(u, ap.Direction, "recruitment"); err != nil {
+		return err
+	}
 	ap.Status = in.Status
 	ap.Feedback = strings.TrimSpace(in.Feedback)
 	ap.UpdatedAt = now()
 	if in.Status == "accepted" {
+		if err = admitTraining(s, u, ap.UserID, ap.TeamID, ap.Direction, in.ReopenTraining); err != nil {
+			return err
+		}
 		member := Membership{TeamID: ap.TeamID, UserID: ap.UserID, Direction: ap.Direction, JoinedAt: now()}
-		if err = s.exec("INSERT INTO team_memberships(team_id,user_id,direction,joined_at,payload) VALUES(?,?,?,?,?) ON CONFLICT(team_id,user_id) DO NOTHING", member.TeamID, member.UserID, member.Direction, member.JoinedAt, encoded(member)); err != nil {
+		if err = s.exec("INSERT INTO team_memberships(team_id,user_id,direction,joined_at,payload) VALUES(?,?,?,?,?) ON CONFLICT(team_id,user_id) DO UPDATE SET direction=excluded.direction,payload=excluded.payload", member.TeamID, member.UserID, member.Direction, member.JoinedAt, encoded(member)); err != nil {
 			return err
 		}
 	} else {
@@ -780,17 +781,14 @@ func (a *App) reviewTeamApplication(w http.ResponseWriter, r *http.Request, u Us
 	if err = tx.Commit(); err != nil {
 		return err
 	}
+	if err = annotateTrainingApplication(a.store, &ap); err != nil {
+		return err
+	}
 	respond(w, 200, map[string]any{"item": ap})
 	return nil
 }
 func (a *App) listMemberships(w http.ResponseWriter, r *http.Request, u User) error {
-	q := "SELECT payload FROM team_memberships"
-	var args []any
-	if u.Role != "admin" {
-		q += " WHERE user_id=?"
-		args = append(args, u.ID)
-	}
-	items, err := readAll[Membership](a.store, q, args...)
+	items, err := a.scopedMemberships(u, "members")
 	if err != nil {
 		return err
 	}
@@ -798,8 +796,15 @@ func (a *App) listMemberships(w http.ResponseWriter, r *http.Request, u User) er
 	return nil
 }
 func (a *App) listUsers(w http.ResponseWriter, r *http.Request, u User) error {
-	if u.Role != "admin" {
-		return fail(403, "只有管理员可查询用户资料")
+	permission := r.URL.Query().Get("permission")
+	if permission == "" {
+		permission = "members"
+	}
+	if !slices.Contains([]string{"members", "recruitment", "records", "mail"}, permission) {
+		return fail(400, "无效的用户列表用途")
+	}
+	if !hasAnyPermission(u, permission) {
+		return fail(403, "没有该模块的人员查询权限")
 	}
 	users, err := readAll[User](a.store, "SELECT payload FROM users ORDER BY email")
 	if err != nil {
@@ -811,9 +816,36 @@ func (a *App) listUsers(w http.ResponseWriter, r *http.Request, u User) error {
 	}
 	items := []userProfile{}
 	for _, user := range users {
+		allowed, e := a.recipientAllowed(u, user.ID, permission)
+		if e != nil {
+			return e
+		}
+		if !allowed {
+			continue
+		}
 		p, e := a.store.profile(user)
 		if e != nil {
 			return e
+		}
+		// Recipient pickers only need contact and identity fields. Full personal
+		// details require a separate members or recruitment grant for this user.
+		if u.Role != "admin" && u.ID != user.ID && (permission == "mail" || permission == "records") {
+			memberAccess, e := a.recipientAllowed(u, user.ID, "members")
+			if e != nil {
+				return e
+			}
+			recruitmentAccess, e := a.recipientAllowed(u, user.ID, "recruitment")
+			if e != nil {
+				return e
+			}
+			if !memberAccess && !recruitmentAccess {
+				studentNumber := ""
+				if permission == "records" {
+					studentNumber = p.StudentNumber
+				}
+				p = Profile{UserID: user.ID, Name: user.Name, StudentNumber: studentNumber}
+				user.AssessmentPassedAt, user.AssessmentConfirmedBy, user.AssessmentNote = "", "", ""
+			}
 		}
 		items = append(items, userProfile{User: user, Profile: p})
 	}
@@ -821,13 +853,7 @@ func (a *App) listUsers(w http.ResponseWriter, r *http.Request, u User) error {
 	return nil
 }
 func (a *App) listRecords(w http.ResponseWriter, r *http.Request, u User) error {
-	q := "SELECT payload FROM records"
-	var args []any
-	if u.Role != "admin" {
-		q += " WHERE user_id=?"
-		args = append(args, u.ID)
-	}
-	items, err := readAll[Record](a.store, q+" ORDER BY id DESC", args...)
+	items, err := a.scopedRecords(u)
 	if err != nil {
 		return err
 	}
@@ -835,8 +861,8 @@ func (a *App) listRecords(w http.ResponseWriter, r *http.Request, u User) error 
 	return nil
 }
 func (a *App) createRecord(w http.ResponseWriter, r *http.Request, u User) error {
-	if u.Role != "admin" {
-		return fail(403, "只有管理员可发放个人档案")
+	if !hasAnyPermission(u, "records") {
+		return fail(403, "没有荣誉发放权限")
 	}
 	var in struct {
 		UserID      string   `json:"userId"`
@@ -855,6 +881,13 @@ func (a *App) createRecord(w http.ResponseWriter, r *http.Request, u User) error
 	recipient, err := a.store.user(in.UserID)
 	if err != nil {
 		return err
+	}
+	allowed, err := a.recipientAllowed(u, recipient.ID, "records")
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return fail(403, "只能向获授权组的成员发放荣誉")
 	}
 	if err = requireOwnedFiles(a.store, u, in.FileIDs); err != nil {
 		return err

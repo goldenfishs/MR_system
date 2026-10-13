@@ -221,7 +221,8 @@ func TestPlatformMigrationPreservesLegacyAccounts(t *testing.T) {
 	}
 	defer s.db.Close()
 	actual, err := s.user(legacy.ID)
-	if err != nil || actual != legacy {
+	normalizeUser(&legacy)
+	if err != nil || encoded(actual) != encoded(legacy) {
 		t.Fatal("platform migration changed legacy identity")
 	}
 	p, err := s.profile(actual)
@@ -229,7 +230,7 @@ func TestPlatformMigrationPreservesLegacyAccounts(t *testing.T) {
 		t.Fatal("legacy profile should require explicit completion")
 	}
 	var version int
-	if err = s.row("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil || version != 4 {
+	if err = s.row("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil || version != 6 {
 		t.Fatal("platform migration missing")
 	}
 }

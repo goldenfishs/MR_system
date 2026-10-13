@@ -1,14 +1,19 @@
 package main
 
 type User struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	Email           string `json:"email"`
-	Role            string `json:"role"`
-	Team            string `json:"team"`
-	Direction       string `json:"direction"`
-	JoinedAt        string `json:"joinedAt"`
-	EmailVerifiedAt string `json:"emailVerifiedAt,omitempty"`
+	ID                    string       `json:"id"`
+	Name                  string       `json:"name"`
+	Email                 string       `json:"email"`
+	Role                  string       `json:"role"`
+	MemberType            string       `json:"memberType"`
+	AssessmentPassedAt    string       `json:"assessmentPassedAt,omitempty"`
+	AssessmentConfirmedBy string       `json:"assessmentConfirmedBy,omitempty"`
+	AssessmentNote        string       `json:"assessmentNote,omitempty"`
+	GroupGrants           []GroupGrant `json:"groupGrants"`
+	Team                  string       `json:"team"`
+	Direction             string       `json:"direction"`
+	JoinedAt              string       `json:"joinedAt"`
+	EmailVerifiedAt       string       `json:"emailVerifiedAt,omitempty"`
 }
 type Applicant struct {
 	ID              string   `json:"id"`
@@ -34,6 +39,7 @@ type Applicant struct {
 	UpdatedAt       string   `json:"updatedAt"`
 }
 type Task struct {
+	CanSubmit       bool         `json:"canSubmit"`
 	Category        string       `json:"category"`
 	Tags            []string     `json:"tags"`
 	MyAccepted      bool         `json:"myAccepted"`

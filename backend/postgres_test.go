@@ -121,6 +121,15 @@ func TestPostgreSQLPersistence(t *testing.T) {
 	// Exercise v3 relational writes and file metadata with real PostgreSQL before
 	// reopening: a published team, admission, file-backed work and award grants.
 	client.login("admin")
+	progress := unmarshal[[]TrainingProgress](t, client.request("GET", "/api/training-progress?direction="+url.QueryEscape("电控"), nil, 200)["items"])
+	for _, p := range progress {
+		if p.UserID != registered.ID {
+			continue
+		}
+		for _, stage := range p.Stages {
+			client.request("POST", "/api/training-progress/decisions", map[string]any{"progressIds": []string{p.ID}, "stageId": stage.ID, "status": "passed", "note": "PostgreSQL 阶段持久化验证"}, 200)
+		}
+	}
 	team := unmarshal[Team](t, client.request("POST", "/api/teams", map[string]any{
 		"name": "PostgreSQL 校赛队", "competition": "ROBOCON", "directions": []string{"机械"},
 	}, 201)["item"])
@@ -178,7 +187,7 @@ func TestPostgreSQLPersistence(t *testing.T) {
 	}
 	client.request("POST", "/api/auth/login", map[string]string{"email": email, "password": password}, 200)
 	me := unmarshal[User](t, client.request("GET", "/api/auth/me", nil, 200)["user"])
-	if me.ID != registered.ID || me.Team != "RoboMaster" || me.Direction != "电控" || me.EmailVerifiedAt != registered.EmailVerifiedAt {
+	if me.ID != registered.ID || me.Team != "RoboMaster" || me.Direction != "电控" || me.MemberType != "reserve" || me.EmailVerifiedAt != registered.EmailVerifiedAt {
 		t.Fatal("admission transaction did not persist member identity and scope")
 	}
 	own := unmarshal[[]Applicant](t, client.request("GET", "/api/applicants", nil, 200)["items"])

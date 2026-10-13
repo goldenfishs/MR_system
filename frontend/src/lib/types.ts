@@ -1,5 +1,8 @@
 import type { JudgeConfig } from "./platform";
-export type Role = "admin" | "mentor" | "interviewer" | "student";
+export type Role = "admin" | "group_admin" | "member" | "reserve" | "freshman";
+export type MemberType = "formal" | "reserve" | "freshman";
+export type Permission = "recruitment" | "assessment" | "tasks" | "knowledge" | "discussions" | "members" | "records" | "mail";
+export interface GroupGrant { direction: Direction; permissions: Permission[]; }
 export type Team = "RoboMaster" | "RoboCon" | "ROBOCON";
 
 export interface DiscussionReply {
@@ -30,6 +33,10 @@ export interface User {
   name: string;
   email: string;
   role: Role;
+  memberType?: MemberType;
+  assessmentPassedAt?: string;
+  assessmentConfirmedBy?: string;
+  groupGrants?: GroupGrant[];
   team: string;
   direction: string;
   joinedAt: string;
@@ -59,6 +66,7 @@ export interface Applicant {
   updatedAt: string;
 }
 export interface Task {
+  canSubmit?: boolean;
   category?: "assignment" | "exam" | "problem";
   tags?: string[];
   acceptedCount?: number;

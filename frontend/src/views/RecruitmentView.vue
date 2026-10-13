@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useDisplay } from "vuetify";
 import { api, ApiError } from "../lib/api";
+import { hasPermission } from "../lib/permissions";
 import { auth } from "../lib/auth";
 import type { Applicant, ApplicantStatus, User, Settings } from "../lib/types";
 
@@ -92,14 +93,9 @@ function clearFilters() {
 function clearQueryFilter(key: "status" | "team") {
   router.replace({ query: { ...route.query, [key]: undefined } });
 }
-const isStudent = computed(() => auth.user?.role === "student");
-const isAdmin = computed(() => auth.user?.role === "admin");
-const canReview = computed(
-  () =>
-    isAdmin.value ||
-    (auth.user?.role === "interviewer" &&
-      selected.value?.interviewerId === auth.user?.id),
-);
+const isStudent = computed(() => !hasPermission("recruitment"));
+const isAdmin = computed(() => hasPermission("recruitment"));
+const canReview = computed(() => Boolean(selected.value && hasPermission("recruitment", selected.value.direction)));
 const own = computed(() => items.value.find((a) => a.userId === auth.user?.id));
 const deadlinePassed = computed(() =>
   Boolean(
@@ -186,7 +182,7 @@ function avatarColor(applicant: Applicant) {
   return avatarColors[Math.max(0, directions.indexOf(applicant.direction))];
 }
 const interviewers = computed(() =>
-  members.value.filter((u) => ["admin", "interviewer"].includes(u.role)),
+  members.value.filter((u) => hasPermission("recruitment", selected.value?.direction || undefined, u)),
 );
 const draftKey = () => `robotlab:application:${auth.user?.id}`;
 const statusOf = (value: string) =>
@@ -226,7 +222,7 @@ async function load() {
     items.value = requests[0].items;
     settings.value = requests[1].settings;
     if (isAdmin.value)
-      members.value = (await api.get<{ items: User[] }>("/members")).items;
+      members.value = (await api.get<{ items: User[] }>("/users?permission=recruitment")).items;
   } catch (e) {
     error.value = messageOf(e);
   } finally {
@@ -348,7 +344,7 @@ async function updateApplicant(
   patch: Record<string, unknown>,
   success: string,
 ) {
-  if (!selected.value) return;
+  if (!selected.value || !hasPermission("recruitment", selected.value.direction)) return;
   saving.value = true;
   try {
     const { item } = await api.patch<{ item: Applicant }>(
@@ -610,7 +606,7 @@ onMounted(load);
             </h2>
             <p>
               {{
-                auth.user?.role === "interviewer"
+                auth.user?.role === "group_admin"
                   ? "仅显示分配给你的候选人"
                   : "点击候选人查看报名资料与面试评价"
               }}
@@ -1060,7 +1056,7 @@ onMounted(load);
                 <h3>面试安排</h3>
                 <template
                   v-if="
-                    isAdmin &&
+                    canReview &&
                     !['accepted', 'rejected'].includes(selected.status)
                   "
                   ><v-text-field
@@ -1125,7 +1121,7 @@ onMounted(load);
                   >内部评价仅对有权限的工作人员可见
                 </p>
               </div>
-              <div v-if="isAdmin" class="decision-actions">
+              <div v-if="canReview" class="decision-actions">
                 <v-btn
                   v-if="selected.status === 'submitted'"
                   variant="outlined"

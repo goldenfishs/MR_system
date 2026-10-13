@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useDisplay } from "vuetify";
 import { api } from "../lib/api";
+import { hasPermission, isParticipant, groupLabel } from "../lib/permissions";
 import { auth } from "../lib/auth";
 import { canAccessLearning, learningAccess, refreshLearningAccess } from "../lib/learning-access";
 import {
@@ -31,7 +32,8 @@ const teams = ref<TeamSpace[]>([]),
   editor = ref(false),
   editing = ref("");
 const isAdmin = computed(() => auth.user?.role === "admin");
-const canApply = computed(() => auth.user?.role === "student");
+const canApply = computed(() => isParticipant());
+const canReviewApplications = computed(() => hasPermission("recruitment"));
 const form = reactive({
   name: "",
   description: "",
@@ -48,6 +50,7 @@ const application = reactive({
   motivation: "",
 });
 const feedback = ref<Record<string, string>>({});
+const reopening = ref<TeamApplication | null>(null);
 const filtered = computed(() =>
   teams.value.filter((t) =>
     `${t.name} ${t.description} ${competitionsOf(t).join(" ")}`
@@ -55,17 +58,18 @@ const filtered = computed(() =>
       .includes(search.value.toLowerCase()),
   ),
 );
-const statusLabel = (status?: string) =>
+const trainingEliminated = computed(() => teams.value.some(team => team.myApplication?.trainingStatus === "eliminated"));
+const statusLabel = (item?: TeamApplication | null) => !item ? "未报名" : item.trainingStatus === "eliminated" ? "本轮已淘汰" :
   ({
     pending: "待审核",
     submitted: "待审核",
-    accepted: "已加入",
+    accepted: item?.trainingStatus === "completed" ? "考核已通过" : "已录取",
     rejected: "未通过",
-  })[status || ""] || "未报名";
-const statusColor = (status?: string) =>
-  status === "accepted"
+  })[item.status];
+const statusColor = (item?: TeamApplication | null) =>
+  item?.trainingStatus === "eliminated" ? "error" : item?.status === "accepted"
     ? "success"
-    : status === "rejected"
+    : item?.status === "rejected"
       ? "error"
       : "warning";
 function closed(t: TeamSpace) {
@@ -162,7 +166,7 @@ async function loadApplications(teamId: string) {
       `/teams/${teamId}/applications`,
     );
     if (selected.value?.id !== teamId) return;
-    applications.value = items;
+    applications.value = items.filter(item => hasPermission("recruitment", item.direction));
     for (const item of items) feedback.value[item.id] = item.feedback || "";
   } catch (e) {
     detailError.value = (e as Error).message;
@@ -199,19 +203,26 @@ async function apply() {
     saving.value = false;
   }
 }
-async function review(item: TeamApplication, status: "accepted" | "rejected") {
+const canReopen = (item: TeamApplication) => item.trainingStatus === "eliminated" && hasPermission("assessment", item.direction) && hasPermission("recruitment", item.direction);
+async function review(item: TeamApplication, status: "accepted" | "rejected", reopenTraining = false) {
+  if (!hasPermission("recruitment", item.direction)) return;
+  if (status === "accepted" && item.trainingStatus === "eliminated" && !reopenTraining) {
+    if (canReopen(item)) reopening.value = item;
+    return;
+  }
   saving.value = true;
   detailError.value = "";
   try {
     await api.patch(`/team-applications/${item.id}`, {
       status,
       feedback: feedback.value[item.id] || "",
+      ...(reopenTraining ? { reopenTraining: true } : {}),
     });
-    await loadApplications(item.teamId);
+    reopening.value = null;
     await load();
     notice.value =
       status === "accepted"
-        ? "已通过审核，该用户已加入团队。"
+        ? reopenTraining ? "已重新录取，以新生身份开启新一轮阶段考核；历史记录已保留。" : "已通过审核，以新生身份入队并开始阶段考核。"
         : "审核结果已保存。";
   } catch (e) {
     detailError.value = (e as Error).message;
@@ -244,8 +255,8 @@ onMounted(load);
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4"
       >{{ error }}<v-btn variant="text" @click="load">重试</v-btn></v-alert
     >
-    <v-alert v-if="canApply && !canAccessLearning" :type="learningAccess.error ? 'warning' : 'info'" variant="tonal" class="mb-4">
-      {{ learningAccess.error || "报名审核通过后，侧栏将显示技术分组，并开放知识库、作业和考试。" }}
+    <v-alert v-if="canApply && !canAccessLearning" :type="learningAccess.error || trainingEliminated ? 'warning' : 'info'" variant="tonal" class="mb-4">
+      {{ learningAccess.error || (trainingEliminated ? "本轮新生考核已淘汰。考核历史仍可查看，重新录取后将开启新的培养周期。" : "报名审核通过后，侧栏将显示技术分组，并开放知识库、作业和考试。") }}
       <v-btn variant="text" :loading="loading" @click="load">刷新审核状态</v-btn>
     </v-alert>
     <v-alert
@@ -284,7 +295,7 @@ onMounted(load);
             :key="d"
             size="x-small"
             variant="outlined"
-            >{{ d }}组</v-chip
+            >{{ groupLabel(d) }}</v-chip
           >
         </div>
         <div class="team-meta">
@@ -296,16 +307,16 @@ onMounted(load);
         <div class="card-footer">
           <v-chip
             v-if="team.myApplication"
-            :color="statusColor(team.myApplication.status)"
+            :color="statusColor(team.myApplication)"
             size="small"
-            >{{ statusLabel(team.myApplication.status) }}</v-chip
+            >{{ statusLabel(team.myApplication) }}</v-chip
           ><v-btn v-if="isAdmin" variant="text" @click="edit(team)">编辑</v-btn
           ><v-spacer /><v-btn
             color="primary"
             variant="text"
             @click="open(team)"
             >{{
-              isAdmin
+              canReviewApplications
                 ? "报名审核"
                 : team.myApplication
                   ? "查看报名"
@@ -330,7 +341,7 @@ onMounted(load);
       ><v-card v-if="selected"
         ><v-card-title class="dialog-head"
           ><span
-            >{{ selected.name }} · {{ isAdmin ? "报名审核" : "团队报名" }}</span
+            >{{ selected.name }} · {{ canReviewApplications ? "报名审核" : "团队报名" }}</span
           ><v-btn
             icon="mdi-close"
             variant="text"
@@ -342,17 +353,17 @@ onMounted(load);
           <v-alert v-if="detailError" type="error" variant="tonal" class="mb-4"
             >{{ detailError
             }}<v-btn
-              v-if="isAdmin"
+              v-if="canReviewApplications"
               variant="text"
               @click="loadApplications(selected.id)"
               >重试</v-btn
             ></v-alert
           ><v-progress-linear v-if="detailLoading" indeterminate />
-          <template v-else-if="isAdmin"
+          <template v-else-if="canReviewApplications"
             ><p class="mb-4 text-medium-emphasis">
               共
               {{ applications.length }}
-              份报名；通过审核即加入团队并获得对应任务的提交权限。
+              份报名；录取后以新生身份参加阶段考核，开放各组学习内容。每阶段可通过或淘汰，最终通过后再晋升。
             </p>
             <v-card
               v-for="item in applications"
@@ -370,16 +381,20 @@ onMounted(load);
                 <div>
                   <strong>{{ item.userName }}</strong>
                   <p class="text-caption">
-                    {{ item.direction }}组 · {{ dateTime(item.createdAt) }}
+                    {{ groupLabel(item.direction) }} · {{ dateTime(item.createdAt) }}
                   </p>
                 </div>
                 <v-chip
                   class="ml-auto"
-                  :color="statusColor(item.status)"
+                  :color="statusColor(item)"
                   size="small"
-                  >{{ statusLabel(item.status) }}</v-chip
+                  >{{ statusLabel(item) }}</v-chip
                 >
               </div>
+              <p v-if="item.trainingStatus" class="text-caption text-medium-emphasis mt-3">
+                <template v-if="item.trainingCycle">第 {{ item.trainingCycle }} 轮考核 · </template>{{ item.trainingStageTitle || '阶段考核' }}{{ item.trainingStatus === 'eliminated' ? ' · 学习与提交权限已关闭，重新录取将开启新周期。' : '' }}
+                <v-btn v-if="hasPermission('assessment', item.direction)" to="/training" size="small" variant="text" color="primary">阶段考核</v-btn>
+              </p>
               <dl v-if="item.profile" class="profile-detail">
                 <div>
                   <dt>性别</dt>
@@ -434,10 +449,10 @@ onMounted(load);
                   >未通过</v-btn
                 ><v-btn
                   color="primary"
-                  :disabled="saving || item.status === 'accepted'"
+                  :disabled="saving || (item.status === 'accepted' && !canReopen(item))"
                   @click="review(item, 'accepted')"
                   >{{
-                    item.status === "accepted" ? "已加入团队" : "通过并加入团队"
+                    canReopen(item) ? "重新录取" : item.status === "accepted" ? statusLabel(item) : "通过并加入团队"
                   }}</v-btn
                 >
               </div></v-card
@@ -453,13 +468,15 @@ onMounted(load);
             ><v-alert
               v-if="selected.myApplication"
               :type="
-                selected.myApplication.status === 'accepted'
+                selected.myApplication.trainingStatus === 'eliminated' ? 'warning' : selected.myApplication.status === 'accepted'
                   ? 'success'
                   : 'info'
               "
               variant="tonal"
               class="mb-5"
-              >报名状态：{{ statusLabel(selected.myApplication.status) }}
+              >报名状态：{{ statusLabel(selected.myApplication) }}
+              <p v-if="selected.myApplication.trainingStatus === 'eliminated'" class="mt-2">本轮阶段考核已淘汰，学习与提交权限已关闭。历史记录仍保留；重新录取需要管理员或获授权组管理员确认。</p>
+              <p v-else-if="selected.myApplication.trainingStatus === 'training'" class="mt-2">当前考核阶段：{{ selected.myApplication.trainingStageTitle }}。完成最终考核后确认梯队或正式队员身份。</p>
               <p v-if="selected.myApplication.feedback" class="mt-2 pre-wrap">
                 审核意见：{{ selected.myApplication.feedback }}
               </p></v-alert
@@ -511,7 +528,7 @@ onMounted(load);
             >
             <div v-else-if="selected.myApplication">
               <p class="mb-3">
-                报名方向：{{ selected.myApplication.direction }}组
+                报名方向：{{ groupLabel(selected.myApplication.direction) }}
               </p>
               <v-btn
                 :href="downloadUrl(selected.myApplication.resumeFileId)"
@@ -520,17 +537,24 @@ onMounted(load);
                 prepend-icon="mdi-file-pdf-box"
                 >查看已提交简历</v-btn
               ><v-btn
-                v-if="selected.myApplication.status === 'accepted'"
+                v-if="selected.myApplication.status === 'accepted' && canAccessLearning && selected.myApplication.trainingStatus !== 'eliminated'"
                 to="/learning"
                 color="primary"
                 class="ml-3"
                 >进入学习任务</v-btn
-              >
+              ><v-btn v-if="selected.myApplication.trainingStatus" to="/training" variant="text" color="primary" class="ml-3">查看考核记录</v-btn>
             </div></template
           ></v-card-text
         ></v-card
       ></v-dialog
     >
+    <v-dialog :model-value="!!reopening" max-width="500" :persistent="saving" @update:model-value="!$event && (reopening = null)">
+      <v-card v-if="reopening">
+        <v-card-title>确认重新录取</v-card-title>
+        <v-card-text>「{{ reopening.userName }}」上一轮阶段考核已淘汰。重新录取后将以新生身份从第一阶段开始，恢复各组学习权限，并保留上一轮所有考核记录。</v-card-text>
+        <v-card-actions><v-spacer /><v-btn :disabled="saving" @click="reopening = null">取消</v-btn><v-btn color="primary" :loading="saving" @click="review(reopening, 'accepted', true)">确认重新录取</v-btn></v-card-actions>
+      </v-card>
+    </v-dialog>
     <v-dialog
       v-model="editor"
       max-width="720"

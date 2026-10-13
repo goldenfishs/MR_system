@@ -8,6 +8,12 @@ export class ApiError extends Error {
     this.name = "ApiError";
   }
 }
+let sessionGeneration = 0;
+let sessionActive = false;
+export function setApiSession(active: boolean) {
+  sessionGeneration++;
+  sessionActive = active;
+}
 function retryAfterSeconds(response: Response, data?: any): number | undefined {
   const header = response.headers.get("Retry-After");
   if (header) {
@@ -27,11 +33,13 @@ async function request<T>(
   body?: unknown,
   signal?: AbortSignal,
 ): Promise<T> {
+  const requestSession = sessionGeneration;
   let response: Response;
   try {
     response = await fetch(`/api${path}`, {
       method,
       credentials: "same-origin",
+      cache: "no-store",
       headers:
         body === undefined || body instanceof FormData
           ? {}
@@ -66,7 +74,7 @@ async function request<T>(
     );
   }
   if (!response.ok) {
-    if (response.status === 401 && !path.startsWith("/auth/"))
+    if (response.status === 401 && !path.startsWith("/auth/") && sessionActive && requestSession === sessionGeneration)
       window.dispatchEvent(new Event("session-expired"));
     throw new ApiError(
       data.error || "操作失败，请稍后重试。",

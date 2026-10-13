@@ -120,7 +120,7 @@ func TestEmailVerificationRegistrationAndReplay(t *testing.T) {
 	}
 	c.request("POST", "/api/auth/register", registrationBody("different@example.com", code), 400)
 	user := unmarshal[User](t, c.request("POST", "/api/auth/register", registrationBody("VERIFIED@example.com", code), 201)["user"])
-	if user.EmailVerifiedAt == "" || user.Role != "student" || user.Email != "verified@example.com" {
+	if user.EmailVerifiedAt == "" || user.Role != "freshman" || user.Email != "verified@example.com" {
 		t.Fatal("registration did not verify the bound student identity")
 	}
 	if _, err := time.Parse(time.RFC3339, user.EmailVerifiedAt); err != nil {

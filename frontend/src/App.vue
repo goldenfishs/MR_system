@@ -3,16 +3,18 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useDisplay } from "vuetify";
 import { auth, roleNames, signOut } from "./lib/auth";
-import { canAccessLearning, refreshLearningAccess } from "./lib/learning-access";
+import { canAccessLearning, canOpenLearning, canAccessDirection, canAccessLearningModule, learningDirections, refreshLearningAccess } from "./lib/learning-access";
 import { api } from "./lib/api";
-import type { Settings } from "./lib/types";
+import { groupLabel, hasPermission } from "./lib/permissions";
+import type { Permission, Settings } from "./lib/types";
 const route = useRoute(),
   router = useRouter();
 const { mobile } = useDisplay();
 const drawer = ref(!mobile.value),
   settings = ref<Settings | null>(null),
   logoutError = ref(""),
-  loggingOut = ref(false);
+  loggingOut = ref(false),
+  redirectingToLogin = ref(false);
 const navigation = computed(() => [
   {
     path: "/",
@@ -25,7 +27,8 @@ const navigation = computed(() => [
     title: "团队报名",
     icon: "mdi-account-multiple-plus-outline",
   },
-  ...(canAccessLearning.value ? [{
+  { path: "/training", title: "新生考核", icon: "mdi-account-school-outline" },
+  ...(canOpenLearning.value ? [{
     path: "/learning",
     title: "学习与任务",
     icon: "mdi-book-open-page-variant-outline",
@@ -37,10 +40,10 @@ const navigation = computed(() => [
     icon: "mdi-certificate-outline",
   },
   { path: "/profile", title: "个人中心", icon: "mdi-account-circle-outline" },
-  ...(auth.user?.role === "admin"
+  ...(hasPermission("mail")
     ? [{ path: "/mail", title: "批量邮件", icon: "mdi-email-multiple-outline" }]
     : []),
-  ...(auth.user?.role !== "student"
+  ...(hasPermission("members")
     ? [
         {
           path: "/members",
@@ -49,7 +52,7 @@ const navigation = computed(() => [
         },
       ]
     : []),
-  ...(auth.user?.role !== "student"
+  ...(hasPermission("recruitment")
     ? [
         {
           path: "/recruitment",
@@ -85,24 +88,42 @@ async function logout() {
   logoutError.value = "";
   try {
     await signOut();
-    await router.push("/login");
+    await router.replace("/login");
   } catch (e) {
     logoutError.value = (e as Error).message;
   } finally {
     loggingOut.value = false;
   }
 }
-function expired() {
+async function expired() {
+  if (!auth.user || auth.signingOut || loggingOut.value || redirectingToLogin.value || route.path === "/login") return;
+  redirectingToLogin.value = true;
+  const redirect = route.fullPath;
   auth.user = null;
-  router.push({
-    path: "/login",
-    query: { expired: "1", redirect: route.fullPath },
-  });
+  try {
+    await router.replace({ path: "/login", query: { expired: "1", redirect } });
+  } finally {
+    redirectingToLogin.value = false;
+  }
 }
 async function refreshAccess() {
   await refreshLearningAccess();
-  if (auth.user && !canAccessLearning.value && ["/learning", "/assessment"].includes(route.path))
+  if (!auth.user || auth.signingOut || loggingOut.value || redirectingToLogin.value) return;
+  if (!canOpenLearning.value && ["/learning", "/assessment"].includes(route.path)) {
     await router.replace({ path: "/teams", query: { admissionRequired: "1" } });
+  } else if (route.path === "/assessment" && !canAccessLearning.value && !hasPermission("tasks")) {
+    await router.replace("/learning");
+  } else if (route.path === "/learning") {
+    const direction = typeof route.query.direction === "string" ? route.query.direction : undefined;
+    const section = route.query.section || (route.query.kind ? "tasks" : "home");
+    if (direction && !canAccessDirection(direction)) {
+      await router.replace({ path: "/learning", query: { ...route.query, direction: learningDirections.value[0]?.value || "" } });
+    } else if (section === "knowledge" && !canAccessLearningModule("knowledge", direction) || ["tasks", "exam", "bank"].includes(String(section)) && !canAccessLearningModule("tasks", direction)) {
+      const query = { ...route.query };
+      delete query.section; delete query.kind; delete query.task;
+      await router.replace({ path: "/learning", query });
+    }
+  }
 }
 function refreshVisibleAccess() {
   if (document.visibilityState === "visible") void refreshAccess();
@@ -120,15 +141,16 @@ onUnmounted(() => {
   document.removeEventListener("visibilitychange", refreshVisibleAccess);
 });
 
-const directions = [
-  { title: "机械", icon: "mdi-cog-outline" },
-  { title: "电控", icon: "mdi-chip" },
-  { title: "视觉算法", icon: "mdi-eye-outline" },
-  { title: "硬件", icon: "mdi-memory" },
-  { title: "运营", icon: "mdi-bullhorn-outline" },
-];
+const accessIdentity = computed(() => auth.user ? JSON.stringify([auth.user.id, auth.user.role, auth.user.memberType, auth.user.direction, auth.user.groupGrants]) : "signed-out");
+watch(accessIdentity, async () => {
+  if (loggingOut.value || auth.signingOut || redirectingToLogin.value) return;
+  if (!auth.user && route.path !== "/login") await router.replace({ path: "/login", query: { redirect: route.fullPath } });
+  else if (route.meta.admin && auth.user?.role !== "admin" || route.meta.permission && !hasPermission(route.meta.permission as Permission)) await router.replace("/");
+  else if (auth.user) await refreshAccess();
+});
+const directions = learningDirections;
 const sectionTabs = computed(() => {
-  if (route.path === "/recruitment" && auth.user?.role !== "student")
+  if (route.path === "/recruitment" && hasPermission("recruitment"))
     return [
       { value: "all", title: "全部报名" },
       { value: "submitted", title: "待筛选" },
@@ -137,16 +159,17 @@ const sectionTabs = computed(() => {
       { value: "accepted", title: "已录取" },
       { value: "rejected", title: "未录取" },
     ];
-  if (route.path === "/learning")
+  if (route.path === "/learning") {
+    const direction = typeof route.query.direction === "string" ? route.query.direction : undefined;
     return [
       { value: "home", title: "首页" },
-      { value: "knowledge", title: "知识库" },
-      { value: "tasks", title: "作业" },
-      { value: "exam", title: "考试" },
-      ...(["电控", "视觉算法", "硬件"].includes(String(route.query.direction))
+      ...(canAccessLearningModule("knowledge", direction) ? [{ value: "knowledge", title: "知识库" }] : []),
+      ...(canAccessLearningModule("tasks", direction) ? [{ value: "tasks", title: "作业" }, { value: "exam", title: "考试" }] : []),
+      ...(canAccessLearningModule("tasks", direction) && ["电控", "视觉算法", "硬件"].includes(String(route.query.direction))
         ? [{ value: "bank", title: "题库" }]
         : []),
     ];
+  }
   return [];
 });
 const tabKey = computed(() =>
@@ -211,7 +234,7 @@ function directionLink(direction: string) {
             rounded="0"
           />
         </v-list>
-        <template v-if="canAccessLearning">
+        <template v-if="canOpenLearning">
         <v-divider class="mx-4 my-2" />
         <div class="nav-caption">技术分组</div>
         <v-list
@@ -222,20 +245,20 @@ function directionLink(direction: string) {
         >
           <v-list-item
             v-for="item in directions"
-            :key="item.title"
-            :to="directionLink(item.title)"
+            :key="item.value"
+            :to="directionLink(item.value)"
             :active="
-              route.query.direction === item.title &&
+              route.query.direction === item.value &&
               ['/learning', '/recruitment'].includes(route.path)
             "
             :prepend-icon="item.icon"
-            :title="item.title + '组'"
+            :title="item.title"
             color="primary"
             rounded="0"
           >
             <template #append
               ><v-icon
-                v-if="auth.user.direction === item.title"
+                v-if="auth.user.direction === item.value"
                 color="amber-darken-1"
                 size="18"
                 title="我的方向"
@@ -277,10 +300,10 @@ function directionLink(direction: string) {
           :aria-label="drawer ? '收起导航' : '打开导航'"
         />
         <v-app-bar-title>{{
-          route.path === "/recruitment" && auth.user.role === "student"
+          route.path === "/recruitment" && !hasPermission("recruitment")
             ? "我的报名"
             : route.path === "/learning" && route.query.direction
-              ? `${route.query.direction}组`
+              ? groupLabel(String(route.query.direction))
               : route.meta.title
         }}</v-app-bar-title>
         <span class="topbar-season d-none d-sm-flex">{{
@@ -337,7 +360,7 @@ function directionLink(direction: string) {
         </template>
       </v-app-bar>
     </template>
-    <v-main><router-view /></v-main>
+    <v-main><router-view :key="accessIdentity" /></v-main>
     <v-snackbar
       :model-value="!!logoutError"
       color="error"

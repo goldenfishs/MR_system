@@ -4,6 +4,7 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs
 import pdfWorkerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { useDisplay } from "vuetify";
 import { api } from "../lib/api";
+import { groupOptions, hasPermission, manageableGroups } from "../lib/permissions";
 import { auth } from "../lib/auth";
 import { dateTime, downloadUrl, previewUrl, type FileAsset } from "../lib/platform";
 import type { KnowledgeResource } from "../lib/learning";
@@ -30,8 +31,8 @@ const pdfRenderVersions = new Map<string, number>();
 let pdfAbort: AbortController | null = null;
 let pdfGeneration = 0;
 const form = reactive({ title: "", description: "", direction: "", kind: "file", fileIds: [] as string[], url: "" });
-const canManage = computed(() => ["admin", "mentor"].includes(auth.user?.role || ""));
-const canEdit = (resource: KnowledgeResource) => auth.user?.role === "admin" || canManage.value && resource.createdBy === auth.user?.id;
+const canManage = computed(() => hasPermission("knowledge", props.direction || undefined));
+const canEdit = (resource: KnowledgeResource) => hasPermission("knowledge", resource.direction);
 function clearPdfPreview() {
   pdfGeneration++;
   pdfAbort?.abort();
@@ -149,7 +150,7 @@ watch(selected, async (resource) => {
     if (fileMetadata.value[id]?.mime === "application/pdf") void loadPdf(id, generation, pdfAbort.signal);
   }
 });
-const directions = ["机械", "电控", "视觉算法", "硬件", "运营"];
+const directions = computed(() => auth.user?.role === "admin" ? groupOptions : manageableGroups("knowledge"));
 const kinds = [
   { value: "file", title: "文件资料", icon: "mdi-folder-outline", color: "primary" },
   { value: "pdf", title: "PDF 文档", icon: "mdi-file-pdf-box", color: "deep-orange" },
@@ -181,13 +182,14 @@ function openEditor(resource?: KnowledgeResource) {
   editingId.value = resource?.id || "";
   Object.assign(form, {
     title: resource?.title || "", description: resource?.description || "",
-    direction: resource?.direction || props.direction || "", kind: resource?.kind || "file",
+    direction: resource?.direction || props.direction || (auth.user?.role === "admin" ? "" : directions.value[0]?.value || ""), kind: resource?.kind || "file",
     fileIds: [...(resource?.fileIds || [])], url: resource?.url || "",
   });
   dialog.value = true;
 }
 async function save() {
   if (saving.value || uploading.value) return;
+  if (!hasPermission("knowledge", form.direction)) { notice.value = "没有该组知识库的管理权限"; return; }
   if (!form.title.trim()) { notice.value = "请填写资料标题"; return; }
   if (!form.fileIds.length && !form.url.trim()) { notice.value = "请上传资料文件或填写资料链接"; return; }
   if (form.url.trim() && !safeUrl(form.url.trim())) { notice.value = "资料链接须以 https:// 或 http:// 开头"; return; }
@@ -273,7 +275,7 @@ async function remove() {
     <v-dialog v-model="dialog" max-width="760" :fullscreen="smAndDown" :persistent="saving || uploading" scrollable><v-card class="resource-dialog"><v-card-title class="dialog-heading"><h2>{{ editingId ? '编辑知识库资料' : '发布知识库资料' }}</h2><v-btn icon="mdi-close" variant="text" aria-label="关闭资料编辑" :disabled="saving || uploading" @click="dialog = false" /></v-card-title><v-card-text><v-form @submit.prevent="save">
       <v-text-field v-model="form.title" label="资料标题 *" maxlength="200" variant="outlined" required />
       <v-textarea v-model="form.description" label="资料说明" rows="4" maxlength="20000" variant="outlined" />
-      <v-row><v-col cols="12" sm="6"><v-select v-model="form.direction" :items="[{ value: '', title: '全组共享' }, ...directions.map(value => ({ value, title: value + '组' }))]" label="面向组别" variant="outlined" /></v-col><v-col cols="12" sm="6"><v-select v-model="form.kind" :items="kinds" label="资料类型" variant="outlined" /></v-col></v-row>
+      <v-row><v-col cols="12" sm="6"><v-select v-model="form.direction" :items="[...(auth.user?.role === 'admin' ? [{ value: '', title: '全组共享' }] : []), ...directions]" label="面向组别" variant="outlined" /></v-col><v-col cols="12" sm="6"><v-select v-model="form.kind" :items="kinds" label="资料类型" variant="outlined" /></v-col></v-row>
       <v-text-field v-model="form.url" :label="form.kind === 'video' ? '视频课程链接（选填）' : '资料链接（选填）'" type="url" placeholder="https://" variant="outlined" />
       <FileUpload v-model="form.fileIds" label="资料文件（PDF、讲义、视频或压缩包）" :disabled="saving" @busy="uploading = $event" />
       <div class="editor-footer"><span>资料面向指定组别和全组共享区展示</span><v-btn color="primary" type="submit" :loading="saving" :disabled="uploading">{{ editingId ? '保存修改' : '发布资料' }}</v-btn></div>

@@ -1,42 +1,40 @@
 import { computed, reactive, watch } from "vue";
 import { api } from "./api";
-import { auth } from "./auth";
+import { auth, loadSession } from "./auth";
+import { groupOptions, hasPermission } from "./permissions";
 
-export const learningAccess = reactive({ userId: "", allowed: false, error: "" });
-export const canAccessLearning = computed(() => {
-  const user = auth.user;
-  return Boolean(user && (["admin", "mentor", "interviewer"].includes(user.role) ||
-    (user.role === "student" && learningAccess.userId === user.id && learningAccess.allowed)));
-});
-
+export const learningAccess = reactive({ userId: "", allowed: false, directions: [] as string[], error: "" });
+export const canAccessLearning = computed(() => Boolean(auth.user && learningAccess.userId === auth.user.id && learningAccess.allowed));
+export const learningDirections = computed(() => groupOptions.filter(group =>
+  canAccessLearning.value && learningAccess.directions.includes(group.value) || hasPermission("tasks", group.value) || hasPermission("knowledge", group.value),
+));
+export const canOpenLearning = computed(() => Boolean(auth.user && (canAccessLearning.value || learningDirections.value.length)));
+export const canAccessDirection = (direction: string) => canOpenLearning.value && (!direction || learningDirections.value.some(group => group.value === direction));
+export const canAccessLearningModule = (permission: "tasks" | "knowledge", direction?: string) =>
+  canAccessLearning.value && (!direction || learningAccess.directions.includes(direction)) || hasPermission(permission, direction);
 let generation = 0;
 let pending: Promise<void> | undefined;
-watch(() => auth.user, () => {
+watch(() => auth.user?.id, () => {
   generation++;
   pending = undefined;
-  Object.assign(learningAccess, { userId: "", allowed: false, error: "" });
+  Object.assign(learningAccess, { userId: "", allowed: false, directions: [], error: "" });
 }, { flush: "sync" });
 
 export function refreshLearningAccess(): Promise<void> {
-  const user = auth.user;
-  if (!user || user.role !== "student") return Promise.resolve();
+  if (!auth.user || auth.signingOut) return Promise.resolve();
   if (pending) return pending;
+  const userId = auth.user.id;
   const requestGeneration = generation;
-  pending = api.get<{ allowed: boolean }>("/learning-access")
-    .then(({ allowed }) => {
-      if (requestGeneration !== generation) return;
-      Object.assign(learningAccess, { userId: user.id, allowed, error: "" });
-    })
-    .catch(() => {
-      if (requestGeneration !== generation) return;
-      Object.assign(learningAccess, {
-        userId: user.id,
-        allowed: false,
-        error: "暂时无法确认入队状态，请刷新重试。",
-      });
-    })
-    .finally(() => {
-      if (requestGeneration === generation) pending = undefined;
-    });
+  pending = loadSession(true).then(async () => {
+    if (!auth.user || auth.signingOut || auth.user.id !== userId || requestGeneration !== generation) return;
+    const { allowed, directions } = await api.get<{ allowed: boolean; directions: string[] }>("/learning-access");
+    if (requestGeneration !== generation || auth.signingOut) return;
+    Object.assign(learningAccess, { userId, allowed, directions: directions || [], error: "" });
+  }).catch(() => {
+    if (requestGeneration !== generation || auth.signingOut) return;
+    Object.assign(learningAccess, { userId, allowed: false, directions: [], error: "暂时无法确认组别权限，请刷新重试。" });
+  }).finally(() => {
+    if (requestGeneration === generation) pending = undefined;
+  });
   return pending;
 }

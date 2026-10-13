@@ -107,7 +107,7 @@ func publicTask(t Task, u User) Task {
 		t.Judge = nil
 		return t
 	}
-	if t.Judge == nil || canManage(u) {
+	if t.Judge == nil || hasPermission(u, t.Direction, "tasks") {
 		return t
 	}
 	config := *t.Judge
@@ -190,8 +190,10 @@ func (a *App) judgeRequest(ctx context.Context, method, path string, body any, o
 	return nil
 }
 func (a *App) getJudgeConfig(w http.ResponseWriter, r *http.Request, u User) error {
-	if err := a.requireLearningAccess(u); err != nil {
-		return err
+	if !hasAnyPermission(u, "tasks") {
+		if err := a.requireLearningAccess(u); err != nil {
+			return err
+		}
 	}
 	if a.config.JudgeURL == "" {
 		respond(w, 200, map[string]any{"configured": false, "languages": []JudgeLanguage{}})
@@ -238,9 +240,6 @@ func (a *App) readJudgeSource(id string, u User) ([]byte, error) {
 	return source, nil
 }
 func (a *App) startJudge(w http.ResponseWriter, r *http.Request, u User) error {
-	if u.Role != "student" {
-		return fail(403, "只有团队成员可以提交编译测试")
-	}
 	if a.config.JudgeURL == "" {
 		return fail(503, "尚未配置独立判题服务，请联系管理员")
 	}
@@ -354,12 +353,12 @@ func (a *App) getJudgeRun(w http.ResponseWriter, r *http.Request, u User) error 
 	if err != nil {
 		return err
 	}
-	if run.UserID != u.ID && u.Role != "admin" {
-		return fail(403, "没有权限查看此判题记录")
-	}
 	task, err := a.store.task(run.TaskID)
 	if err != nil {
 		return err
+	}
+	if run.UserID != u.ID && !hasPermission(u, task.Direction, "tasks") {
+		return fail(403, "没有权限查看此判题记录")
 	}
 	visible, err := a.taskVisibleTo(task, u)
 	if err != nil {

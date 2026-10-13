@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { api } from "../lib/api";
+import { hasPermission, isParticipant } from "../lib/permissions";
 import { auth } from "../lib/auth";
-import { canAccessLearning, learningAccess, refreshLearningAccess } from "../lib/learning-access";
+import { canAccessLearning, canAccessLearningModule, canOpenLearning, learningAccess, learningDirections, refreshLearningAccess } from "../lib/learning-access";
 import type { Task, Settings } from "../lib/types";
 import type { TeamSpace } from "../lib/platform";
 
@@ -22,46 +23,65 @@ const taskCompetitionLabel = (task: Task) => {
 const tasks = ref<Task[]>([]);
 const loading = ref(true);
 const error = ref("");
-const isAdmin = auth.user?.role === "admin";
-const canManage = ["admin", "mentor"].includes(auth.user?.role || "");
+const isAdmin = computed(() => auth.user?.role === "admin");
+const canManage = computed(() => hasPermission("tasks"));
+const canReadTasks = computed(() => canAccessLearning.value || canManage.value);
+const taskDirections = computed(() => learningDirections.value.filter(group => canAccessLearningModule("tasks", group.value)));
+const knowledgeDirections = computed(() => learningDirections.value.filter(group => canAccessLearningModule("knowledge", group.value)));
+const learningTarget = computed(() => ({
+  path: "/learning",
+  query: { direction: (canReadTasks.value ? taskDirections.value : knowledgeDirections.value)[0]?.value, section: canReadTasks.value ? "tasks" : "knowledge" },
+}));
+const showAdmissionNotice = computed(() => !canAccessLearning.value && (isParticipant() || auth.user?.role === "group_admin"));
+const admissionNotice = computed(() => canOpenLearning.value
+  ? "授权组别的管理权限已可使用。你的个人学习资格仍需报名审核通过后开通，当前不能以学员身份提交作业或参加考试。"
+  : "报名审核通过后，技术分组、知识库、作业和考试将向你开放。"
+);
+const canRecruit = computed(() => hasPermission("recruitment"));
+const canIssueRecords = computed(() => hasPermission("records"));
 const today = new Intl.DateTimeFormat("zh-CN", {
   month: "long",
   day: "numeric",
   weekday: "long",
 }).format(new Date());
 
+let loadGeneration = 0;
 async function load() {
+  const generation = ++loadGeneration;
   loading.value = true;
   error.value = "";
   try {
     await refreshLearningAccess();
+    if (generation !== loadGeneration || !auth.user) return;
     const [space, teamList, learning, settings] = await Promise.all([
       api.get<Summary>("/workspace-summary"),
       api.get<{ items: TeamSpace[] }>("/teams"),
-      canAccessLearning.value
+      canReadTasks.value
         ? api.get<{ items: Task[] }>("/tasks")
         : Promise.resolve({ items: [] as Task[] }),
       api.get<{ settings: Settings }>("/settings"),
     ]);
+    if (generation !== loadGeneration) return;
     summary.value = space;
     teams.value = teamList.items || [];
     tasks.value = learning.items || [];
     brand.value = settings.settings;
   } catch (e) {
-    error.value = (e as Error).message;
+    if (generation === loadGeneration) error.value = (e as Error).message;
   } finally {
-    loading.value = false;
+    if (generation === loadGeneration) loading.value = false;
   }
 }
 const counts = (key: string) => summary.value?.stats[key] ?? 0;
-watch(canAccessLearning, () => {
-  if (!loading.value) void load();
+watch(() => JSON.stringify([auth.user?.id, auth.user?.role, auth.user?.groupGrants, canAccessLearning.value]), () => {
+  tasks.value = [];
+  void load();
 });
 onMounted(load);
 </script>
 
 <template>
-  <div class="page-content dashboard" :style="{ '--shortcut-columns': canAccessLearning ? 4 : 3, '--main-columns': canAccessLearning ? 2 : 1 }">
+  <div class="page-content dashboard" :style="{ '--shortcut-columns': canOpenLearning ? 4 : 3, '--main-columns': canOpenLearning ? 2 : 1 }">
     <header class="welcome-row">
       <div class="welcome-person">
         <v-avatar size="48" color="primary" variant="tonal"
@@ -85,7 +105,7 @@ onMounted(load);
     >
     <v-alert
       v-if="
-        auth.user?.role === 'student' && summary && !summary.profileComplete
+        isParticipant() && summary && !summary.profileComplete
       "
       type="warning"
       variant="tonal"
@@ -95,8 +115,8 @@ onMounted(load);
       <v-btn to="/profile" color="primary" variant="text">补全资料</v-btn>
     </v-alert>
 
-    <v-alert v-if="auth.user?.role === 'student' && !canAccessLearning" :type="learningAccess.error ? 'warning' : 'info'" variant="tonal" class="mb-5">
-      {{ learningAccess.error || "报名审核通过后，技术分组、知识库、作业和考试将向你开放。" }}
+    <v-alert v-if="showAdmissionNotice" :type="learningAccess.error ? 'warning' : 'info'" variant="tonal" class="mb-5">
+      {{ learningAccess.error }} {{ admissionNotice }}
       <v-btn v-if="learningAccess.error" variant="text" @click="load">重试</v-btn>
       <v-btn v-else to="/teams" color="primary" variant="text">查看团队报名</v-btn>
     </v-alert>
@@ -105,9 +125,9 @@ onMounted(load);
       <router-link to="/teams" class="shortcut-card"
         ><div>
           <span class="eyebrow">团队报名</span>
-          <h2>{{ isAdmin ? "团队与申请" : "开放团队" }}</h2>
+          <h2>{{ canRecruit ? "团队与申请" : "开放团队" }}</h2>
           <p>
-            {{ isAdmin ? "发布团队并审核简历" : "选择方向，提交 PDF 简历" }}
+            {{ canRecruit ? "查看和审核授权组别的报名" : "选择方向，提交 PDF 简历" }}
           </p>
           <strong>{{
             loading
@@ -121,30 +141,32 @@ onMounted(load);
           >mdi-account-multiple-outline</v-icon
         ></router-link
       >
-      <router-link v-if="canAccessLearning" to="/learning" class="shortcut-card"
+      <router-link v-if="canOpenLearning" :to="learningTarget" class="shortcut-card"
         ><div>
-          <span class="eyebrow">任务培养</span>
-          <h2>{{ canManage ? "任务与评阅" : "我的作业" }}</h2>
-          <p>{{ canManage ? "发布作业、批改提交" : "查看任务、上传成果" }}</p>
+          <span class="eyebrow">{{ canReadTasks ? "任务培养" : "知识资料" }}</span>
+          <h2>{{ canReadTasks ? canManage ? "任务与评阅" : "我的作业" : "知识库管理" }}</h2>
+          <p>{{ canReadTasks ? canManage ? "管理授权组作业、批改提交" : "查看任务、上传成果" : "维护授权组资料、文件与视频" }}</p>
           <strong>{{
             loading
               ? "—"
+              : !canReadTasks
+                ? knowledgeDirections.length + " 个授权组别"
               : canManage
                 ? counts("pendingReviews") + " 项待评"
                 : counts("activeTasks") + " 项进行中"
           }}</strong>
         </div>
         <v-icon color="teal" size="43"
-          >mdi-clipboard-text-outline</v-icon
+          >{{ canReadTasks ? "mdi-clipboard-text-outline" : "mdi-book-open-page-variant-outline" }}</v-icon
         ></router-link
       >
       <router-link to="/records" class="shortcut-card"
         ><div>
           <span class="eyebrow">荣誉中心</span>
-          <h2>{{ isAdmin ? "荣誉发放" : "我的证书与奖状" }}</h2>
+          <h2>{{ canIssueRecords ? "荣誉发放" : "我的证书与奖状" }}</h2>
           <p>
             {{
-              isAdmin ? "将证书和奖励发给指定成员" : "统一查询个人奖励与材料"
+              canIssueRecords ? "将证书和奖励发给指定成员" : "统一查询个人奖励与材料"
             }}
           </p>
           <strong>{{
@@ -243,13 +265,13 @@ onMounted(load);
         </div>
       </v-card>
 
-      <v-card v-if="canAccessLearning" class="dashboard-card">
+      <v-card v-if="canReadTasks" class="dashboard-card">
         <div class="card-heading">
           <h2>
             <v-icon color="teal" size="20">mdi-clipboard-list-outline</v-icon
-            >{{ canManage ? "近期培养任务" : "可参与的任务" }}
+            >{{ canManage ? "授权组培养任务" : "可参与的任务" }}
           </h2>
-          <v-btn to="/learning" variant="text" size="small" color="primary"
+          <v-btn :to="learningTarget" variant="text" size="small" color="primary"
             >全部任务<v-icon end>mdi-chevron-right</v-icon></v-btn
           >
         </div>
@@ -288,9 +310,22 @@ onMounted(load);
         <div v-else class="empty-state">
           <v-icon size="32">mdi-book-open-outline</v-icon>
           <p>{{ loading ? "正在加载任务…" : "暂无培养任务" }}</p>
-          <v-btn v-if="canManage" to="/learning" color="primary" variant="text"
+          <v-btn v-if="canManage" :to="learningTarget" color="primary" variant="text"
             >发布作业</v-btn
           >
+        </div>
+      </v-card>
+      <v-card v-else-if="canOpenLearning" class="dashboard-card">
+        <div class="card-heading">
+          <h2><v-icon color="teal" size="20">mdi-book-open-page-variant-outline</v-icon>授权组知识库</h2>
+          <v-btn :to="learningTarget" variant="text" size="small" color="primary">管理资料<v-icon end>mdi-chevron-right</v-icon></v-btn>
+        </div>
+        <div class="task-list">
+          <router-link v-for="group in knowledgeDirections" :key="group.value" :to="{ path: '/learning', query: { direction: group.value, section: 'knowledge' } }" class="task-row">
+            <span class="task-mark"><v-icon>{{ group.icon }}</v-icon></span>
+            <span class="task-copy"><strong>{{ group.title }}知识库</strong><small>管理本组资料、文件与视频</small></span>
+            <v-icon size="18" color="grey">mdi-chevron-right</v-icon>
+          </router-link>
         </div>
       </v-card>
     </div>

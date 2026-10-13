@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { api } from "../lib/api";
-import { auth } from "../lib/auth";
+import { hasPermission } from "../lib/permissions";
 import type { Settings, Task } from "../lib/types";
 import { dateTime, type JudgeService } from "../lib/platform";
 const settings = ref<Settings | null>(null),
@@ -48,7 +48,7 @@ onMounted(load);
         </p>
       </div>
       <v-btn
-        v-if="['admin', 'mentor'].includes(auth.user?.role || '')"
+        v-if="hasPermission('tasks')"
         to="/learning"
         color="primary"
         >发布任务与考试</v-btn

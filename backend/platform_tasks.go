@@ -56,45 +56,43 @@ func includesID(ids []string, id string) bool {
 }
 
 func (a *App) taskVisibleTo(t Task, u User) (bool, error) {
-	if isStaff(u) {
+	if hasPermission(u, t.Direction, "tasks") {
 		return true, nil
 	}
-	if t.TeamID == "" {
-		allowed, err := a.learningAllowed(u)
-		if err != nil || !allowed {
-			return false, err
-		}
-		return taskVisible(t, u), nil
-	}
-	var direction string
-	err := a.store.row("SELECT direction FROM team_memberships WHERE team_id=? AND user_id=?", t.TeamID, u.ID).Scan(&direction)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return t.Direction == "" || t.Direction == direction, nil
+	return a.learningAllowed(u)
 }
 func (a *App) requireTaskSubmission(t Task, u User) error {
-	if u.Role != "student" {
-		return fail(403, "只有团队成员可提交任务")
+	if eliminated, err := trainingEliminated(a.store, u); err != nil {
+		return err
+	} else if eliminated {
+		return fail(403, "新生已在阶段考核中淘汰，重新录取后才可提交")
 	}
 	if err := a.requireLearningAccess(u); err != nil {
 		return err
 	}
-	if t.TeamID == "" {
-		if t.Team != "" && !sameCompetition(t.Team, u.Team) || t.Direction != "" && t.Direction != u.Direction {
-			return fail(403, "该任务不属于你的赛队或技术方向")
-		}
-	} else {
-		visible, err := a.taskVisibleTo(t, u)
-		if err != nil {
+	directions, err := a.memberDirections(u.ID)
+	if err != nil {
+		return err
+	}
+	if u.MemberType == "freshman" && u.Role != "admin" && len(directions) == 0 {
+		return fail(403, "管理授权不替代本人录取资格，报名通过后才可提交")
+	}
+	if t.TeamID != "" {
+		var direction string
+		err := a.store.row("SELECT direction FROM team_memberships WHERE team_id=? AND user_id=?", t.TeamID, u.ID).Scan(&direction)
+		if err != nil && err != sql.ErrNoRows {
 			return err
 		}
-		if !visible {
-			return fail(403, "加入对应团队和技术组后才可提交任务")
+		if err == sql.ErrNoRows {
+			if u.MemberType == "freshman" {
+				return fail(403, "加入对应团队后才可提交任务")
+			}
+		} else {
+			directions = []string{direction}
 		}
+	}
+	if t.Direction != "" && !includesID(directions, t.Direction) {
+		return fail(403, "请提交本人所属技术组的作业或考试")
 	}
 	if t.StartsAt != "" {
 		start, err := time.Parse(time.RFC3339, t.StartsAt)
@@ -107,7 +105,10 @@ func (a *App) requireTaskSubmission(t Task, u User) error {
 	}
 	return nil
 }
-func (a *App) validateTaskPlatform(t *Task, u User) error {
+func (a *App) validateTaskPlatform(t *Task, u User, existing ...[]string) error {
+	if err := requirePermission(u, t.Direction, "tasks"); err != nil {
+		return err
+	}
 	normalizeTask(t)
 	if (t.Direction == "机械" || t.Direction == "运营") && (t.Kind == "code" || t.SubmissionType == "code" || t.Judge != nil) {
 		return fail(400, "机械和运营组使用文字或文件作业，不启用代码题与编程测评")
@@ -157,7 +158,11 @@ func (a *App) validateTaskPlatform(t *Task, u User) error {
 		return fail(400, "每项任务最多附带 20 个文件")
 	}
 	t.FileIDs = normalizedIDs(t.FileIDs)
-	if err := requireOwnedFiles(a.store, u, t.FileIDs); err != nil {
+	previous := []string{}
+	if len(existing) > 0 {
+		previous = existing[0]
+	}
+	if err := requireUpdatedFiles(a.store, u, t.FileIDs, previous); err != nil {
 		return err
 	}
 	return validateJudgeConfig(t)
@@ -213,16 +218,19 @@ func (a *App) taskFileAccess(u User, fileID string) (bool, error) {
 			}
 		}
 	}
-	if u.Role == "interviewer" {
-		return false, nil
-	}
 	submissions, err := readAll[Submission](a.store, "SELECT payload FROM submissions")
 	if err != nil {
 		return false, err
 	}
 	for _, s := range submissions {
-		if includesID(s.FileIDs, fileID) && (s.UserID == u.ID || canManage(u)) {
-			return true, nil
+		if includesID(s.FileIDs, fileID) {
+			task, err := a.store.task(s.TaskID)
+			if err != nil {
+				return false, err
+			}
+			if s.UserID == u.ID || hasPermission(u, task.Direction, "tasks") {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
@@ -239,13 +247,24 @@ func (a *App) registerTaskPlatformRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/judge-runs/{id}", a.wrap(true, a.getJudgeRun))
 }
 func (a *App) listMailCampaigns(w http.ResponseWriter, _ *http.Request, u User) error {
-	if u.Role != "admin" {
-		return fail(403, "只有管理员可管理批量邮件")
+	if !hasAnyPermission(u, "mail") {
+		return fail(403, "没有批量邮件权限")
 	}
 	items, err := readAll[MailCampaign](a.store, "SELECT payload FROM mail_campaigns")
 	if err != nil {
 		return err
 	}
+	filtered := []MailCampaign{}
+	for _, item := range items {
+		allowed, err := a.campaignAllowed(u, item)
+		if err != nil {
+			return err
+		}
+		if allowed {
+			filtered = append(filtered, item)
+		}
+	}
+	items = filtered
 	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt > items[j].CreatedAt })
 	if len(items) > 100 {
 		items = items[:100]
@@ -254,8 +273,8 @@ func (a *App) listMailCampaigns(w http.ResponseWriter, _ *http.Request, u User) 
 	return nil
 }
 func (a *App) createMailCampaign(w http.ResponseWriter, r *http.Request, u User) error {
-	if u.Role != "admin" {
-		return fail(403, "只有管理员可管理批量邮件")
+	if !hasAnyPermission(u, "mail") {
+		return fail(403, "没有批量邮件权限")
 	}
 	var in struct {
 		Subject string   `json:"subject"`
@@ -279,6 +298,13 @@ func (a *App) createMailCampaign(w http.ResponseWriter, r *http.Request, u User)
 		if err != nil {
 			return err
 		}
+		allowed, err := a.recipientAllowed(u, id, "mail")
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return fail(403, "收件人不在获授权的技术组内")
+		}
 		if _, valid := normalizedEmail(member.Email); !valid {
 			return fail(400, "收件人邮箱无效")
 		}
@@ -292,12 +318,19 @@ func (a *App) createMailCampaign(w http.ResponseWriter, r *http.Request, u User)
 	return nil
 }
 func (a *App) getMailCampaign(w http.ResponseWriter, r *http.Request, u User) error {
-	if u.Role != "admin" {
-		return fail(403, "只有管理员可管理批量邮件")
+	if !hasAnyPermission(u, "mail") {
+		return fail(403, "没有批量邮件权限")
 	}
 	item, err := readOne[MailCampaign](a.store, "SELECT payload FROM mail_campaigns WHERE id=?", r.PathValue("id"))
 	if err != nil {
 		return err
+	}
+	allowed, err := a.campaignAllowed(u, item)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return fail(403, "没有此邮件的收件人授权")
 	}
 	respond(w, 200, map[string]any{"item": item})
 	return nil
@@ -309,8 +342,8 @@ func (a *App) retryMailCampaign(w http.ResponseWriter, r *http.Request, u User) 
 	return a.beginMailCampaign(w, r, u, true)
 }
 func (a *App) beginMailCampaign(w http.ResponseWriter, r *http.Request, u User, retry bool) error {
-	if u.Role != "admin" {
-		return fail(403, "只有管理员可发送批量邮件")
+	if !hasAnyPermission(u, "mail") {
+		return fail(403, "没有批量邮件权限")
 	}
 	if a.config.NoticeMailer == nil {
 		return fail(503, "尚未配置 SMTP，无法发送邮件")
@@ -320,6 +353,13 @@ func (a *App) beginMailCampaign(w http.ResponseWriter, r *http.Request, u User, 
 	item, err := readOne[MailCampaign](a.store, "SELECT payload FROM mail_campaigns WHERE id=?", r.PathValue("id"))
 	if err != nil {
 		return err
+	}
+	allowed, err := a.campaignAllowed(u, item)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return fail(403, "没有此邮件的收件人授权")
 	}
 	// Returning the same in-flight or completed item makes accidental repeated
 	// clicks idempotent. A retry is a distinct, explicitly requested operation.
@@ -359,17 +399,28 @@ func (a *App) beginMailCampaign(w http.ResponseWriter, r *http.Request, u User, 
 	}
 	workerItem := item
 	workerItem.Recipients = append([]MailRecipient{}, item.Recipients...)
-	go a.deliverMailCampaign(workerItem, retry)
+	go a.deliverMailCampaign(workerItem, retry, u.ID)
 	respond(w, 202, map[string]any{"item": item})
 	return nil
 }
 func (a *App) saveMailCampaign(item MailCampaign) error {
 	return a.store.exec("UPDATE mail_campaigns SET status=?,payload=? WHERE id=?", item.Status, encoded(item), item.ID)
 }
-func (a *App) deliverMailCampaign(item MailCampaign, retry bool) {
+func (a *App) deliverMailCampaign(item MailCampaign, retry bool, actorID string) {
 	for i := range item.Recipients {
 		recipient := &item.Recipients[i]
 		if !retry && recipient.Status != "pending" || retry && recipient.Status != "failed" {
+			continue
+		}
+		actor, err := a.store.user(actorID)
+		allowed := false
+		if err == nil {
+			allowed, err = a.recipientAllowed(actor, recipient.UserID, "mail")
+		}
+		if err != nil || !allowed {
+			recipient.Status = "failed"
+			recipient.Error = "收件人授权已失效"
+			_ = a.saveMailCampaign(item)
 			continue
 		}
 		recipient.Status = "sending"
@@ -379,7 +430,7 @@ func (a *App) deliverMailCampaign(item MailCampaign, retry bool) {
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		err := a.config.NoticeMailer.SendMessage(ctx, recipient.Email, item.Subject, item.Body)
+		err = a.config.NoticeMailer.SendMessage(ctx, recipient.Email, item.Subject, item.Body)
 		cancel()
 		if err != nil {
 			recipient.Status = "failed"

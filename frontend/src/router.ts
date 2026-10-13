@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { auth, loadSession } from "./lib/auth";
-import { canAccessLearning, refreshLearningAccess } from "./lib/learning-access";
+import { canAccessLearning, canOpenLearning, canAccessDirection, canAccessLearningModule, learningDirections, refreshLearningAccess } from "./lib/learning-access";
+import { hasPermission } from "./lib/permissions";
 const router = createRouter({
   history: createWebHistory(),
   scrollBehavior: () => ({ top: 0 }),
@@ -31,6 +32,11 @@ const router = createRouter({
       meta: { title: "个人中心" },
     },
     {
+      path: "/training",
+      component: () => import("./views/TrainingView.vue"),
+      meta: { title: "新生考核" },
+    },
+    {
       path: "/records",
       component: () => import("./views/RecordsView.vue"),
       meta: { title: "荣誉中心" },
@@ -48,7 +54,7 @@ const router = createRouter({
     {
       path: "/mail",
       component: () => import("./views/MailView.vue"),
-      meta: { title: "批量邮件", admin: true },
+      meta: { title: "批量邮件", permission: "mail" },
     },
     {
       path: "/learning",
@@ -69,7 +75,7 @@ const router = createRouter({
       meta: {
         title: "战队成员",
         subtitle: "不同的专长，共同的目标。",
-        staff: true,
+        permission: "members",
       },
     },
     {
@@ -89,11 +95,24 @@ router.beforeEach(async (to) => {
   if (!auth.user && to.path !== "/login")
     return { path: "/login", query: { redirect: to.fullPath } };
   if (auth.user && to.path === "/login") return "/";
-  if (to.meta.admin && auth.user?.role !== "admin") return "/";
-  if (to.meta.staff && auth.user?.role === "student") return "/";
   await refreshLearningAccess();
-  if (["/learning", "/assessment"].includes(to.path) && !canAccessLearning.value)
+  if (!auth.user && to.path !== "/login") return { path: "/login", query: { redirect: to.fullPath } };
+  if (to.meta.admin && auth.user?.role !== "admin") return "/";
+  if (to.meta.permission && !hasPermission(to.meta.permission as import("./lib/types").Permission)) return "/";
+  if (["/learning", "/assessment"].includes(to.path) && !canOpenLearning.value)
     return { path: "/teams", query: { admissionRequired: "1" } };
+  if (to.path === "/assessment" && !canAccessLearning.value && !hasPermission("tasks")) return "/learning";
+  if (to.path === "/learning" && to.query.direction && !canAccessDirection(String(to.query.direction)))
+    return { path: "/learning", query: { ...to.query, direction: learningDirections.value[0]?.value || "" } };
+  if (to.path === "/learning") {
+    const direction = typeof to.query.direction === "string" ? to.query.direction : undefined;
+    const section = to.query.section || (to.query.kind ? "tasks" : "home");
+    if (section === "knowledge" && !canAccessLearningModule("knowledge", direction) || ["tasks", "exam", "bank"].includes(String(section)) && !canAccessLearningModule("tasks", direction)) {
+      const query = { ...to.query };
+      delete query.section; delete query.kind; delete query.task;
+      return { path: "/learning", query };
+    }
+  }
   document.title = `${to.meta.title || "工作台"} · QUT机器人战队`;
 });
 export default router;

@@ -1,38 +1,59 @@
-import { reactive } from "vue";
-import { api, ApiError } from "./api";
+import { reactive, watch } from "vue";
+import { api, ApiError, setApiSession } from "./api";
 import type { User } from "./types";
 export const auth = reactive<{
   user: User | null;
   demoMode: boolean;
   ready: boolean;
+  signingOut: boolean;
   error: string;
-}>({ user: null, demoMode: false, ready: false, error: "" });
+}>({ user: null, demoMode: false, ready: false, signingOut: false, error: "" });
 let pending: Promise<void> | undefined;
-export function loadSession(): Promise<void> {
-  if (auth.ready) return Promise.resolve();
-  pending ??= api
-    .get<{ user: User; demoMode: boolean }>("/auth/me")
+let generation = 0;
+watch(() => auth.user?.id, () => { generation++; pending = undefined; setApiSession(Boolean(auth.user) && !auth.signingOut); }, { flush: "sync" });
+export function loadSession(force = false): Promise<void> {
+  if (auth.signingOut) return Promise.resolve();
+  if (auth.ready && !force) return Promise.resolve();
+  if (pending) return pending;
+  const requestGeneration = generation;
+  const request = api.get<{ user: User; demoMode: boolean }>("/auth/me")
     .then((data) => {
+      if (requestGeneration !== generation) return;
       auth.user = data.user;
       auth.demoMode = data.demoMode;
+      auth.error = "";
     })
     .catch((error) => {
-      if (!(error instanceof ApiError && error.status === 401))
-        auth.error = error.message;
+      if (requestGeneration !== generation) return;
+      auth.user = null;
+      if (!(error instanceof ApiError && error.status === 401)) auth.error = error.message;
     })
     .finally(() => {
       auth.ready = true;
-      pending = undefined;
+      if (pending === request) pending = undefined;
     });
-  return pending;
+  pending = request;
+  return request;
 }
 export async function signOut() {
-  await api.post("/auth/logout");
-  auth.user = null;
+  auth.signingOut = true;
+  generation++;
+  pending = undefined;
+  setApiSession(false);
+  try {
+    await api.post("/auth/logout");
+    auth.user = null;
+    auth.ready = true;
+    auth.error = "";
+  } finally {
+    auth.signingOut = false;
+    setApiSession(Boolean(auth.user));
+  }
 }
 export const roleNames = {
   admin: "管理员",
-  mentor: "导师",
-  interviewer: "面试官",
-  student: "学员",
+  group_admin: "组管理员",
+  member: "正式队员",
+  reserve: "梯队队员",
+  freshman: "新生",
 };

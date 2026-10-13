@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useDisplay } from "vuetify";
 import { api } from "../lib/api";
+import { hasPermission } from "../lib/permissions";
 import { auth } from "../lib/auth";
 import { downloadUrl, previewUrl, type FileAsset, type PersonalRecord, type UserWithProfile } from "../lib/platform";
 import FileUpload from "../components/FileUpload.vue";
@@ -21,7 +22,7 @@ const records = ref<PersonalRecord[]>([]),
   open = ref(false),
   saving = ref(false),
   uploading = ref(false);
-const admin = computed(() => auth.user?.role === "admin" && !props.personalOnly);
+const admin = computed(() => hasPermission("records") && !props.personalOnly);
 const form = reactive({
   userId: "",
   title: "",
@@ -70,7 +71,7 @@ async function load() {
     if (version !== loadVersion) return;
     if (admin.value) {
       const data = (
-        await api.get<{ items: UserWithProfile[] }>("/users")
+        await api.get<{ items: UserWithProfile[] }>("/users?permission=records")
       );
       if (version === loadVersion) users.value = data.items;
     }

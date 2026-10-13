@@ -43,10 +43,10 @@ const registrationAvailable = computed(
 let countdownTimer: ReturnType<typeof setInterval> | undefined;
 const demoAccounts = [
   { title: "管理员", email: "admin@demo.local", password: "DemoAdmin!2026" },
-  { title: "导师", email: "mentor@demo.local", password: "DemoMentor!2026" },
-  { title: "学员", email: "student@demo.local", password: "DemoStudent!2026" },
+  { title: "控制组管理员", email: "mentor@demo.local", password: "DemoMentor!2026" },
+  { title: "新生", email: "student@demo.local", password: "DemoStudent!2026" },
   {
-    title: "面试官",
+    title: "招新组管理员",
     email: "interviewer@demo.local",
     password: "DemoInterview!2026",
   },

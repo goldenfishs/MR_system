@@ -54,7 +54,7 @@ func TestLearningKnowledgePrivacyAndRevocation(t *testing.T) {
 func TestLearningDiscussionPrivateResolutionAndPublication(t *testing.T) {
 	_, c := setup(t)
 	c.login("student")
-	discussion := unmarshal[Discussion](t, c.request("POST", "/api/discussions", map[string]string{"title": "机械装配疑问", "content": "如何检查轴承配合？", "direction": "机械"}, 201)["discussion"])
+	discussion := unmarshal[Discussion](t, c.request("POST", "/api/discussions", map[string]string{"title": "电控接口疑问", "content": "如何检查串口协议？", "direction": "电控"}, 201)["discussion"])
 	c.request("PATCH", "/api/discussions/"+discussion.ID, map[string]bool{"published": true}, 403)
 	c.login("interviewer")
 	if len(unmarshal[[]Discussion](t, c.request("GET", "/api/discussions", nil, 200)["discussions"])) != 0 {
@@ -65,7 +65,7 @@ func TestLearningDiscussionPrivateResolutionAndPublication(t *testing.T) {
 	c.request("PATCH", "/api/discussions/"+discussion.ID, map[string]string{"status": "resolved"}, 409)
 	c.request("POST", "/api/discussions/"+discussion.ID+"/replies", map[string]string{"content": "先查公差带，并结合载荷和装配方式选择。"}, 201)
 	c.request("PATCH", "/api/discussions/"+discussion.ID, map[string]string{"status": "resolved"}, 200)
-	c.request("PATCH", "/api/discussions/"+discussion.ID, map[string]bool{"published": true}, 403)
+	c.request("PATCH", "/api/discussions/"+discussion.ID, map[string]bool{"published": true}, 200)
 	c.login("admin")
 	c.request("PATCH", "/api/discussions/"+discussion.ID, map[string]bool{"published": true}, 200)
 	c.login("interviewer")

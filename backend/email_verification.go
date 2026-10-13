@@ -269,7 +269,7 @@ func (a *App) register(w http.ResponseWriter, r *http.Request, _ User) error {
 		return err
 	}
 	verifiedAt := now()
-	u := User{ID: randomID(), Name: in.Name, Email: email, Role: "student", JoinedAt: verifiedAt, EmailVerifiedAt: verifiedAt}
+	u := User{ID: randomID(), Name: in.Name, Email: email, Role: "freshman", MemberType: "freshman", GroupGrants: []GroupGrant{}, JoinedAt: verifiedAt, EmailVerifiedAt: verifiedAt}
 	if err = s.exec("INSERT INTO users(id,email,password_hash,payload) VALUES(?,?,?,?)", u.ID, email, string(passwordHash), encoded(u)); err != nil {
 		return err
 	}

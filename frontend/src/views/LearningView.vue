@@ -3,6 +3,8 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useDisplay } from "vuetify";
 import { api, ApiError } from "../lib/api";
+import { groupOptions, groupLabel, hasPermission, isParticipant } from "../lib/permissions";
+import { canAccessLearning, canAccessLearningModule, learningDirections } from "../lib/learning-access";
 import { auth } from "../lib/auth";
 import type { Task, Submission, Applicant } from "../lib/types";
 import type { JudgeConfig, JudgeRun, Membership, TeamSpace } from "../lib/platform";
@@ -91,9 +93,10 @@ const directions = ["机械", "电控", "视觉算法", "硬件", "运营"];
 const sections = ["home", "knowledge", "tasks", "exam", "bank"] as const;
 const section = computed(() => {
   const value = String(route.query.section || "");
+  if (value === "knowledge" && !canViewKnowledge.value || ["tasks", "exam", "bank"].includes(value) && !canViewTasks.value) return "home";
   if (sections.includes(value as (typeof sections)[number])) return value;
   // Preserve old deep links such as /learning?kind=code.
-  return route.query.kind ? "tasks" : "home";
+  return route.query.kind && canViewTasks.value ? "tasks" : "home";
 });
 const categoryOf = (task: Task) => task.category || "assignment";
 const taskTypeLabel = (task: Task) => categoryOf(task) === "exam" ? "定时考试" : categoryOf(task) === "problem" ? "题库练习" : kindOf(task.kind).title;
@@ -107,7 +110,7 @@ const categoryFilter = computed(() =>
 );
 const taskDirections = computed(
   () => {
-    const available = teamsForTasks.value.find((t) => t.id === taskForm.teamId)?.directions || directions;
+    const available = (teamsForTasks.value.find((t) => t.id === taskForm.teamId)?.directions || directions).filter(direction => hasPermission("tasks", direction));
     return taskForm.category === "problem" ? available.filter(direction => ["电控", "视觉算法", "硬件"].includes(direction)) : available;
   },
 );
@@ -186,8 +189,10 @@ const taskFitsDirection = (task: Task) =>
 const scopedTasks = computed(() => tasks.value.filter(taskFitsDirection));
 const listedTasks = computed(() => scopedTasks.value.filter(task => !categoryFilter.value || categoryOf(task) === categoryFilter.value));
 const selectedDirection = computed(() => directionFilter.value === "全部方向" ? "" : directionFilter.value);
+const canViewTasks = computed(() => canAccessLearningModule("tasks", selectedDirection.value || undefined));
+const canViewKnowledge = computed(() => canAccessLearningModule("knowledge", selectedDirection.value || undefined));
 const supportsBank = computed(() => !selectedDirection.value || ["电控", "视觉算法", "硬件"].includes(selectedDirection.value));
-const groupName = computed(() => selectedDirection.value ? `${selectedDirection.value}组` : "技术组");
+const groupName = computed(() => selectedDirection.value ? groupLabel(selectedDirection.value) : "技术组");
 const groupIntro = computed(() => ({
   机械: "从机构方案到加工装配，在实践中完成一台可靠的机器人。",
   电控: "连接传感、控制与执行，让代码成为机器人的行动。",
@@ -226,11 +231,10 @@ function clearFilters() {
     query: { ...route.query, kind: undefined, direction: undefined },
   });
 }
-const isStudent = computed(() => auth.user?.role === "student");
-const canManage = computed(() =>
-  ["admin", "mentor"].includes(auth.user?.role || ""),
-);
-const canManageTask = (task: Task) => canManage.value && (auth.user?.role === "admin" || task.createdBy === auth.user?.id);
+const isStudent = computed(() => isParticipant() && canAccessLearning.value);
+const canSubmitSelected = computed(() => isStudent.value && Boolean(selected.value) && selected.value?.canSubmit !== false);
+const canManage = computed(() => hasPermission("tasks", selected.value ? selected.value.direction : selectedDirection.value || undefined));
+const canManageTask = (task: Task) => hasPermission("tasks", task.direction);
 const filtered = computed(() =>
   scopedTasks.value.filter(
     (t) =>
@@ -269,10 +273,11 @@ const latestSubmissions = computed(() => {
 const selectedSubmission = computed(() => selected.value?.mySubmission);
 const eligibility = computed(() => {
   if (!isStudent.value || !selected.value) return "";
+  if (selected.value.canSubmit === false) return "可查看本任务；成果提交面向所属组别的成员。";
   if (!admitted.value)
     return "报名审核通过后，才能访问知识库、作业和考试。";
   if (
-    selected.value.teamId &&
+    selected.value.canSubmit === undefined && selected.value.teamId &&
     !memberships.value.some(
       (m) =>
         m.teamId === selected.value?.teamId &&
@@ -282,13 +287,13 @@ const eligibility = computed(() => {
   )
     return `此任务面向${selected.value.direction || "该"}方向团队成员。请先加入对应团队。`;
   if (
-    !selected.value.teamId &&
+    selected.value.canSubmit === undefined && !selected.value.teamId &&
     selected.value.team &&
     selected.value.team !== memberScope.team
   )
     return `此任务面向 ${selected.value.team} 成员。`;
   if (
-    !selected.value.teamId &&
+    selected.value.canSubmit === undefined && !selected.value.teamId &&
     selected.value.direction &&
     selected.value.direction !== memberScope.direction
   )
@@ -357,35 +362,39 @@ async function load(quiet = false) {
   try {
     const category = categoryFilter.value;
     const taskPath = category ? `/tasks?category=${category}` : "/tasks";
-    const result = await api.get<{ items: Task[] }>(taskPath);
+    const [result, membershipData, legacyData, teamData] = await Promise.all([
+      canViewTasks.value && section.value !== "knowledge" ? api.get<{ items: Task[] }>(taskPath) : Promise.resolve({ items: [] as Task[] }),
+      isStudent.value ? api.get<{ items: Membership[] }>("/memberships") : Promise.resolve({ items: [] as Membership[] }),
+      isStudent.value ? api.get<{ items: Applicant[] }>("/applicants") : Promise.resolve({ items: [] as Applicant[] }),
+      api.get<{ items: TeamSpace[] }>("/teams"),
+    ]);
     if (version !== loadVersion) return;
     tasks.value = result.items;
     if (selected.value) {
       const refreshed = tasks.value.find(task => task.id === selected.value?.id);
-      if (refreshed) selected.value = refreshed;
+      selected.value = refreshed || null;
     }
+    memberships.value = membershipData.items;
+    admitted.value = canAccessLearning.value;
+    memberScope.team = ""; memberScope.direction = "";
     if (isStudent.value) {
-      memberships.value = (
-        await api.get<{ items: Membership[] }>("/memberships")
-      ).items;
-      const legacy = (
-        await api.get<{ items: Applicant[] }>("/applicants")
-      ).items.find(
+      const legacy = legacyData.items.find(
         (a) => a.userId === auth.user?.id && a.status === "accepted",
       );
-      admitted.value = memberships.value.length > 0 || Boolean(legacy);
-      memberScope.team = legacy?.team || "";
-      memberScope.direction =
-        legacy?.direction || memberships.value[0]?.direction || "";
+      memberScope.team = legacy?.team || auth.user?.team || "";
+      memberScope.direction = legacy?.direction || memberships.value[0]?.direction || auth.user?.direction || "";
     }
-    teamsForTasks.value = (await api.get<{ items: TeamSpace[] }>("/teams")).items;
+    teamsForTasks.value = teamData.items;
   } catch (e) {
     if (version === loadVersion) error.value = messageOf(e);
   } finally {
     if (version === loadVersion) loading.value = false;
   }
 }
-watch(section, () => { selected.value = null; search.value = ""; void load(); });
+watch([section, selectedDirection, canViewTasks, canViewKnowledge, () => JSON.stringify([auth.user?.id, auth.user?.role, auth.user?.groupGrants, canAccessLearning.value])], () => {
+  selected.value = null; submissions.value = []; createOpen.value = false; reviewTarget.value = null; removingTask.value = null; search.value = "";
+  void load();
+});
 watch(currentTime, (time) => {
   if (loading.value || time - lastUnlockRefresh < 15000) return;
   if (tasks.value.some(task => task.locked && task.startsAt && new Date(task.startsAt).getTime() <= time)) {
@@ -506,6 +515,7 @@ async function submitWork() {
   const task = selected.value;
   if (
     !task ||
+    !canSubmitSelected.value ||
     saving.value ||
     eligibility.value ||
     uploadBusy.value ||
@@ -549,7 +559,7 @@ async function submitWork() {
     }
     submissions.value = [item, ...submissions.value];
     detailTab.value = "history";
-    notice.value = `第 ${item.version} 版已提交，等待导师审核`;
+    notice.value = `第 ${item.version} 版已提交，等待管理员审核`;
   } catch (e) {
     notice.value = messageOf(e);
   } finally {
@@ -562,7 +572,7 @@ function startCreate() {
   Object.assign(taskForm, {
     title: "",
     description: "",
-    direction: selectedDirection.value,
+    direction: selectedDirection.value || (auth.user?.role === "admin" ? "" : groupOptions.find(group => hasPermission("tasks", group.value))?.value || ""),
     team: "",
     kind: "document",
     category: section.value === "exam" ? "exam" : section.value === "bank" ? "problem" : "assignment",
@@ -599,6 +609,7 @@ function localDate(value?: string) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
 function startEdit(task: Task, asNew = false) {
+  if (!canManageTask(task)) return;
   if (saving.value || uploadBusy.value || judgeBusy.value) return;
   editingTaskId.value = asNew ? "" : task.id;
   Object.assign(taskForm, {
@@ -628,6 +639,7 @@ async function removeTask() {
 }
 async function createTask() {
   if (saving.value || uploadBusy.value) return;
+  if (!hasPermission("tasks", taskForm.direction)) { notice.value = "没有该组作业与考试的管理权限"; return; }
   if (!taskForm.title.trim() || !taskForm.description.trim()) {
     notice.value = "请填写任务名称和完整要求";
     return;
@@ -714,7 +726,7 @@ function startReview(submission: Submission) {
       : "approved";
 }
 async function saveReview() {
-  if (!selected.value || !reviewTarget.value) return;
+  if (!selected.value || !reviewTarget.value || !canManageTask(selected.value)) return;
   if (
     !Number.isFinite(Number(reviewForm.score)) ||
     Number(reviewForm.score) < 0 ||
@@ -780,7 +792,7 @@ onUnmounted(() => clearInterval(timeTicker));
                       ? '从知识库到实践任务，记录每一步机器人能力成长'
                       : canManage
                         ? '发布训练任务，查看成员成果与审核进度'
-                        : '查看训练要求，提交成果并跟进导师反馈'
+                        : '查看训练要求，提交成果并跟进管理员反馈'
             }}
           </p>
         </div>
@@ -807,6 +819,7 @@ onUnmounted(() => clearInterval(timeTicker));
           ><v-btn variant="text" @click="load()">重试</v-btn></template
         ></v-alert
       >
+      <v-alert v-if="!canAccessLearning" type="info" variant="tonal" density="compact" class="mb-5">当前开放已授权组别的管理功能。个人学习、成果提交与代码测评需取得成员学习资格。</v-alert>
       <div v-if="loading" class="loading-panel">
         <v-progress-circular indeterminate color="primary" /><span
           >正在整理你的学习任务…</span
@@ -815,16 +828,16 @@ onUnmounted(() => clearInterval(timeTicker));
       <template v-else>
         <template v-if="section === 'home'">
           <v-card class="group-welcome" elevation="1">
-            <div><span class="welcome-caption">QUT ROBOT TEAM</span><h2>{{ groupName }}的成长空间</h2><p>{{ groupIntro }}</p><div class="welcome-links"><v-btn color="primary" variant="tonal" prepend-icon="mdi-bookshelf" @click="goSection('knowledge')">进入知识库</v-btn><v-btn color="primary" variant="text" prepend-icon="mdi-message-question-outline" :to="{ path: '/discussions', query: { direction: selectedDirection || undefined } }">向{{ groupName }}提问</v-btn></div></div>
-            <div class="welcome-stats"><div><strong>{{ assignments.length }}</strong><span>作业与考核</span></div><div><strong>{{ exams.length }}</strong><span>考试安排</span></div><div><strong>{{ scopedTasks.filter(task => task.mySubmission?.status === 'approved').length }}</strong><span>{{ isStudent ? '已完成任务' : '通过提交' }}</span></div></div>
+            <div><span class="welcome-caption">QUT ROBOT TEAM</span><h2>{{ groupName }}的成长空间</h2><p>{{ groupIntro }}</p><div class="welcome-links"><v-btn v-if="canViewKnowledge" color="primary" variant="tonal" prepend-icon="mdi-bookshelf" @click="goSection('knowledge')">进入知识库</v-btn><v-btn color="primary" variant="text" prepend-icon="mdi-message-question-outline" :to="{ path: '/discussions', query: { direction: selectedDirection || undefined } }">向{{ groupName }}提问</v-btn></div></div>
+            <div v-if="canViewTasks" class="welcome-stats"><div><strong>{{ assignments.length }}</strong><span>作业与考核</span></div><div><strong>{{ exams.length }}</strong><span>考试安排</span></div><div><strong>{{ scopedTasks.filter(task => task.mySubmission?.status === 'approved').length }}</strong><span>{{ isStudent ? '已完成任务' : '通过提交' }}</span></div></div>
           </v-card>
           <div class="group-shortcuts">
-            <v-card elevation="1" @click="goSection('knowledge')"><v-icon color="teal">mdi-bookshelf</v-icon><div><h3>知识库</h3><p>讲义、PDF、视频与资料下载</p></div><v-icon color="grey">mdi-chevron-right</v-icon></v-card>
-            <v-card elevation="1" @click="goSection('tasks')"><v-icon color="primary">mdi-clipboard-text-outline</v-icon><div><h3>作业</h3><p>{{ selectedDirection === '运营' ? '图片、设计稿与运营实践' : '训练任务、实践成果与阶段考核' }}</p></div><v-icon color="grey">mdi-chevron-right</v-icon></v-card>
-            <v-card elevation="1" @click="goSection('exam')"><v-icon color="deep-purple">mdi-calendar-clock-outline</v-icon><div><h3>考试</h3><p>查看排期，按时参加考试</p></div><v-icon color="grey">mdi-chevron-right</v-icon></v-card>
-            <v-card v-if="supportsBank" elevation="1" @click="goSection('bank')"><v-icon color="deep-orange">mdi-code-braces</v-icon><div><h3>题库</h3><p>电控、视觉与硬件编程练习</p></div><v-icon color="grey">mdi-chevron-right</v-icon></v-card>
+            <v-card v-if="canViewKnowledge" elevation="1" @click="goSection('knowledge')"><v-icon color="teal">mdi-bookshelf</v-icon><div><h3>知识库</h3><p>讲义、PDF、视频与资料下载</p></div><v-icon color="grey">mdi-chevron-right</v-icon></v-card>
+            <v-card v-if="canViewTasks" elevation="1" @click="goSection('tasks')"><v-icon color="primary">mdi-clipboard-text-outline</v-icon><div><h3>作业</h3><p>{{ selectedDirection === '运营' ? '图片、设计稿与运营实践' : '训练任务、实践成果与阶段考核' }}</p></div><v-icon color="grey">mdi-chevron-right</v-icon></v-card>
+            <v-card v-if="canViewTasks" elevation="1" @click="goSection('exam')"><v-icon color="deep-purple">mdi-calendar-clock-outline</v-icon><div><h3>考试</h3><p>查看排期，按时参加考试</p></div><v-icon color="grey">mdi-chevron-right</v-icon></v-card>
+            <v-card v-if="canViewTasks && supportsBank" elevation="1" @click="goSection('bank')"><v-icon color="deep-orange">mdi-code-braces</v-icon><div><h3>题库</h3><p>电控、视觉与硬件编程练习</p></div><v-icon color="grey">mdi-chevron-right</v-icon></v-card>
           </div>
-          <div class="group-home-grid">
+          <div v-if="canViewTasks" class="group-home-grid">
             <v-card class="group-home-panel" elevation="1"><div class="home-panel-heading"><h2>近期作业</h2><v-btn variant="text" color="primary" size="small" @click="goSection('tasks')">全部作业</v-btn></div>
               <button v-for="task in recentTasks" :key="task.id" class="home-task-row" @click="openTask(task)"><v-icon color="primary" size="21">{{ kindOf(task.kind).icon }}</v-icon><div><strong>{{ task.title }}</strong><span>{{ task.direction || '全组共享' }} · {{ task.dueAt ? formatDate(task.dueAt) + ' 截止' : '不限截止时间' }}</span></div><v-chip v-if="isStudent" size="x-small" :color="statusOf(task.mySubmission?.status).color" variant="tonal">{{ statusOf(task.mySubmission?.status).label }}</v-chip><v-icon v-else color="grey" size="18">mdi-chevron-right</v-icon></button>
               <p v-if="!recentTasks.length" class="home-empty">{{ canManage ? '发布作业后，成员将在这里查看最新的训练安排。' : '管理员发布作业后，将在这里展示最新安排。' }}</p>
@@ -835,7 +848,7 @@ onUnmounted(() => clearInterval(timeTicker));
             </v-card>
           </div>
         </template>
-        <KnowledgeLibrary v-else-if="section === 'knowledge'" :direction="selectedDirection" />
+        <KnowledgeLibrary v-else-if="section === 'knowledge' && canViewKnowledge" :direction="selectedDirection" />
         <v-card v-else-if="section === 'bank' && !supportsBank" class="empty-panel" elevation="1"><v-icon size="42" color="indigo-lighten-3">mdi-notebook-outline</v-icon><h2>{{ groupName }}以文件与实践任务为主</h2><p>查看知识库、作业和考试安排，完成本组的训练内容。</p><v-btn color="primary" variant="tonal" @click="goSection('tasks')">进入作业</v-btn></v-card>
         <template v-else>
         <div class="learning-overview" aria-label="任务数量概要">
@@ -882,7 +895,7 @@ onUnmounted(() => clearInterval(timeTicker));
               aria-label="搜索任务"
             /><v-select
               v-model="directionFilter"
-              :items="['全部方向', ...directions]"
+              :items="[{ value: '全部方向', title: '全部组别' }, ...learningDirections]"
               variant="outlined"
               density="compact"
               hide-details
@@ -990,7 +1003,7 @@ onUnmounted(() => clearInterval(timeTicker));
                 ? "更换关键词或方向，发现其他学习任务。"
                 : canManage
                   ? "发布第一项任务，明确目标、提交要求与验收标准。"
-                  : "导师发布任务后，你可以在这里查看要求并提交成果。"
+                  : "管理员发布任务后，你可以在这里查看要求并提交成果。"
             }}
           </p>
           <v-btn
@@ -1030,7 +1043,7 @@ onUnmounted(() => clearInterval(timeTicker));
               @click="selected = null" /></v-card-title
           ><v-tabs v-model="detailTab" color="primary" class="px-5"
             ><v-tab value="brief">任务要求</v-tab
-            ><v-tab v-if="isStudent" value="submit">提交成果</v-tab
+            ><v-tab v-if="canSubmitSelected" value="submit">提交成果</v-tab
             ><v-tab v-if="isStudent || canManage" value="history"
               >{{ canManage ? "成果审核" : "提交历史" }}
               <v-chip size="x-small" class="ml-2">{{
@@ -1115,7 +1128,7 @@ onUnmounted(() => clearInterval(timeTicker));
                   <div v-if="canManageTask(selected)" class="task-management-actions"><v-btn color="primary" variant="tonal" prepend-icon="mdi-pencil-outline" :disabled="selected.submissionCount > 0" @click="startEdit(selected)">编辑{{ categoryOf(selected) === 'exam' ? '考试' : categoryOf(selected) === 'problem' ? '题目' : '作业' }}</v-btn><v-btn variant="text" prepend-icon="mdi-content-copy" @click="startEdit(selected, true)">发布新版本</v-btn><v-btn color="error" variant="text" :disabled="selected.submissionCount > 0" @click="removingTask = selected">删除</v-btn><p>已有提交或评测记录的内容需发布新版本，以保留原始成绩。</p></div>
                 </div></v-window-item
               >
-              <v-window-item value="submit"
+              <v-window-item v-if="canSubmitSelected" value="submit"
                 ><v-alert v-if="eligibility" type="info" variant="tonal">{{
                   eligibility
                 }}</v-alert
@@ -1129,7 +1142,7 @@ onUnmounted(() => clearInterval(timeTicker));
                     "
                     variant="tonal"
                     class="mb-5"
-                    ><strong>上一版导师反馈</strong>
+                    ><strong>上一版管理员反馈</strong>
                     <p class="feedback-text">
                       {{ selectedSubmission.feedback }}
                     </p></v-alert
@@ -1237,7 +1250,7 @@ onUnmounted(() => clearInterval(timeTicker));
                     {{
                       canManage
                         ? "成员提交成果后，将在这里按人展示最新版本。"
-                        : "完成任务后提交成果，导师的反馈也会保留在这里。"
+                        : "完成任务后提交成果，管理员的反馈也会保留在这里。"
                     }}
                   </p>
                 </div>
@@ -1319,13 +1332,13 @@ onUnmounted(() => clearInterval(timeTicker));
                       class="review-feedback"
                     >
                       <div>
-                        <strong>导师反馈</strong
+                        <strong>管理员反馈</strong
                         ><v-chip size="small" color="teal" variant="tonal"
                           >{{ submission.score }} /
                           {{ selected?.maxScore }}</v-chip
                         >
                       </div>
-                      <p>{{ submission.feedback || "导师已完成审核。" }}</p>
+                      <p>{{ submission.feedback || "管理员已完成审核。" }}</p>
                       <span
                         >审核于 {{ formatDate(submission.reviewedAt) }}</span
                       >

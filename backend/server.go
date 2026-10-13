@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -88,8 +89,10 @@ func decode(r *http.Request, v any) error {
 	}
 	return nil
 }
-func isStaff(u User) bool     { return u.Role != "student" }
-func canManage(u User) bool   { return u.Role == "admin" || u.Role == "mentor" }
+func isStaff(u User) bool { return u.Role == "admin" || u.Role == "group_admin" }
+func canManage(u User) bool {
+	return hasAnyPermission(u, "tasks") || hasAnyPermission(u, "knowledge") || hasAnyPermission(u, "discussions")
+}
 func validTeam(t string) bool { return t == "RoboMaster" || t == "ROBOCON" || t == "RoboCon" }
 func validDirection(d string) bool {
 	return d == "机械" || d == "电控" || d == "视觉算法" || d == "硬件" || d == "运营"
@@ -224,6 +227,7 @@ func (a *App) Handler() http.Handler {
 	m.HandleFunc("PATCH /api/applicants/{id}", a.wrap(true, a.reviewApplication))
 	m.HandleFunc("GET /api/members", a.wrap(true, a.members))
 	m.HandleFunc("POST /api/members", a.wrap(true, a.createMember))
+	m.HandleFunc("PATCH /api/members/{id}", a.wrap(true, a.updateMember))
 	m.HandleFunc("GET /api/tasks", a.wrap(true, a.listTasks))
 	m.HandleFunc("POST /api/tasks", a.wrap(true, a.createTask))
 	m.HandleFunc("GET /api/tasks/{id}/submissions", a.wrap(true, a.listSubmissions))
@@ -381,6 +385,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request, _ User) error {
 	if err = json.Unmarshal([]byte(raw), &u); err != nil {
 		return err
 	}
+	normalizeUser(&u)
 	if err = a.setSession(w, r, u); err != nil {
 		return err
 	}
@@ -416,22 +421,17 @@ func sortApplicants(items []Applicant) {
 	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt > items[j].CreatedAt })
 }
 func (a *App) scopedApplicants(u User) ([]Applicant, error) {
-	q := "SELECT payload FROM applicants"
-	var args []any
-	if u.Role == "student" {
-		q += " WHERE user_id=?"
-		args = append(args, u.ID)
-	}
-	items, err := readAll[Applicant](a.store, q, args...)
+	items, err := readAll[Applicant](a.store, "SELECT payload FROM applicants")
 	if err != nil {
 		return nil, err
 	}
 	out := []Applicant{}
 	for _, v := range items {
-		if u.Role == "interviewer" && v.InterviewerID != u.ID {
+		manage := hasPermission(u, v.Direction, "recruitment")
+		if v.UserID != u.ID && !manage {
 			continue
 		}
-		if u.Role == "student" {
+		if !manage {
 			v.Notes = ""
 			v.Score = nil
 		}
@@ -449,9 +449,6 @@ func (a *App) listApplicants(w http.ResponseWriter, r *http.Request, u User) err
 	return nil
 }
 func (a *App) saveApplication(w http.ResponseWriter, r *http.Request, u User) error {
-	if u.Role != "student" && u.Role != "admin" {
-		return fail(403, "只有报名者或管理员可填写报名表")
-	}
 	s, err := a.store.settings()
 	if err != nil {
 		return err
@@ -493,7 +490,7 @@ func (a *App) saveApplication(w http.ResponseWriter, r *http.Request, u User) er
 		return err
 	}
 	a.activity(u, "提交报名", in.Team+" · "+in.Direction)
-	if u.Role == "student" {
+	if !hasPermission(u, in.Direction, "recruitment") {
 		in.Notes = ""
 		in.Score = nil
 	}
@@ -505,21 +502,22 @@ func (a *App) reviewApplication(w http.ResponseWriter, r *http.Request, u User) 
 	if err != nil {
 		return err
 	}
-	if u.Role != "admin" && (u.Role != "interviewer" || item.InterviewerID != u.ID) {
+	if item.UserID == u.ID && u.Role != "admin" {
+		return fail(403, "组管理员不能审核自己的报名")
+	}
+	if !hasPermission(u, item.Direction, "recruitment") {
 		return fail(403, "没有评价该候选人的权限")
 	}
 	var in struct {
-		Status        *string  `json:"status"`
-		InterviewAt   *string  `json:"interviewAt"`
-		InterviewerID *string  `json:"interviewerId"`
-		Score         *float64 `json:"score"`
-		Notes         *string  `json:"notes"`
+		Status         *string  `json:"status"`
+		InterviewAt    *string  `json:"interviewAt"`
+		InterviewerID  *string  `json:"interviewerId"`
+		Score          *float64 `json:"score"`
+		Notes          *string  `json:"notes"`
+		ReopenTraining bool     `json:"reopenTraining"`
 	}
 	if err = decode(r, &in); err != nil {
 		return err
-	}
-	if u.Role != "admin" && (in.Status != nil || in.InterviewAt != nil || in.InterviewerID != nil) {
-		return fail(403, "面试官只能填写评分与评语")
 	}
 	if in.Status != nil {
 		switch *in.Status {
@@ -538,7 +536,7 @@ func (a *App) reviewApplication(w http.ResponseWriter, r *http.Request, u User) 
 	if in.InterviewerID != nil {
 		if *in.InterviewerID != "" {
 			interviewer, e := a.store.user(*in.InterviewerID)
-			if e != nil || (interviewer.Role != "interviewer" && interviewer.Role != "admin") {
+			if e != nil || !hasPermission(interviewer, item.Direction, "recruitment") {
 				return fail(400, "请选择有效的面试官或管理员")
 			}
 		}
@@ -564,7 +562,7 @@ func (a *App) reviewApplication(w http.ResponseWriter, r *http.Request, u User) 
 	if item.Status == "accepted" {
 		owner.Team = item.Team
 		owner.Direction = item.Direction
-	} else {
+	} else if owner.MemberType == "freshman" {
 		owner.Team = ""
 		owner.Direction = ""
 	}
@@ -573,6 +571,12 @@ func (a *App) reviewApplication(w http.ResponseWriter, r *http.Request, u User) 
 		return err
 	}
 	defer tx.Rollback()
+	s := &Store{db: a.store.db, postgres: a.store.postgres, tx: tx}
+	if item.Status == "accepted" {
+		if err = admitTraining(s, u, item.UserID, "", item.Direction, in.ReopenTraining); err != nil {
+			return err
+		}
+	}
 	if _, err = tx.Exec(a.store.q("UPDATE applicants SET payload=? WHERE id=?"), encoded(item), item.ID); err != nil {
 		return err
 	}
@@ -610,7 +614,12 @@ func (a *App) memberList() ([]User, error) {
 	}
 	items := []User{}
 	for _, u := range users {
-		if isStaff(u) || admitted[u.ID] {
+		if eliminated, err := trainingEliminated(a.store, u); err != nil {
+			return nil, err
+		} else if eliminated {
+			continue
+		}
+		if isStaff(u) || u.MemberType != "freshman" || admitted[u.ID] {
 			items = append(items, u)
 		}
 	}
@@ -618,10 +627,13 @@ func (a *App) memberList() ([]User, error) {
 	return items, nil
 }
 func (a *App) members(w http.ResponseWriter, r *http.Request, u User) error {
-	if !isStaff(u) {
-		return fail(403, "仅工作人员可查看成员列表")
+	if !hasAnyPermission(u, "members") {
+		return fail(403, "没有成员管理权限")
 	}
 	items, err := a.memberList()
+	if u.Role == "admin" {
+		items, err = readAll[User](a.store, "SELECT payload FROM users")
+	}
 	if err != nil {
 		return err
 	}
@@ -650,9 +662,16 @@ func (a *App) members(w http.ResponseWriter, r *http.Request, u User) error {
 	}
 	result := []memberEntry{}
 	for _, member := range items {
+		allowed, e := a.recipientAllowed(u, member.ID, "members")
+		if e != nil {
+			return e
+		}
+		if !allowed {
+			continue
+		}
 		entry := memberEntry{User: member, Teams: []memberTeam{}}
 		for _, membership := range memberships {
-			if membership.UserID == member.ID {
+			if membership.UserID == member.ID && (u.Role == "admin" || hasPermission(u, membership.Direction, "members")) {
 				team := teamMap[membership.TeamID]
 				normalizeTeam(&team)
 				entry.Teams = append(entry.Teams, memberTeam{team.ID, team.Name, team.Competition, team.Competitions, membership.Direction})
@@ -744,18 +763,12 @@ func (a *App) updateSettings(w http.ResponseWriter, r *http.Request, u User) err
 	respond(w, 200, map[string]any{"settings": s})
 	return nil
 }
-func taskVisible(t Task, u User) bool {
-	if isStaff(u) {
-		return true
-	}
-	return (t.Team == "" || u.Team == "" || sameCompetition(t.Team, u.Team)) && (t.Direction == "" || u.Direction == "" || t.Direction == u.Direction)
-}
 func (a *App) tasksFor(u User) ([]Task, error) {
 	allowed, err := a.learningAllowed(u)
 	if err != nil {
 		return nil, err
 	}
-	if !allowed {
+	if !allowed && !hasAnyPermission(u, "tasks") {
 		return []Task{}, nil
 	}
 	tasks, err := readAll[Task](a.store, "SELECT payload FROM tasks")
@@ -800,7 +813,7 @@ func (a *App) tasksFor(u User) ([]Task, error) {
 				continue
 			}
 			if !seen[s.UserID] {
-				if isStaff(u) {
+				if hasPermission(u, t.Direction, "tasks") {
 					t.SubmissionCount++
 				}
 				seen[s.UserID] = true
@@ -810,6 +823,7 @@ func (a *App) tasksFor(u User) ([]Task, error) {
 				t.MySubmission = &copy
 			}
 		}
+		t.CanSubmit = a.requireTaskSubmission(t, u) == nil
 		result = append(result, publicTask(t, u))
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt > result[j].CreatedAt })
@@ -841,8 +855,8 @@ func (a *App) listTasks(w http.ResponseWriter, r *http.Request, u User) error {
 	return nil
 }
 func (a *App) createTask(w http.ResponseWriter, r *http.Request, u User) error {
-	if !canManage(u) {
-		return fail(403, "只有管理员或导师可发布任务")
+	if !hasAnyPermission(u, "tasks") {
+		return fail(403, "没有任务管理权限")
 	}
 	var t Task
 	if err := decode(r, &t); err != nil {
@@ -863,6 +877,9 @@ func (a *App) createTask(w http.ResponseWriter, r *http.Request, u User) error {
 	default:
 		return fail(400, "无效的任务难度")
 	}
+	if err := requirePermission(u, t.Direction, "tasks"); err != nil {
+		return err
+	}
 	if err := a.validateTaskPlatform(&t, u); err != nil {
 		return err
 	}
@@ -880,9 +897,6 @@ func (a *App) createTask(w http.ResponseWriter, r *http.Request, u User) error {
 	return nil
 }
 func (a *App) listSubmissions(w http.ResponseWriter, r *http.Request, u User) error {
-	if u.Role == "interviewer" {
-		return fail(403, "面试官没有作业评阅权限")
-	}
 	task, err := a.store.task(r.PathValue("id"))
 	if err != nil {
 		return err
@@ -898,7 +912,7 @@ func (a *App) listSubmissions(w http.ResponseWriter, r *http.Request, u User) er
 	if err != nil {
 		return err
 	}
-	if u.Role == "student" {
+	if !hasPermission(u, task.Direction, "tasks") {
 		filtered := []Submission{}
 		for _, s := range items {
 			if s.UserID == u.ID {
@@ -911,9 +925,6 @@ func (a *App) listSubmissions(w http.ResponseWriter, r *http.Request, u User) er
 	return nil
 }
 func (a *App) submitTask(w http.ResponseWriter, r *http.Request, u User) error {
-	if u.Role != "student" {
-		return fail(403, "只有录取成员可提交任务")
-	}
 	t, err := a.store.task(r.PathValue("id"))
 	if err != nil {
 		return err
@@ -954,8 +965,8 @@ func (a *App) submitTask(w http.ResponseWriter, r *http.Request, u User) error {
 	return nil
 }
 func (a *App) reviewSubmission(w http.ResponseWriter, r *http.Request, u User) error {
-	if !canManage(u) {
-		return fail(403, "只有管理员或导师可审核任务")
+	if !hasAnyPermission(u, "tasks") {
+		return fail(403, "没有任务评阅权限")
 	}
 	s, err := readOne[Submission](a.store, "SELECT payload FROM submissions WHERE id=?", r.PathValue("id"))
 	if err != nil {
@@ -964,6 +975,12 @@ func (a *App) reviewSubmission(w http.ResponseWriter, r *http.Request, u User) e
 	t, err := a.store.task(s.TaskID)
 	if err != nil {
 		return err
+	}
+	if err = requirePermission(u, t.Direction, "tasks"); err != nil {
+		return err
+	}
+	if u.Role != "admin" && s.UserID == u.ID {
+		return fail(403, "不能评阅本人提交的成果")
 	}
 	var latest int
 	if err = a.store.row("SELECT MAX(version) FROM submissions WHERE task_id=? AND user_id=?", s.TaskID, s.UserID).Scan(&latest); err != nil {
@@ -1015,6 +1032,10 @@ func (a *App) dashboard(w http.ResponseWriter, r *http.Request, u User) error {
 	if err != nil {
 		return err
 	}
+	visibleTasks := map[string]Task{}
+	for _, task := range tasks {
+		visibleTasks[task.ID] = task
+	}
 	pending := 0
 	seen := map[string]bool{}
 	for _, s := range subs {
@@ -1023,12 +1044,9 @@ func (a *App) dashboard(w http.ResponseWriter, r *http.Request, u User) error {
 			continue
 		}
 		seen[key] = true
-		if (u.Role != "student" || s.UserID == u.ID) && s.Status == "pending" {
+		if task, ok := visibleTasks[s.TaskID]; ok && (hasPermission(u, task.Direction, "tasks") || s.UserID == u.ID) && s.Status == "pending" {
 			pending++
 		}
-	}
-	if u.Role == "interviewer" {
-		pending = 0
 	}
 	active := 0
 	for _, t := range tasks {
@@ -1036,15 +1054,17 @@ func (a *App) dashboard(w http.ResponseWriter, r *http.Request, u User) error {
 			active++
 		}
 	}
-	memberCount := len(members)
-	if u.Role == "student" {
-		memberCount = 0
-		for _, m := range members {
-			if m.ID == u.ID {
-				memberCount = 1
-			}
+	memberCount := 0
+	for _, m := range members {
+		allowed, e := a.recipientAllowed(u, m.ID, "members")
+		if e != nil {
+			return e
+		}
+		if allowed || m.ID == u.ID {
+			memberCount++
 		}
 	}
+
 	labels := []struct {
 		Status string
 		Label  string
@@ -1071,7 +1091,7 @@ func (a *App) dashboard(w http.ResponseWriter, r *http.Request, u User) error {
 	}
 	q := "SELECT payload FROM activities"
 	var args []any
-	if u.Role == "student" || u.Role == "interviewer" {
+	if u.Role != "admin" {
 		q += " WHERE user_id=?"
 		args = append(args, u.ID)
 	}
@@ -1128,23 +1148,45 @@ func main() {
 
 func (a *App) createMember(w http.ResponseWriter, r *http.Request, u User) error {
 	if u.Role != "admin" {
-		return fail(403, "只有管理员可创建工作人员账号")
+		return fail(403, "只有管理员可创建成员账号")
 	}
 	var in struct {
-		Name      string `json:"name"`
-		Email     string `json:"email"`
-		Password  string `json:"password"`
-		Role      string `json:"role"`
-		Team      string `json:"team"`
-		Direction string `json:"direction"`
+		Name        string       `json:"name"`
+		Email       string       `json:"email"`
+		Password    string       `json:"password"`
+		Role        string       `json:"role"`
+		MemberType  string       `json:"memberType"`
+		GroupGrants []GroupGrant `json:"groupGrants"`
+		Team        string       `json:"team"`
+		Direction   string       `json:"direction"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
 	email, valid := normalizedEmail(in.Email)
 	in.Name = strings.TrimSpace(in.Name)
-	if !valid || in.Name == "" || len(in.Name) > 100 || len(in.Password) < 12 || len(in.Password) > 72 || (in.Role != "mentor" && in.Role != "interviewer") || (in.Team != "" && !validTeam(in.Team)) || (in.Direction != "" && !validDirection(in.Direction)) {
-		return fail(400, "请填写有效的姓名、邮箱、角色与 12–72 字节密码")
+	if !valid || in.Name == "" || len(in.Name) > 100 || len(in.Password) < 12 || len(in.Password) > 72 || in.Team != "" && !validTeam(in.Team) {
+		return fail(400, "请填写有效的姓名、邮箱与 12–72 字节密码")
+	}
+	if in.Role == "" {
+		in.Role = "freshman"
+	}
+	if !slices.Contains([]string{"admin", "group_admin", "member", "reserve", "freshman"}, in.Role) {
+		return fail(400, "无效的账号角色")
+	}
+	member := User{Role: in.Role, MemberType: in.MemberType, GroupGrants: in.GroupGrants, Direction: in.Direction}
+	if member.MemberType == "" {
+		switch member.Role {
+		case "admin", "group_admin", "member":
+			member.MemberType = "formal"
+		case "reserve":
+			member.MemberType = "reserve"
+		default:
+			member.MemberType = "freshman"
+		}
+	}
+	if err := validateUserAccess(&member); err != nil {
+		return err
 	}
 	var count int
 	if err := a.store.row("SELECT COUNT(*) FROM users WHERE email=?", email).Scan(&count); err != nil {
@@ -1153,11 +1195,16 @@ func (a *App) createMember(w http.ResponseWriter, r *http.Request, u User) error
 	if count > 0 {
 		return fail(409, "该邮箱已注册")
 	}
-	member, err := createUser(a.store, in.Name, email, in.Password, in.Role, in.Team, in.Direction)
+	created, err := createUser(a.store, in.Name, email, in.Password, member.Role, in.Team, in.Direction)
 	if err != nil {
 		return err
 	}
-	a.activity(u, "创建工作人员账号", member.Name)
-	respond(w, 201, map[string]any{"item": member})
+	created.MemberType = member.MemberType
+	created.GroupGrants = member.GroupGrants
+	if err = a.store.exec("UPDATE users SET payload=? WHERE id=?", encoded(created), created.ID); err != nil {
+		return err
+	}
+	a.activity(u, "创建成员账号", created.Name)
+	respond(w, 201, map[string]any{"item": created})
 	return nil
 }

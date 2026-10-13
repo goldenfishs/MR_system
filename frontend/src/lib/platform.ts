@@ -54,6 +54,9 @@ export interface TeamApplication {
   createdAt: string;
   updatedAt: string;
   profile?: Profile;
+  trainingStatus?: "training" | "completed" | "eliminated";
+  trainingStageTitle?: string;
+  trainingCycle?: number;
 }
 export interface Membership {
   teamId: string;

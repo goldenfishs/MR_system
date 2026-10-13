@@ -86,6 +86,10 @@ func openStore(databaseURL, dataDir string) (*Store, error) {
 		`CREATE TABLE IF NOT EXISTS discussions (id TEXT PRIMARY KEY, created_by TEXT NOT NULL REFERENCES users(id), payload TEXT NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS discussions_author ON discussions(created_by)`,
 		`INSERT INTO schema_migrations(version,applied_at) VALUES (4, CURRENT_TIMESTAMP) ON CONFLICT(version) DO NOTHING`,
+		`CREATE TABLE IF NOT EXISTS training_plans (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, direction TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(team_id,direction))`,
+		`CREATE TABLE IF NOT EXISTS training_progress (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), team_id TEXT NOT NULL, direction TEXT NOT NULL, cycle INTEGER NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(user_id,cycle))`,
+		`CREATE INDEX IF NOT EXISTS training_scope ON training_progress(direction,status)`,
+		`INSERT INTO schema_migrations(version,applied_at) VALUES (6, CURRENT_TIMESTAMP) ON CONFLICT(version) DO NOTHING`,
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -143,6 +147,9 @@ func readOne[T any](s *Store, q string, args ...any) (T, error) {
 		return out, err
 	}
 	err = json.Unmarshal([]byte(raw), &out)
+	if u, ok := any(&out).(*User); ok && err == nil {
+		normalizeUser(u)
+	}
 	return out, err
 }
 func readAll[T any](s *Store, q string, args ...any) ([]T, error) {
@@ -166,6 +173,9 @@ func readAll[T any](s *Store, q string, args ...any) ([]T, error) {
 		}
 		if err = json.Unmarshal([]byte(raw), &item); err != nil {
 			return nil, err
+		}
+		if u, ok := any(&item).(*User); ok {
+			normalizeUser(u)
 		}
 		out = append(out, item)
 	}

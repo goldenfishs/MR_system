@@ -102,7 +102,7 @@ func TestRegistrationCannotEscalate(t *testing.T) {
 	c.request("POST", "/api/auth/register", map[string]string{"name": "新人", "email": "new@example.com", "password": "LongPassword!123", "role": "admin"}, 400)
 	result := c.register("新人", "new@example.com", "LongPassword!123")
 	u := unmarshal[User](t, result["user"])
-	if u.Role != "student" {
+	if u.Role != "freshman" {
 		t.Fatal("registration elevated role")
 	}
 	c.request("PATCH", "/api/settings", map[string]bool{"applicationOpen": false}, 403)
@@ -123,11 +123,11 @@ func TestApplicantPrivacyAndAssignment(t *testing.T) {
 	c.request("PATCH", "/api/applicants/"+id, map[string]string{"status": "accepted"}, 403)
 	c.login("interviewer")
 	assigned := unmarshal[[]Applicant](t, c.request("GET", "/api/applicants", nil, 200)["items"])
-	if len(assigned) != 2 {
-		t.Fatalf("expected 2 assigned applicants, got %d", len(assigned))
+	if len(assigned) != 3 {
+		t.Fatalf("expected 3 mechanical applicants, got %d", len(assigned))
 	}
 	c.request("PATCH", "/api/applicants/"+id, map[string]int{"score": 99}, 403)
-	c.request("PATCH", "/api/applicants/"+assigned[0].ID, map[string]string{"status": "accepted"}, 403)
+	c.request("PATCH", "/api/applicants/"+assigned[0].ID, map[string]string{"status": "accepted"}, 200)
 	c.request("PATCH", "/api/applicants/"+assigned[0].ID, map[string]any{"score": 89, "notes": "表达清晰"}, 200)
 	c.request("PATCH", "/api/applicants/"+assigned[0].ID, map[string]int{"score": 101}, 400)
 }
@@ -158,7 +158,7 @@ func TestSubmissionVersionsAndGrading(t *testing.T) {
 	tasks := unmarshal[[]Task](t, c.request("GET", "/api/tasks", nil, 200)["items"])
 	var task Task
 	for _, v := range tasks {
-		if v.Kind == "code" {
+		if v.Kind == "code" && v.Direction == "电控" {
 			task = v
 		}
 	}
@@ -298,12 +298,12 @@ func TestAdminCreatesStaffAndAdmitsExistingIdentity(t *testing.T) {
 	c.login("student")
 	c.request("POST", "/api/members", map[string]string{"name": "导师", "email": "teacher@example.com", "password": "StaffPassword!123", "role": "mentor"}, 403)
 	c.login("admin")
-	c.request("POST", "/api/members", map[string]string{"name": "导师", "email": "teacher@example.com", "password": "StaffPassword!123", "role": "admin"}, 400)
-	created := unmarshal[User](t, c.request("POST", "/api/members", map[string]string{"name": "导师", "email": "teacher@example.com", "password": "StaffPassword!123", "role": "mentor", "team": "ROBOCON", "direction": "机械"}, 201)["item"])
-	if created.Role != "mentor" {
+	c.request("POST", "/api/members", map[string]string{"name": "导师", "email": "teacher@example.com", "password": "StaffPassword!123", "role": "invalid"}, 400)
+	created := unmarshal[User](t, c.request("POST", "/api/members", map[string]any{"name": "导师", "email": "teacher@example.com", "password": "StaffPassword!123", "role": "group_admin", "team": "ROBOCON", "direction": "机械", "groupGrants": []GroupGrant{{"机械", []string{"members"}}}}, 201)["item"])
+	if created.Role != "group_admin" {
 		t.Fatal("wrong staff role")
 	}
-	c.request("POST", "/api/members", map[string]string{"name": "导师", "email": "teacher@example.com", "password": "StaffPassword!123", "role": "mentor"}, 409)
+	c.request("POST", "/api/members", map[string]string{"name": "导师", "email": "teacher@example.com", "password": "StaffPassword!123", "role": "group_admin"}, 409)
 	list := unmarshal[[]Applicant](t, c.request("GET", "/api/applicants", nil, 200)["items"])
 	var ap Applicant
 	for _, v := range list {

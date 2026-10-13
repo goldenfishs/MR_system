@@ -54,7 +54,7 @@ func normalizeTask(t *Task) {
 	t.Tags = normalizedIDs(t.Tags)
 }
 func taskLocked(t Task, u User) bool {
-	if canManage(u) || t.StartsAt == "" {
+	if hasPermission(u, t.Direction, "tasks") || t.StartsAt == "" {
 		return false
 	}
 	start, err := time.Parse(time.RFC3339, t.StartsAt)
@@ -78,29 +78,11 @@ func (a *App) registerLearningRoutes(m *http.ServeMux) {
 // Resolve access from current enrollment records. Profile direction and cached
 // login data are not proof of admission, and revocation takes effect immediately.
 func (a *App) learningAllowed(u User) (bool, error) {
-	if canManage(u) || u.Role == "interviewer" {
+	if u.Role == "admin" || u.MemberType == "formal" || u.MemberType == "reserve" {
 		return true, nil
 	}
-	if u.Role != "student" {
-		return false, nil
-	}
-	var memberships int
-	if err := a.store.row("SELECT COUNT(*) FROM team_memberships WHERE user_id=?", u.ID).Scan(&memberships); err != nil {
-		return false, err
-	}
-	if memberships > 0 {
-		return true, nil
-	}
-	applicants, err := readAll[Applicant](a.store, "SELECT payload FROM applicants WHERE user_id=?", u.ID)
-	if err != nil {
-		return false, err
-	}
-	for _, applicant := range applicants {
-		if applicant.Status == "accepted" {
-			return true, nil
-		}
-	}
-	return false, nil
+	dirs, err := a.memberDirections(u.ID)
+	return len(dirs) > 0, err
 }
 
 func (a *App) requireLearningAccess(u User) error {
@@ -119,13 +101,21 @@ func (a *App) getLearningAccess(w http.ResponseWriter, _ *http.Request, u User) 
 	if err != nil {
 		return err
 	}
-	respond(w, http.StatusOK, map[string]any{"allowed": allowed})
+	directions := []string{}
+	if allowed {
+		directions = append(directions, technicalDirections...)
+	}
+	respond(w, http.StatusOK, map[string]any{"allowed": allowed, "directions": directions})
 	return nil
 }
 
 func (a *App) listKnowledge(w http.ResponseWriter, r *http.Request, u User) error {
-	if err := a.requireLearningAccess(u); err != nil {
+	allowed, err := a.learningAllowed(u)
+	if err != nil {
 		return err
+	}
+	if !allowed && !hasAnyPermission(u, "knowledge") {
+		return fail(403, "报名审核通过后才可访问技术分组")
 	}
 	items, err := readAll[KnowledgeResource](a.store, "SELECT payload FROM knowledge_resources")
 	if err != nil {
@@ -133,6 +123,9 @@ func (a *App) listKnowledge(w http.ResponseWriter, r *http.Request, u User) erro
 	}
 	result := []KnowledgeResource{}
 	for _, item := range items {
+		if !allowed && !hasPermission(u, item.Direction, "knowledge") {
+			continue
+		}
 		if direction := r.URL.Query().Get("direction"); direction != "" && item.Direction != "" && item.Direction != direction {
 			continue
 		}
@@ -145,7 +138,10 @@ func (a *App) listKnowledge(w http.ResponseWriter, r *http.Request, u User) erro
 	respond(w, 200, map[string]any{"resources": result})
 	return nil
 }
-func (a *App) validateKnowledge(item *KnowledgeResource, u User) error {
+func (a *App) validateKnowledge(item *KnowledgeResource, u User, existing ...[]string) error {
+	if err := requirePermission(u, item.Direction, "knowledge"); err != nil {
+		return err
+	}
 	item.Title = strings.TrimSpace(item.Title)
 	item.Description = strings.TrimSpace(item.Description)
 	item.URL = strings.TrimSpace(item.URL)
@@ -159,7 +155,11 @@ func (a *App) validateKnowledge(item *KnowledgeResource, u User) error {
 		return fail(400, "请至少上传一个资料文件或填写资料链接，最多 20 个附件")
 	}
 	item.FileIDs = normalizedIDs(item.FileIDs)
-	if err := requireOwnedFiles(a.store, u, item.FileIDs); err != nil {
+	previous := []string{}
+	if len(existing) > 0 {
+		previous = existing[0]
+	}
+	if err := requireUpdatedFiles(a.store, u, item.FileIDs, previous); err != nil {
 		return err
 	}
 	if item.Kind == "pdf" {
@@ -176,7 +176,7 @@ func (a *App) validateKnowledge(item *KnowledgeResource, u User) error {
 	return nil
 }
 func (a *App) createKnowledge(w http.ResponseWriter, r *http.Request, u User) error {
-	if !canManage(u) {
+	if !hasAnyPermission(u, "knowledge") {
 		return fail(403, "只有管理员或导师可发布知识库资料")
 	}
 	var in KnowledgeResource
@@ -195,16 +195,17 @@ func (a *App) createKnowledge(w http.ResponseWriter, r *http.Request, u User) er
 	return nil
 }
 func (a *App) updateKnowledge(w http.ResponseWriter, r *http.Request, u User) error {
-	if !canManage(u) {
+	if !hasAnyPermission(u, "knowledge") {
 		return fail(403, "只有管理员或导师可维护知识库")
 	}
 	item, err := readOne[KnowledgeResource](a.store, "SELECT payload FROM knowledge_resources WHERE id=?", r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	if u.Role != "admin" && item.CreatedBy != u.ID {
-		return fail(403, "只能编辑自己发布的资料")
+	if err = requirePermission(u, item.Direction, "knowledge"); err != nil {
+		return err
 	}
+	previousFiles := append([]string{}, item.FileIDs...)
 	var in struct {
 		Title       *string   `json:"title"`
 		Description *string   `json:"description"`
@@ -234,7 +235,7 @@ func (a *App) updateKnowledge(w http.ResponseWriter, r *http.Request, u User) er
 	if in.URL != nil {
 		item.URL = *in.URL
 	}
-	if err = a.validateKnowledge(&item, u); err != nil {
+	if err = a.validateKnowledge(&item, u, previousFiles); err != nil {
 		return err
 	}
 	item.UpdatedAt = now()
@@ -245,15 +246,15 @@ func (a *App) updateKnowledge(w http.ResponseWriter, r *http.Request, u User) er
 	return nil
 }
 func (a *App) deleteKnowledge(w http.ResponseWriter, r *http.Request, u User) error {
-	if !canManage(u) {
+	if !hasAnyPermission(u, "knowledge") {
 		return fail(403, "只有管理员或导师可维护知识库")
 	}
 	item, err := readOne[KnowledgeResource](a.store, "SELECT payload FROM knowledge_resources WHERE id=?", r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	if u.Role != "admin" && item.CreatedBy != u.ID {
-		return fail(403, "只能删除自己发布的资料")
+	if err = requirePermission(u, item.Direction, "knowledge"); err != nil {
+		return err
 	}
 	if err = a.store.exec("DELETE FROM knowledge_resources WHERE id=?", item.ID); err != nil {
 		return err
@@ -263,7 +264,7 @@ func (a *App) deleteKnowledge(w http.ResponseWriter, r *http.Request, u User) er
 }
 func (a *App) knowledgeFileAccess(u User, fileID string) (bool, error) {
 	allowed, err := a.learningAllowed(u)
-	if err != nil || !allowed {
+	if err != nil {
 		return false, err
 	}
 	items, err := readAll[KnowledgeResource](a.store, "SELECT payload FROM knowledge_resources")
@@ -271,14 +272,14 @@ func (a *App) knowledgeFileAccess(u User, fileID string) (bool, error) {
 		return false, err
 	}
 	for _, item := range items {
-		if includesID(item.FileIDs, fileID) {
+		if includesID(item.FileIDs, fileID) && (allowed || hasPermission(u, item.Direction, "knowledge")) {
 			return true, nil
 		}
 	}
 	return false, nil
 }
 func discussionVisible(d Discussion, u User) bool {
-	return d.Published || d.CreatedBy == u.ID || canManage(u)
+	return d.Published || d.CreatedBy == u.ID || hasPermission(u, d.Direction, "discussions")
 }
 func (a *App) listDiscussions(w http.ResponseWriter, r *http.Request, u User) error {
 	items, err := readAll[Discussion](a.store, "SELECT payload FROM discussions")
@@ -338,7 +339,7 @@ func (a *App) replyDiscussion(w http.ResponseWriter, r *http.Request, u User) er
 		return fail(404, "问题不存在")
 	}
 	// Curated public answers stay read-only to peers; authors and mentors can clarify.
-	if item.CreatedBy != u.ID && !canManage(u) {
+	if item.CreatedBy != u.ID && !hasPermission(u, item.Direction, "discussions") {
 		return fail(403, "仅提问者、导师和管理员可补充答复")
 	}
 	if item.Published {
@@ -366,11 +367,14 @@ func (a *App) replyDiscussion(w http.ResponseWriter, r *http.Request, u User) er
 	return nil
 }
 func (a *App) updateDiscussion(w http.ResponseWriter, r *http.Request, u User) error {
-	if !canManage(u) {
-		return fail(403, "只有管理员或导师可处理问题")
+	if !hasAnyPermission(u, "discussions") {
+		return fail(403, "没有讨论管理权限")
 	}
 	item, err := readOne[Discussion](a.store, "SELECT payload FROM discussions WHERE id=?", r.PathValue("id"))
 	if err != nil {
+		return err
+	}
+	if err = requirePermission(u, item.Direction, "discussions"); err != nil {
 		return err
 	}
 	var in struct {
@@ -387,7 +391,7 @@ func (a *App) updateDiscussion(w http.ResponseWriter, r *http.Request, u User) e
 		if *in.Status == "resolved" && len(item.Replies) == 0 {
 			return fail(409, "请先答复问题，再标记为已解决")
 		}
-		if item.Published && *in.Status != "resolved" && u.Role != "admin" {
+		if item.Published && *in.Status != "resolved" && !hasPermission(u, item.Direction, "discussions") {
 			return fail(403, "请由管理员取消公开后再重新处理问题")
 		}
 		item.Status = *in.Status
@@ -396,8 +400,8 @@ func (a *App) updateDiscussion(w http.ResponseWriter, r *http.Request, u User) e
 		}
 	}
 	if in.Published != nil {
-		if u.Role != "admin" {
-			return fail(403, "只有管理员可公开精选问答")
+		if !hasPermission(u, item.Direction, "discussions") {
+			return fail(403, "没有公开精选问答权限")
 		}
 		if *in.Published && item.Status != "resolved" {
 			return fail(409, "只能公开已解答的问题")
@@ -413,16 +417,17 @@ func (a *App) updateDiscussion(w http.ResponseWriter, r *http.Request, u User) e
 }
 
 func (a *App) updateTask(w http.ResponseWriter, r *http.Request, u User) error {
-	if !canManage(u) {
+	if !hasAnyPermission(u, "tasks") {
 		return fail(403, "只有管理员或导师可修改任务")
 	}
 	task, err := a.store.task(r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	if u.Role != "admin" && task.CreatedBy != u.ID {
-		return fail(403, "只能编辑自己发布的任务")
+	if err = requirePermission(u, task.Direction, "tasks"); err != nil {
+		return err
 	}
+	previousFiles := append([]string{}, task.FileIDs...)
 	var in struct {
 		Title          *string         `json:"title"`
 		Description    *string         `json:"description"`
@@ -522,7 +527,7 @@ func (a *App) updateTask(w http.ResponseWriter, r *http.Request, u User) error {
 	if task.Difficulty != "入门" && task.Difficulty != "进阶" && task.Difficulty != "挑战" {
 		return fail(400, "无效的任务难度")
 	}
-	if err = a.validateTaskPlatform(&task, u); err != nil {
+	if err = a.validateTaskPlatform(&task, u, previousFiles); err != nil {
 		return err
 	}
 	if err = a.store.exec("UPDATE tasks SET payload=? WHERE id=?", encoded(task), task.ID); err != nil {
@@ -532,15 +537,15 @@ func (a *App) updateTask(w http.ResponseWriter, r *http.Request, u User) error {
 	return nil
 }
 func (a *App) deleteTask(w http.ResponseWriter, r *http.Request, u User) error {
-	if !canManage(u) {
+	if !hasAnyPermission(u, "tasks") {
 		return fail(403, "只有管理员或导师可删除任务")
 	}
 	task, err := a.store.task(r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	if u.Role != "admin" && task.CreatedBy != u.ID {
-		return fail(403, "只能删除自己发布的任务")
+	if err = requirePermission(u, task.Direction, "tasks"); err != nil {
+		return err
 	}
 	var count int
 	if err = a.store.row("SELECT (SELECT COUNT(*) FROM submissions WHERE task_id=?) + (SELECT COUNT(*) FROM judge_runs WHERE task_id=?)", task.ID, task.ID).Scan(&count); err != nil {
