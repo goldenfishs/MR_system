@@ -89,10 +89,9 @@ onMounted(load);
           <v-icon size="28">mdi-account-group-outline</v-icon>
         </div>
         <div>
-          <h2>每一位成员，都是不可替代的拼图</h2>
+          <h2>成员名册</h2>
           <p>已录取学员与团队工作人员，共 {{ members.length }} 人</p>
         </div>
-        <span class="eyebrow d-none d-md-block">BUILD WITH YOUR TEAM</span>
       </div></v-card
     >
     <div class="filters">
@@ -229,9 +228,9 @@ onMounted(load);
 .intro-icon {
   width: 55px;
   height: 55px;
-  border-radius: 15px;
+  border-radius: 50%;
   background: #edf2fa;
-  color: #7e92bd;
+  color: #1976d2;
   display: grid;
   place-items: center;
 }
@@ -242,7 +241,7 @@ onMounted(load);
 .member-intro p {
   font-size: 12px;
   margin: 0;
-  color: #99a2b4;
+  color: #757575;
 }
 .member-intro .eyebrow {
   font-size: 8px;
@@ -272,31 +271,31 @@ onMounted(load);
   width: 49px;
   height: 49px;
   background: #edf0fb;
-  border-radius: 15px;
-  color: #7c89b9;
+  border-radius: 50%;
+  color: #1976d2;
   font-size: 17px;
   display: grid;
   place-items: center;
 }
 .member-avatar.green {
   background: #eaf5ef;
-  color: #78a18e;
+  color: #388e3c;
 }
 .member-card h3 {
   margin: 18px 0 7px;
   font-size: 17px;
 }
 .member-email {
-  font-size: 11px;
-  color: #97a1b5;
+  font-size: 12px;
+  color: #757575;
   word-break: break-all;
 }
 .joined {
   border-top: 1px solid #eef0f6;
   margin-top: 20px;
   padding-top: 16px;
-  font-size: 10px;
-  color: #a4aec1;
+  font-size: 12px;
+  color: #757575;
   display: flex;
   align-items: center;
   gap: 7px;

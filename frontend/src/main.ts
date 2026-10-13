@@ -9,6 +9,7 @@ import "./style.css";
 import App from "./App.vue";
 import router from "./router";
 const vuetify = createVuetify({
+  display: { mobileBreakpoint: 960 },
   components,
   directives,
   locale: { locale: "zhHans", messages: { zhHans } },
@@ -18,13 +19,13 @@ const vuetify = createVuetify({
       team: {
         dark: false,
         colors: {
-          primary: "#4959bd",
-          secondary: "#277e70",
-          success: "#268570",
-          warning: "#c38736",
-          error: "#cf5a61",
-          info: "#526db7",
-          background: "#f5f6fa",
+          primary: "#1976d2",
+          secondary: "#7b1fa2",
+          success: "#43a047",
+          warning: "#f39c28",
+          error: "#e53935",
+          info: "#2196f3",
+          background: "#f5f5f5",
           surface: "#ffffff",
         },
       },
@@ -33,18 +34,22 @@ const vuetify = createVuetify({
   defaults: {
     VBtn: {
       elevation: 0,
-      rounded: "lg",
+      rounded: "sm",
       style: "text-transform:none;letter-spacing:0",
     },
-    VCard: { elevation: 0, rounded: "xl", border: true },
+    VCard: { elevation: 1, rounded: "sm", border: true },
     VTextField: {
-      variant: "outlined",
+      variant: "underlined",
       density: "comfortable",
       color: "primary",
     },
-    VSelect: { variant: "outlined", density: "comfortable", color: "primary" },
-    VTextarea: { variant: "outlined", color: "primary" },
-    VChip: { rounded: "lg", size: "small" },
+    VSelect: {
+      variant: "underlined",
+      density: "comfortable",
+      color: "primary",
+    },
+    VTextarea: { variant: "underlined", color: "primary" },
+    VChip: { rounded: true, size: "small" },
   },
 });
 createApp(App).use(router).use(vuetify).mount("#app");

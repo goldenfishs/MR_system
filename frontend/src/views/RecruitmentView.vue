@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { useDisplay } from "vuetify";
 import { api, ApiError } from "../lib/api";
 import { auth } from "../lib/auth";
@@ -8,6 +8,7 @@ import type { Applicant, ApplicantStatus, User, Settings } from "../lib/types";
 
 const { smAndDown } = useDisplay();
 const route = useRoute();
+const router = useRouter();
 const items = ref<Applicant[]>([]);
 const members = ref<User[]>([]);
 const settings = ref<Settings | null>(null);
@@ -16,8 +17,7 @@ const saving = ref(false);
 const error = ref("");
 const notice = ref("");
 const search = ref("");
-const statusFilter = ref("all");
-const directionFilter = ref("全部方向");
+
 const formOpen = ref(false);
 const selected = ref<Applicant | null>(null);
 const decision = ref<"accepted" | "rejected" | null>(null);
@@ -51,17 +51,47 @@ const statuses: { value: ApplicantStatus; label: string; color: string }[] = [
   { value: "accepted", label: "已录取", color: "teal" },
   { value: "rejected", label: "未录取", color: "grey" },
 ];
-watch(
-  () => route.query.status,
-  (status) => {
-    statusFilter.value =
-      typeof status === "string" &&
-      statuses.some((item) => item.value === status)
-        ? status
-        : "all";
-  },
-  { immediate: true },
+const statusFilter = computed(() =>
+  typeof route.query.status === "string" &&
+  statuses.some((item) => item.value === route.query.status)
+    ? route.query.status
+    : "all",
 );
+const directionFilter = computed({
+  get: () =>
+    typeof route.query.direction === "string" &&
+    directions.includes(route.query.direction)
+      ? route.query.direction
+      : "全部方向",
+  set: (value: string) => {
+    router.replace({
+      query: {
+        ...route.query,
+        direction: value === "全部方向" ? undefined : value,
+      },
+    });
+  },
+});
+const teamFilter = computed(() =>
+  typeof route.query.team === "string" &&
+  ["RoboMaster", "ROBOCON"].includes(route.query.team)
+    ? route.query.team
+    : "全部赛队",
+);
+function clearFilters() {
+  search.value = "";
+  router.replace({
+    query: {
+      ...route.query,
+      status: undefined,
+      direction: undefined,
+      team: undefined,
+    },
+  });
+}
+function clearQueryFilter(key: "status" | "team") {
+  router.replace({ query: { ...route.query, [key]: undefined } });
+}
 const isStudent = computed(() => auth.user?.role === "student");
 const isAdmin = computed(() => auth.user?.role === "admin");
 const canReview = computed(
@@ -74,7 +104,7 @@ const own = computed(() => items.value.find((a) => a.userId === auth.user?.id));
 const deadlinePassed = computed(() =>
   Boolean(
     settings.value?.applicationDeadline &&
-      new Date(settings.value.applicationDeadline).getTime() < Date.now(),
+    new Date(settings.value.applicationDeadline).getTime() < Date.now(),
   ),
 );
 const canApply = computed(
@@ -87,6 +117,7 @@ const filtered = computed(() =>
   items.value.filter(
     (a) =>
       (statusFilter.value === "all" || a.status === statusFilter.value) &&
+      (teamFilter.value === "全部赛队" || a.team === teamFilter.value) &&
       (directionFilter.value === "全部方向" ||
         a.direction === directionFilter.value) &&
       `${a.name} ${a.email} ${a.university} ${a.major}`
@@ -94,6 +125,66 @@ const filtered = computed(() =>
         .includes(search.value.toLowerCase()),
   ),
 );
+// Statistics use all visible records for the selected team, independent of
+// list status and search, so the chart scope stays explicit and consistent.
+const chartItems = computed(() =>
+  items.value.filter(
+    (a) => teamFilter.value === "全部赛队" || a.team === teamFilter.value,
+  ),
+);
+const chartScope = computed(() => `${teamFilter.value} · 全部状态与方向`);
+const dailyCounts = computed(() => {
+  const today = new Date();
+  return Array.from({ length: 7 }, (_, index) => {
+    const day = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate() - 6 + index,
+    );
+    const next = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
+    return {
+      label: `${day.getMonth() + 1}/${day.getDate()}`,
+      count: chartItems.value.filter((a) => {
+        const created = new Date(a.createdAt).getTime();
+        return created >= day.getTime() && created < next.getTime();
+      }).length,
+    };
+  });
+});
+const trendMax = computed(() =>
+  Math.max(1, ...dailyCounts.value.map((day) => day.count)),
+);
+const trendPoints = computed(() =>
+  dailyCounts.value.map((day, index) => ({
+    x: 24 + index * 42,
+    y: 116 - (day.count / trendMax.value) * 82,
+    ...day,
+  })),
+);
+const trendLine = computed(() =>
+  trendPoints.value.map((point) => `${point.x},${point.y}`).join(" "),
+);
+const trendLabel = computed(
+  () =>
+    `近七日新增报名，${dailyCounts.value.map((day) => `${day.label}：${day.count} 人`).join("，")}`,
+);
+const directionCounts = computed(() =>
+  directions.map((direction) => ({
+    direction,
+    count: chartItems.value.filter((a) => a.direction === direction).length,
+  })),
+);
+const directionMax = computed(() =>
+  Math.max(1, ...directionCounts.value.map((item) => item.count)),
+);
+const directionLabel = computed(
+  () =>
+    `方向分布，${directionCounts.value.map((item) => `${item.direction}：${item.count} 人`).join("，")}`,
+);
+const avatarColors = ["#1976d2", "#7b1fa2", "#00897b", "#e65100", "#5c6bc0"];
+function avatarColor(applicant: Applicant) {
+  return avatarColors[Math.max(0, directions.indexOf(applicant.direction))];
+}
 const interviewers = computed(() =>
   members.value.filter((u) => ["admin", "interviewer"].includes(u.role)),
 );
@@ -321,15 +412,12 @@ onMounted(load);
   <div class="page-content recruitment-page">
     <div class="page-heading">
       <div>
-        <div class="eyebrow">
-          RECRUITMENT · {{ settings?.season || "新赛季" }}
-        </div>
         <h1>{{ isStudent ? "我的报名" : "招新工作台" }}</h1>
         <p>
           {{
             isStudent
-              ? "从这里开始，把你的热爱变成机器人的下一次突破。"
-              : "把每一次热爱，交给认真而清晰的选拔。"
+              ? "填写报名资料，查看面试安排与选拔结果。"
+              : `${settings?.season || "新赛季"} · 候选人资料与面试管理`
           }}
         </p>
       </div>
@@ -382,18 +470,18 @@ onMounted(load);
       <v-card
         v-if="own"
         class="application-card"
-        rounded="xl"
+        rounded="sm"
         elevation="0"
         border
       >
         <div class="application-banner">
           <div>
-            <span class="eyebrow">{{ own.team }} / {{ own.direction }}</span>
+            <span class="application-meta"
+              >{{ own.team }} · {{ own.direction }}</span
+            >
             <h2>
               {{ own.name }}，{{
-                own.status === "accepted"
-                  ? "欢迎加入战队"
-                  : "你的申请正在这里成长"
+                own.status === "accepted" ? "欢迎加入战队" : "你的报名资料"
               }}
             </h2>
           </div>
@@ -489,7 +577,7 @@ onMounted(load);
       <v-card
         v-else-if="!error"
         class="empty-card"
-        rounded="xl"
+        rounded="sm"
         elevation="0"
         border
         ><div class="empty-icon">
@@ -508,35 +596,21 @@ onMounted(load);
     </template>
 
     <template v-else-if="!loading">
-      <div class="pipeline-grid">
-        <button
-          :class="['pipeline-card', { selected: statusFilter === s.value }]"
-          v-for="s in statuses"
-          :key="s.value"
-          @click="statusFilter = statusFilter === s.value ? 'all' : s.value"
-        >
-          <span><i :class="`status-dot dot-${s.value}`" />{{ s.label }}</span
-          ><strong>{{
-            items.filter((a) => a.status === s.value).length
-          }}</strong
-          ><v-icon size="18">mdi-arrow-top-right</v-icon>
-        </button>
-      </div>
-      <v-card rounded="xl" elevation="0" border class="applicants-card">
-        <div class="table-toolbar">
-          <div>
+      <div class="recruitment-layout">
+        <v-card elevation="0" border class="applicants-card">
+          <div class="list-heading">
             <h2>
-              候选人名单 <span>{{ filtered.length }}</span>
+              候选人名单 <span>{{ filtered.length }} 人</span>
             </h2>
             <p>
               {{
                 auth.user?.role === "interviewer"
                   ? "仅显示分配给你的候选人"
-                  : "根据方向和当前进度找到需要关注的候选人"
+                  : "点击候选人查看报名资料与面试评价"
               }}
             </p>
           </div>
-          <div class="table-filters">
+          <div class="list-filters">
             <v-text-field
               v-model="search"
               placeholder="搜索姓名、学校、邮箱"
@@ -545,7 +619,8 @@ onMounted(load);
               density="compact"
               hide-details
               aria-label="搜索候选人"
-            /><v-select
+            />
+            <v-select
               v-model="directionFilter"
               :items="['全部方向', ...directions]"
               variant="outlined"
@@ -554,93 +629,206 @@ onMounted(load);
               aria-label="筛选方向"
             />
           </div>
-        </div>
-        <v-chip
-          v-if="statusFilter !== 'all'"
-          class="mx-6 mb-4"
-          closable
-          color="primary"
-          size="small"
-          @click:close="statusFilter = 'all'"
-          >{{ statusOf(statusFilter).label }}</v-chip
-        >
-        <v-table hover
-          ><thead>
-            <tr>
-              <th>候选人</th>
-              <th>赛队 / 志愿</th>
-              <th>状态</th>
-              <th>面试安排</th>
-              <th>评分</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="a in filtered" :key="a.id">
-              <td>
-                <div class="person-cell">
-                  <v-avatar color="indigo-lighten-5" size="38"
-                    ><span class="avatar-letter">{{
-                      a.name.slice(0, 1)
-                    }}</span></v-avatar
+          <div
+            v-if="statusFilter !== 'all' || teamFilter !== '全部赛队'"
+            class="active-filters"
+          >
+            <v-chip
+              v-if="teamFilter !== '全部赛队'"
+              size="small"
+              closable
+              color="primary"
+              variant="outlined"
+              @click:close="clearQueryFilter('team')"
+              >{{ teamFilter }}</v-chip
+            >
+            <v-chip
+              v-if="statusFilter !== 'all'"
+              size="small"
+              closable
+              color="primary"
+              variant="outlined"
+              @click:close="clearQueryFilter('status')"
+              >{{ statusOf(statusFilter).label }}</v-chip
+            >
+          </div>
+          <div class="candidate-list" aria-label="候选人名单">
+            <article v-for="a in filtered" :key="a.id" class="candidate-row">
+              <button
+                type="button"
+                class="candidate-person"
+                :aria-label="`查看 ${a.name} 的报名资料`"
+                @click="openDetail(a)"
+              >
+                <span
+                  class="candidate-avatar"
+                  :style="{ backgroundColor: avatarColor(a) }"
+                  >{{ a.name.slice(0, 1) }}</span
+                >
+                <span class="candidate-identity">
+                  <span class="candidate-name"
+                    >{{ a.name }}
+                    <span class="candidate-direction">{{
+                      a.direction
+                    }}</span></span
                   >
-                  <div>
-                    <strong>{{ a.name }}</strong
-                    ><small>{{ a.university }} · {{ a.major }}</small>
-                  </div>
-                </div>
-              </td>
-              <td>
-                <strong class="direction-label">{{ a.direction }}</strong
-                ><small>{{ a.team }}</small>
-              </td>
-              <td>
+                  <span class="candidate-school"
+                    >{{ a.university }} · {{ a.major }} · {{ a.team }}</span
+                  >
+                </span>
+              </button>
+              <div class="candidate-schedule">
+                <span><v-icon size="13">mdi-clock-outline</v-icon>面试安排</span
+                ><time>{{
+                  a.interviewAt ? formatDate(a.interviewAt) : "尚未安排"
+                }}</time>
+              </div>
+              <div class="candidate-result">
                 <v-chip
                   :color="statusOf(a.status).color"
                   size="small"
-                  variant="tonal"
+                  variant="outlined"
                   >{{ statusOf(a.status).label }}</v-chip
                 >
-              </td>
-              <td class="nowrap">{{ formatDate(a.interviewAt) }}</td>
-              <td>
-                <strong>{{ a.score ?? "—" }}</strong
-                ><span v-if="a.score !== null" class="score-unit"> / 100</span>
-              </td>
-              <td>
-                <v-btn
-                  variant="text"
-                  color="primary"
-                  append-icon="mdi-chevron-right"
-                  @click="openDetail(a)"
-                  >查看</v-btn
+                <span
+                  class="candidate-score"
+                  :class="{ 'has-score': a.score !== null }"
+                  >{{ a.score === null ? "尚未评分" : `${a.score} 分` }}</span
                 >
-              </td>
-            </tr>
-          </tbody></v-table
-        >
-        <div v-if="!filtered.length" class="table-empty">
-          <v-icon size="34" color="grey">mdi-account-search-outline</v-icon>
-          <h3>{{ items.length ? "没有匹配的候选人" : "还没有候选人" }}</h3>
-          <p>
-            {{
-              items.length
-                ? "试试其他关键词或筛选条件。"
-                : "报名提交后，候选人将在这里出现。"
-            }}
-          </p>
-          <v-btn
-            v-if="items.length"
-            variant="text"
-            @click="
-              search = '';
-              statusFilter = 'all';
-              directionFilter = '全部方向';
-            "
-            >清除筛选</v-btn
-          >
-        </div>
-      </v-card>
+              </div>
+              <v-btn
+                class="candidate-open"
+                variant="text"
+                color="primary"
+                size="small"
+                icon="mdi-chevron-right"
+                :aria-label="`查看 ${a.name}`"
+                @click="openDetail(a)"
+              />
+            </article>
+          </div>
+          <div v-if="!filtered.length" class="table-empty">
+            <v-icon size="38" color="grey">mdi-account-search-outline</v-icon>
+            <h3>{{ items.length ? "没有匹配的候选人" : "还没有候选人" }}</h3>
+            <p>
+              {{
+                items.length
+                  ? "试试其他关键词或筛选条件。"
+                  : "报名提交后，候选人将在这里出现。"
+              }}
+            </p>
+            <v-btn
+              v-if="items.length"
+              variant="text"
+              color="primary"
+              @click="clearFilters"
+              >清除筛选</v-btn
+            >
+          </div>
+          <div v-if="filtered.length" class="list-footer">
+            共 {{ filtered.length }} 位候选人<span
+              >资料仅对有权限的成员可见</span
+            >
+          </div>
+        </v-card>
+
+        <aside class="statistics-column" aria-label="招新统计">
+          <section class="material-chart-card">
+            <div class="chart-surface trend-surface">
+              <svg viewBox="0 0 300 150" role="img" :aria-label="trendLabel">
+                <path d="M24 34H276M24 75H276M24 116H276" class="chart-grid" />
+                <text x="4" y="38" class="chart-tick">{{ trendMax }}</text>
+                <text x="9" y="120" class="chart-tick">0</text>
+                <polyline :points="trendLine" class="trend-line" />
+                <g v-for="point in trendPoints" :key="point.label">
+                  <circle
+                    :cx="point.x"
+                    :cy="point.y"
+                    r="3.5"
+                    class="trend-point"
+                  />
+                  <text
+                    :x="point.x"
+                    y="140"
+                    text-anchor="middle"
+                    class="chart-tick"
+                  >
+                    {{ point.label }}
+                  </text>
+                </g>
+              </svg>
+            </div>
+            <div class="chart-caption">
+              <h2>每日新增报名</h2>
+              <p>
+                <v-icon size="16" color="success">mdi-arrow-up</v-icon>今日新增
+                <strong>{{ dailyCounts[6]?.count || 0 }}</strong> 人<span
+                  >近 7 天</span
+                >
+              </p>
+            </div>
+            <div class="chart-footer">
+              <v-icon size="14">mdi-account-group-outline</v-icon
+              >{{ chartScope }}
+            </div>
+          </section>
+          <section class="material-chart-card">
+            <div class="chart-surface direction-surface">
+              <svg
+                viewBox="0 0 300 166"
+                role="img"
+                :aria-label="directionLabel"
+              >
+                <path
+                  d="M60 17V142M131 17V142M202 17V142M273 17V142"
+                  class="chart-grid"
+                />
+                <g
+                  v-for="(item, index) in directionCounts"
+                  :key="item.direction"
+                >
+                  <text
+                    x="48"
+                    :y="31 + index * 26"
+                    text-anchor="end"
+                    class="direction-chart-label"
+                  >
+                    {{ item.direction }}
+                  </text>
+                  <rect
+                    x="60"
+                    :y="20 + index * 26"
+                    :width="(item.count / directionMax) * 193"
+                    height="14"
+                    rx="1"
+                    class="direction-bar"
+                  />
+                  <text
+                    :x="68 + (item.count / directionMax) * 193"
+                    :y="31 + index * 26"
+                    class="direction-chart-value"
+                  >
+                    {{ item.count }}
+                  </text>
+                </g>
+              </svg>
+            </div>
+            <div class="chart-caption">
+              <h2>志愿方向分布</h2>
+              <p>
+                按第一志愿统计<span>共 {{ chartItems.length }} 人</span>
+              </p>
+            </div>
+            <div class="chart-footer">
+              <v-icon size="14">mdi-chart-bar</v-icon>{{ chartScope }}
+            </div>
+          </section>
+          <div class="statistics-note">
+            <v-icon size="15">mdi-information-outline</v-icon
+            ><span>统计基于当前可见报名资料，名单筛选不会改变统计口径。</span>
+          </div>
+        </aside>
+      </div>
     </template>
 
     <v-dialog
@@ -649,7 +837,7 @@ onMounted(load);
       :fullscreen="smAndDown"
       :persistent="saving"
       scrollable
-      ><v-card rounded="xl"
+      ><v-card rounded="sm"
         ><v-card-title class="dialog-title"
           ><div>
             <h2>我的报名资料</h2>
@@ -663,7 +851,7 @@ onMounted(load);
             @click="formOpen = false" /></v-card-title
         ><v-card-text
           ><v-form @submit.prevent="saveApplication"
-            ><h3 class="form-section-title">01 / 基础信息</h3>
+            ><h3 class="form-section-title">基础信息</h3>
             <v-row
               ><v-col cols="12" sm="6"
                 ><v-text-field
@@ -712,7 +900,7 @@ onMounted(load);
                   hide-details="auto"
                   required /></v-col
             ></v-row>
-            <h3 class="form-section-title">02 / 选择你的方向</h3>
+            <h3 class="form-section-title">意向赛队与方向</h3>
             <v-row
               ><v-col cols="12" sm="4"
                 ><v-select
@@ -741,7 +929,7 @@ onMounted(load);
                   variant="outlined"
                   hide-details="auto" /></v-col
             ></v-row>
-            <h3 class="form-section-title">03 / 让我们认识你</h3>
+            <h3 class="form-section-title">经历与报名动机</h3>
             <v-textarea
               v-model="form.motivation"
               label="为什么想加入我们？ *"
@@ -794,7 +982,7 @@ onMounted(load);
       :persistent="saving"
       scrollable
       @update:model-value="!$event && (selected = null)"
-      ><v-card v-if="selected" rounded="xl"
+      ><v-card v-if="selected" rounded="sm"
         ><v-card-title class="dialog-title"
           ><div>
             <h2>
@@ -968,7 +1156,7 @@ onMounted(load);
       max-width="440"
       :persistent="saving"
       @update:model-value="!$event && (decision = null)"
-      ><v-card rounded="xl" class="pa-4"
+      ><v-card rounded="sm" class="pa-4"
         ><v-card-title>{{
           decision === "accepted" ? "确认录取这位候选人？" : "确认本轮未录取？"
         }}</v-card-title
@@ -1003,30 +1191,29 @@ onMounted(load);
 </template>
 
 <style scoped>
+.recruitment-page {
+  max-width: 1600px;
+  padding: 24px;
+}
 .page-heading {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 24px;
-  margin-bottom: 28px;
-}
-.eyebrow {
-  font-size: 11px;
-  letter-spacing: 1.8px;
-  font-weight: 700;
-  color: #737a98;
+  margin-bottom: 22px;
 }
 .page-heading h1 {
-  font-size: 30px;
-  letter-spacing: -1px;
-  margin: 8px 0;
-  color: #232941;
+  font-size: 24px;
+  font-weight: 500;
+  letter-spacing: 0;
+  margin: 0 0 6px;
+  color: #303030;
 }
 .page-heading p,
 .dialog-title p {
-  color: #7b8193;
+  color: #757575;
   font-size: 14px;
-  margin-top: 6px;
+  margin: 0;
 }
 .loading-panel {
   min-height: 300px;
@@ -1034,398 +1221,621 @@ onMounted(load);
   align-items: center;
   justify-content: center;
   gap: 16px;
-  color: #7b8193;
+  color: #757575;
 }
-.pipeline-grid {
+.recruitment-layout {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 16px;
-  margin-bottom: 24px;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  gap: 24px;
+  align-items: start;
 }
-.pipeline-card {
-  position: relative;
-  text-align: left;
-  background: #fff;
-  border: 1px solid #e9eaf1;
-  border-radius: 16px;
-  padding: 20px;
-  transition: 0.2s;
+.applicants-card {
+  border-radius: 6px !important;
+  border-color: #e0e0e0 !important;
+  overflow: hidden;
 }
-.pipeline-card:hover,
-.pipeline-card.selected {
-  border-color: #7784d4;
-  background: #f7f8ff;
+.list-heading {
+  padding: 20px 20px 14px;
 }
-.pipeline-card > span {
+.list-heading h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  font-weight: 500;
+  color: #303030;
+}
+.list-heading h2 span {
+  margin-left: 8px;
   font-size: 13px;
-  color: #71798e;
+  color: #757575;
+  font-weight: 400;
+}
+.list-heading p {
+  margin: 0;
+  color: #757575;
+  font-size: 12px;
+}
+.list-filters {
+  display: flex;
+  gap: 12px;
+  padding: 0 20px 18px;
+}
+.list-filters > .v-text-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.list-filters > .v-select {
+  flex: 0 0 144px;
+}
+.active-filters {
+  padding: 0 20px 14px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.candidate-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 17px 14px 17px 20px;
+  border-top: 1px solid #eeeeee;
+  min-height: 88px;
+  transition: background-color 0.15s ease;
+}
+.candidate-row:hover {
+  background: #f5f8fc;
+}
+.candidate-person {
+  appearance: none;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.candidate-avatar {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 20px;
+  font-weight: 400;
+}
+.candidate-identity {
+  min-width: 0;
+  display: block;
+}
+.candidate-name {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.pipeline-card strong {
-  font-size: 30px;
-  color: #262d44;
-  display: block;
-  margin-top: 12px;
-  line-height: 1.2;
-}
-.pipeline-card > .v-icon {
-  position: absolute;
-  right: 20px;
-  bottom: 22px;
-  color: #939aae;
-}
-.status-dot {
-  height: 7px;
-  width: 7px;
-  border-radius: 50%;
-  display: inline-block;
-  background: #607d8b;
-}
-.dot-screening {
-  background: #6366c9;
-}
-.dot-interview {
-  background: #d99a35;
-}
-.dot-accepted {
-  background: #26a69a;
-}
-.dot-rejected {
-  background: #9e9e9e;
-}
-.table-toolbar {
-  padding: 26px;
-  display: flex;
-  justify-content: space-between;
-  gap: 24px;
-  align-items: center;
-}
-.table-toolbar h2 {
-  font-size: 17px;
-  font-weight: 700;
-}
-.table-toolbar h2 span {
-  font-size: 12px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: #f0f1f8;
-  color: #6b7291;
-  margin-left: 6px;
-}
-.table-toolbar p {
-  font-size: 12px;
-  color: #9095a3;
-  margin-top: 7px;
-}
-.table-filters {
-  display: flex;
-  gap: 12px;
-  min-width: 420px;
-}
-.table-filters > .v-text-field {
-  width: 255px;
-}
-.table-filters > .v-select {
-  width: 155px;
-}
-.applicants-card :deep(th) {
-  background: #fafbfe !important;
-  font-size: 12px !important;
-  color: #8c93a3 !important;
-}
-.applicants-card :deep(td) {
-  height: 86px !important;
-  font-size: 13px;
-  color: #596276;
-  border-bottom-color: #f0f1f5 !important;
-}
-.person-cell {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 185px;
-}
-.person-cell strong {
-  font-size: 14px;
-  color: #343c55;
-}
-.person-cell small,
-td > small {
-  display: block;
-  font-size: 11px;
-  color: #959baa;
-  margin-top: 5px;
-}
-.avatar-letter {
-  font-weight: 600;
-  color: #6874b4;
-}
-.direction-label {
-  font-size: 13px;
+  color: #303030;
+  font-size: 16px;
   font-weight: 500;
-  color: #566079;
 }
-.nowrap {
+.candidate-direction {
+  font-weight: 400;
+  color: #757575;
+  font-size: 12px;
   white-space: nowrap;
 }
-.score-unit {
+.candidate-school {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 6px;
+  color: #757575;
+  font-size: 12px;
+}
+.candidate-schedule {
+  flex: 0 0 125px;
+  display: grid;
+  gap: 7px;
+  font-size: 12px;
+  color: #616161;
+}
+.candidate-schedule > span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #858585;
+}
+.candidate-schedule time {
+  white-space: nowrap;
+}
+.candidate-result {
+  display: flex;
+  flex: 0 0 70px;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 7px;
+}
+.candidate-result :deep(.v-chip) {
   font-size: 11px;
-  color: #a1a7b7;
+  height: 22px;
+}
+.candidate-score {
+  font-size: 12px;
+  color: #9e9e9e;
+}
+.candidate-score.has-score {
+  font-size: 15px;
+  color: #424242;
+}
+.candidate-open {
+  flex-shrink: 0;
+}
+.list-footer {
+  border-top: 1px solid #eeeeee;
+  padding: 14px 20px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #757575;
+  font-size: 12px;
+}
+.list-footer span {
+  color: #9e9e9e;
+}
+.statistics-column {
+  display: grid;
+  gap: 28px;
+  padding-top: 18px;
+  min-width: 0;
+}
+.material-chart-card {
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  padding: 0 14px;
+  box-shadow: 0 2px 5px #00000008;
+}
+.chart-surface {
+  margin-top: -18px;
+  border-radius: 5px;
+  padding: 8px 10px 0;
+  color: #fff;
+  box-shadow: 0 4px 10px #00000024;
+}
+.trend-surface {
+  background: #43a047;
+}
+.direction-surface {
+  background: #e91e63;
+}
+.chart-surface svg {
+  display: block;
+  width: 100%;
+  overflow: visible;
+}
+.chart-grid {
+  stroke: #ffffff40;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  fill: none;
+}
+.chart-tick {
+  fill: #ffffffdc;
+  font-size: 9px;
+  font-family: inherit;
+}
+.trend-line {
+  fill: none;
+  stroke: #ffffffed;
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+}
+.trend-point {
+  fill: #fff;
+}
+.direction-chart-label {
+  fill: #ffffffed;
+  font-size: 10px;
+  font-family: inherit;
+}
+.direction-chart-value {
+  fill: #fff;
+  font-size: 10px;
+  font-family: inherit;
+}
+.direction-bar {
+  fill: #ffffffe0;
+}
+.chart-caption {
+  padding: 17px 2px 14px;
+}
+.chart-caption h2 {
+  margin: 0 0 9px;
+  font-size: 18px;
+  font-weight: 400;
+  color: #424242;
+}
+.chart-caption p {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  color: #757575;
+  font-size: 12px;
+}
+.chart-caption strong {
+  color: #43a047;
+  font-weight: 500;
+}
+.chart-caption p > span {
+  margin-left: auto;
+  color: #9e9e9e;
+}
+.chart-footer {
+  padding: 12px 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border-top: 1px solid #eeeeee;
+  font-size: 11px;
+  color: #9e9e9e;
+}
+.statistics-note {
+  display: flex;
+  gap: 7px;
+  font-size: 12px;
+  color: #858585;
+  line-height: 1.7;
+  margin-top: -10px;
+}
+.statistics-note > .v-icon {
+  margin-top: 3px;
+  flex-shrink: 0;
 }
 .table-empty {
-  padding: 70px 24px;
+  padding: 60px 24px;
   text-align: center;
-  color: #8a92a5;
+  color: #858585;
+  border-top: 1px solid #eeeeee;
 }
 .table-empty h3 {
   font-size: 16px;
-  color: #5b657b;
+  font-weight: 500;
+  color: #616161;
   margin: 16px 0 7px;
 }
 .table-empty p {
   font-size: 13px;
 }
+.application-card {
+  max-width: 1060px;
+}
 .application-banner {
-  padding: 30px 32px;
-  background: linear-gradient(120deg, #eff0fe, #f2f9fb);
+  padding: 22px 24px;
+  border-bottom: 1px solid #e5e5e5;
+  background: #fff;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 20px;
 }
+.application-meta {
+  font-size: 13px;
+  color: #757575;
+}
 .application-banner h2 {
-  font-size: 23px;
-  color: #343e65;
-  margin-top: 10px;
+  font-size: 21px;
+  font-weight: 500;
+  color: #303030;
+  margin: 7px 0 0;
 }
 .application-body {
-  padding: 32px;
+  padding: 24px;
 }
 .progress-track {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 35px;
+  margin-bottom: 28px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid #eeeeee;
 }
 .progress-step {
   display: flex;
-  gap: 10px;
+  gap: 9px;
   align-items: center;
-  color: #a4abbc;
+  color: #9e9e9e;
   font-size: 13px;
+}
+.progress-step strong {
+  font-weight: 400;
 }
 .progress-step span {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
-  background: #f1f3f7;
+  background: #eeeeee;
 }
 .progress-step.active {
-  color: #5b64b9;
+  color: #1976d2;
 }
 .progress-step.active span {
-  background: #e8eafe;
+  background: #1976d2;
+  color: #fff;
 }
 .detail-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 22px;
-  margin-bottom: 26px;
+  gap: 18px;
+  margin-bottom: 22px;
 }
 .detail-grid label,
 .prose-block label {
   font-size: 12px;
-  color: #969cac;
+  color: #757575;
 }
 .detail-grid p {
   font-size: 14px;
-  line-height: 1.8;
-  margin-top: 6px;
-  color: #48516b;
+  line-height: 1.7;
+  margin: 5px 0 0;
+  color: #424242;
   overflow-wrap: anywhere;
 }
 .prose-block {
-  margin-bottom: 24px;
+  margin-bottom: 22px;
 }
 .prose-block p,
 .preserve-lines {
   font-size: 14px;
-  color: #536079;
-  line-height: 1.9;
+  color: #424242;
+  line-height: 1.8;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  margin-top: 8px;
+  margin-top: 6px;
 }
 .application-footer {
-  border-top: 1px solid #f0f1f6;
-  padding-top: 22px;
+  border-top: 1px solid #eeeeee;
+  padding-top: 18px;
   display: flex;
   justify-content: space-between;
   gap: 16px;
   align-items: center;
-  color: #99a0b0;
+  color: #9e9e9e;
   font-size: 12px;
 }
 .empty-card {
   text-align: center;
-  padding: 64px 24px;
+  padding: 52px 24px;
+  max-width: 1060px;
 }
 .empty-icon {
-  width: 80px;
-  height: 80px;
-  background: #eeeffe;
-  color: #747cc6;
-  border-radius: 24px;
+  width: 64px;
+  height: 64px;
+  background: #e3f2fd;
+  color: #1976d2;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: auto auto 24px;
+  margin: auto auto 20px;
 }
 .empty-card h2 {
-  font-size: 23px;
-  color: #3a435e;
+  font-size: 21px;
+  font-weight: 500;
+  color: #424242;
 }
 .empty-card p {
   font-size: 14px;
-  line-height: 1.9;
-  color: #8c94a6;
-  margin: 16px 0 24px;
+  line-height: 1.8;
+  color: #757575;
+  margin: 14px 0 22px;
 }
 .deadline {
   display: block;
-  margin-top: 18px;
+  margin-top: 16px;
   font-size: 12px;
-  color: #969eaf;
+  color: #9e9e9e;
 }
 .dialog-title {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 22px 28px !important;
+  padding: 18px 24px !important;
   white-space: normal !important;
-  border-bottom: 1px solid #eff0f6;
+  border-bottom: 1px solid #eeeeee;
 }
 .dialog-title h2 {
   font-size: 21px;
-  color: #353e58;
+  font-weight: 500;
+  color: #303030;
+  margin: 0 0 5px;
 }
 .dialog-title p {
   font-size: 12px;
 }
 .form-section-title {
-  font-size: 14px;
-  color: #515c7d;
-  margin: 24px 0 20px;
+  font-size: 16px;
+  font-weight: 500;
+  color: #424242;
+  margin: 22px 0 18px;
 }
 .form-submit {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  margin: 10px 0 20px;
+  margin: 10px 0 16px;
 }
 .form-submit > span {
   font-size: 12px;
-  color: #8895a7;
+  color: #757575;
 }
 .review-panel {
-  background: #f7f8fc;
-  border: 1px solid #eef0f6;
-  border-radius: 16px;
-  padding: 22px;
+  background: #fafafa;
+  border: 1px solid #e5e5e5;
+  border-radius: 6px;
+  padding: 20px;
 }
 .review-panel h3 {
-  font-size: 15px;
-  color: #46506d;
+  font-size: 16px;
+  font-weight: 500;
+  color: #424242;
 }
 .review-panel > p {
   font-size: 13px;
-  color: #788198;
+  color: #757575;
 }
 .private-note {
   font-size: 11px !important;
   margin-top: 13px !important;
-  color: #969fb2 !important;
+  color: #858585 !important;
 }
 .decision-actions {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
-  margin: 20px 0;
+  margin: 18px 0;
 }
 .decision-actions > .v-btn {
   flex-grow: 1;
 }
+@media (max-width: 1250px) {
+  .candidate-row {
+    gap: 10px;
+    padding-left: 16px;
+  }
+  .candidate-person {
+    gap: 10px;
+  }
+  .candidate-schedule {
+    flex-basis: 112px;
+    font-size: 11px;
+  }
+  .candidate-open {
+    display: none;
+  }
+}
 @media (max-width: 1100px) {
-  .table-toolbar {
-    align-items: stretch;
-    flex-direction: column;
+  .recruitment-layout {
+    grid-template-columns: minmax(0, 1fr);
   }
-  .table-filters {
-    min-width: 0;
+  .statistics-column {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 24px;
   }
-  .pipeline-card {
-    padding: 16px;
+  .statistics-note {
+    grid-column: 1 / -1;
   }
-  .pipeline-card > span {
-    font-size: 12px;
+  .candidate-open {
+    display: inline-grid;
+  }
+  .candidate-schedule {
+    flex-basis: 150px;
   }
 }
 @media (max-width: 600px) {
+  .recruitment-page {
+    padding: 18px 14px;
+  }
   .page-heading {
     align-items: flex-start;
-    gap: 16px;
+    gap: 12px;
+    margin-bottom: 18px;
   }
   .page-heading h1 {
-    font-size: 25px;
+    font-size: 22px;
   }
   .page-heading p {
     font-size: 12px;
-    line-height: 1.8;
+    line-height: 1.6;
   }
   .page-heading > .v-btn {
-    margin-top: 22px;
+    min-width: auto;
   }
-  .pipeline-grid {
-    grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
+  .list-heading {
+    padding: 18px 16px 14px;
   }
-  .pipeline-card {
-    padding: 13px;
+  .list-filters {
+    padding: 0 16px 16px;
+    gap: 8px;
   }
-  .pipeline-card strong {
-    font-size: 26px;
+  .list-filters > .v-select {
+    flex-basis: 112px;
   }
-  .pipeline-card > .v-icon {
+  .candidate-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 64px;
+    gap: 8px 10px;
+    padding: 15px 16px;
+  }
+  .candidate-person {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .candidate-avatar {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
+    font-size: 18px;
+  }
+  .candidate-name {
+    font-size: 15px;
+    gap: 6px;
+  }
+  .candidate-school {
+    font-size: 11px;
+  }
+  .candidate-result {
+    grid-column: 2;
+    grid-row: 1 / 3;
+    align-self: center;
+    gap: 8px;
+  }
+  .candidate-schedule {
+    grid-column: 1;
+    grid-row: 2;
+    display: flex;
+    gap: 6px;
+    padding-left: 46px;
+    font-size: 11px;
+  }
+  .candidate-schedule > span {
+    font-size: 0;
+  }
+  .candidate-schedule .v-icon {
+    font-size: 13px !important;
+  }
+  .candidate-open {
     display: none;
   }
-  .table-toolbar {
-    padding: 20px;
+  .list-footer {
+    padding: 13px 16px;
   }
-  .table-filters {
-    flex-direction: column;
-    gap: 12px;
+  .list-footer span {
+    display: none;
   }
-  .table-filters > .v-text-field,
-  .table-filters > .v-select {
-    width: 100%;
+  .statistics-column {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 30px;
+  }
+  .chart-surface svg {
+    max-height: 180px;
   }
   .application-banner {
-    padding: 24px;
+    padding: 20px;
     align-items: flex-start;
   }
   .application-banner h2 {
     font-size: 18px;
-    line-height: 1.6;
+    line-height: 1.5;
   }
   .application-body {
-    padding: 22px;
+    padding: 20px;
   }
   .progress-track {
     gap: 8px;
@@ -1453,9 +1863,6 @@ td > small {
   .application-footer {
     align-items: flex-start;
     flex-direction: column;
-  }
-  .eyebrow {
-    font-size: 10px;
   }
 }
 </style>

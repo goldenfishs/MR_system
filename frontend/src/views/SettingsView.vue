@@ -177,13 +177,13 @@ onMounted(load);
   margin: 0 0 6px;
 }
 .settings-heading p {
-  font-size: 11px;
-  color: #9aa3b4;
+  font-size: 13px;
+  color: #757575;
   margin: 0;
 }
 .save-hint {
-  font-size: 11px;
-  color: #9aa4b6;
+  font-size: 13px;
+  color: #757575;
 }
 @media (max-width: 600px) {
   .settings-card {

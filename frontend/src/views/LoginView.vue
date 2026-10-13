@@ -70,398 +70,320 @@ async function submit() {
 }
 </script>
 <template>
-  <div class="login-layout">
-    <section class="login-story">
+  <div class="login-page">
+    <header class="login-topbar">
       <a href="/" class="login-brand"
-        ><img src="/mark.svg" width="42" height="42" alt="竞跃" />
-        <div>竞跃<span>MR SYSTEM / 战队协作台</span></div></a
-      >
-      <div class="story-copy">
-        <div class="eyebrow">BUILD. LEARN. TOGETHER.</div>
-        <h1>让热爱集结，<br />让想法<span>真正落地。</span></h1>
-        <p>
-          从第一次报名，到第一次让机器人动起来。<br />在这里，记录每一份努力，也连接每一位伙伴。
-        </p>
-        <div class="story-tags">
-          <span>ROBOCON</span><i /> <span>RoboMaster</span>
+        ><img src="/mark.svg" width="32" height="32" alt="竞跃" /><span
+          >竞跃 · 战队协作系统</span
+        ></a
+      ><span class="login-season">{{ config?.season || "机器人战队" }}</span>
+    </header>
+    <main class="login-main">
+      <div class="login-heading">
+        <div class="team-avatar">
+          <v-icon size="38">mdi-account-group</v-icon>
         </div>
+        <h1>{{ config?.organization || "机器人实验室" }}</h1>
+        <p>招新、学习与协作，从这里开始。</p>
       </div>
-      <div class="blueprint" aria-hidden="true">
-        <div class="orbit o1" />
-        <div class="orbit o2" />
-        <div class="orbit o3" />
-        <div class="blueprint-core">
-          <v-icon size="80">mdi-robot-outline</v-icon>
-        </div>
-        <span class="coord c1">IDEA → PROTOTYPE</span
-        ><span class="coord c2">01 / COLLABORATE</span>
-      </div>
-      <div class="story-footer">
-        为机器人战队打造的开放协作空间 <span>MR SYSTEM · OPEN SOURCE</span>
-      </div>
-    </section>
-    <section class="login-form-area">
-      <div class="login-form">
-        <div class="eyebrow muted mb-3">WELCOME TO YOUR TEAM</div>
-        <h2>{{ register ? "从这里加入战队" : "欢迎回到协作台" }}</h2>
-        <p class="form-description">
-          {{
-            register
-              ? "注册后即可填写报名资料，开启你的机器人之旅。"
-              : "登录账号，继续今天的探索与创造。"
-          }}
-        </p>
-        <v-alert
-          v-if="route.query.expired"
-          type="info"
-          variant="tonal"
-          class="mb-4"
-          density="compact"
-          >登录已过期，请重新登录。</v-alert
-        >
-        <v-alert
-          v-if="error"
-          type="error"
-          variant="tonal"
-          class="mb-4"
-          density="compact"
-          >{{ error }}</v-alert
-        >
-        <form @submit.prevent="submit">
-          <label v-if="register" for="login-name">姓名</label
-          ><v-text-field
-            v-if="register"
-            id="login-name"
-            v-model="name"
-            placeholder="请输入你的姓名"
-            autocomplete="name"
-            maxlength="60"
-            hide-details
-            class="mb-5"
-            required
-          />
-          <label for="login-email">邮箱</label
-          ><v-text-field
-            id="login-email"
-            v-model="email"
-            type="email"
-            placeholder="you@example.com"
-            autocomplete="username"
-            prepend-inner-icon="mdi-email-outline"
-            hide-details
-            class="mb-5"
-            required
-          />
-          <label for="login-password">密码</label
-          ><v-text-field
-            id="login-password"
-            v-model="password"
-            :type="showPassword ? 'text' : 'password'"
-            :autocomplete="register ? 'new-password' : 'current-password'"
-            :placeholder="register ? '至少 10 位字符' : '请输入密码'"
-            :append-inner-icon="
-              showPassword ? 'mdi-eye-off-outline' : 'mdi-eye-outline'
-            "
-            @click:append-inner="showPassword = !showPassword"
-            prepend-inner-icon="mdi-lock-outline"
-            hide-details
-            class="mb-6"
-            required
-          />
-          <v-btn
-            type="submit"
-            color="primary"
-            block
-            height="48"
-            :loading="loading"
-            >{{ register ? "创建账号" : "登录协作台"
-            }}<v-icon end size="18">mdi-arrow-right</v-icon></v-btn
-          >
-        </form>
-        <p class="switch-form">
-          {{ register ? "已经有账号？" : "还没有账号？"
-          }}<button
+      <v-card class="login-card">
+        <div class="login-tabs" role="tablist" aria-label="登录或注册">
+          <button
+            role="tab"
+            :aria-selected="!register"
+            :class="{ selected: !register }"
             @click="
-              register = !register;
+              register = false;
               error = '';
             "
           >
-            {{ register ? "返回登录" : "注册报名" }}
+            <v-icon size="19">mdi-login</v-icon>账号登录
           </button>
-        </p>
-        <div v-if="config?.demoMode" class="demo-box">
-          <div>
-            <v-icon size="16">mdi-flask-outline</v-icon> 本地演示空间
-            <span>虚构数据</span>
-          </div>
-          <p>选择身份填入体验账号，再点击登录。</p>
-          <div class="d-flex flex-wrap ga-2">
-            <v-btn
-              v-for="a in demoAccounts"
-              :key="a.email"
-              size="small"
-              variant="outlined"
-              @click="
-                email = a.email;
-                password = a.password;
-                register = false;
-                error = '';
+          <button
+            role="tab"
+            :aria-selected="register"
+            :class="{ selected: register }"
+            @click="
+              register = true;
+              error = '';
+            "
+          >
+            <v-icon size="19">mdi-account-plus-outline</v-icon>注册报名
+          </button>
+        </div>
+        <div class="login-form">
+          <h2>{{ register ? "创建你的报名账号" : "登录协作台" }}</h2>
+          <p class="form-description">
+            {{
+              register
+                ? "注册后填写个人资料，查看报名和面试进度。"
+                : "使用邮箱与密码登录，继续处理战队事务。"
+            }}
+          </p>
+          <v-alert
+            v-if="route.query.expired"
+            type="info"
+            variant="tonal"
+            class="mb-4"
+            density="compact"
+            >登录已过期，请重新登录。</v-alert
+          >
+          <v-alert
+            v-if="error"
+            type="error"
+            variant="tonal"
+            class="mb-4"
+            density="compact"
+            >{{ error }}</v-alert
+          >
+          <form @submit.prevent="submit">
+            <label v-if="register" for="login-name">姓名</label
+            ><v-text-field
+              v-if="register"
+              id="login-name"
+              v-model="name"
+              placeholder="请输入你的姓名"
+              autocomplete="name"
+              maxlength="60"
+              hide-details
+              class="mb-5"
+              required
+            />
+            <label for="login-email">邮箱</label
+            ><v-text-field
+              id="login-email"
+              v-model="email"
+              type="email"
+              placeholder="you@example.com"
+              autocomplete="username"
+              prepend-inner-icon="mdi-email-outline"
+              hide-details
+              class="mb-5"
+              required
+            />
+            <label for="login-password">密码</label
+            ><v-text-field
+              id="login-password"
+              v-model="password"
+              :type="showPassword ? 'text' : 'password'"
+              :autocomplete="register ? 'new-password' : 'current-password'"
+              :placeholder="register ? '至少 10 位字符' : '请输入密码'"
+              :append-inner-icon="
+                showPassword ? 'mdi-eye-off-outline' : 'mdi-eye-outline'
               "
-              >{{ a.title }}</v-btn
+              @click:append-inner="showPassword = !showPassword"
+              prepend-inner-icon="mdi-lock-outline"
+              hide-details
+              class="mb-6"
+              required
+            />
+            <v-btn
+              type="submit"
+              color="primary"
+              block
+              height="48"
+              :loading="loading"
+              >{{ register ? "创建账号" : "登录协作台"
+              }}<v-icon end size="18">mdi-arrow-right</v-icon></v-btn
             >
+          </form>
+          <div v-if="config?.demoMode" class="demo-box">
+            <div>
+              <v-icon size="16">mdi-flask-outline</v-icon> 本地演示空间
+              <span>虚构数据</span>
+            </div>
+            <p>选择身份填入体验账号，再点击登录。</p>
+            <div class="d-flex flex-wrap ga-2">
+              <v-btn
+                v-for="a in demoAccounts"
+                :key="a.email"
+                size="small"
+                variant="outlined"
+                @click="
+                  email = a.email;
+                  password = a.password;
+                  register = false;
+                  error = '';
+                "
+                >{{ a.title }}</v-btn
+              >
+            </div>
           </div>
         </div>
-        <div class="form-footer">
-          {{ config?.organization || "机器人实验室" }} <span>·</span>
-          {{ config?.season || "MR System" }}
-        </div>
-      </div>
-    </section>
+      </v-card>
+      <footer class="login-footer">
+        <span>RoboMaster</span><i /> <span>ROBOCON</span>
+        <p>竞跃 MR System · 开源战队协作平台</p>
+      </footer>
+    </main>
   </div>
 </template>
 <style scoped>
-.login-layout {
+.login-page {
   min-height: 100vh;
-  display: grid;
-  grid-template-columns: 1.1fr 1fr;
+  background: #f6f6f6;
 }
-.login-story {
+.login-topbar {
+  height: 64px;
+  padding: 0 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(
+    110deg,
+    #167d87,
+    #2854ad 33%,
+    #4630b3 65%,
+    #8426b7
+  );
   color: white;
-  padding: 45px 55px;
-  position: relative;
-  overflow: hidden;
-  background: linear-gradient(140deg, #263b65 0%, #3a4d99 50%, #7163aa 100%);
+  box-shadow: 0 2px 5px #0002;
 }
 .login-brand {
   display: flex;
   align-items: center;
   gap: 12px;
-  text-decoration: none;
+  font-size: 19px;
   color: white;
-  font-weight: 700;
-  font-size: 23px;
+  text-decoration: none;
 }
-.login-brand span {
-  display: block;
-  font-size: 9px;
-  letter-spacing: 1.3px;
-  font-weight: 400;
-  opacity: 0.6;
-}
-.story-copy {
-  position: relative;
-  z-index: 1;
-  margin-top: 100px;
-}
-.story-copy > .eyebrow {
-  color: #a7c5de;
-  font-size: 10px;
-}
-.story-copy h1 {
-  font-size: 44px;
-  line-height: 1.5;
-  margin: 22px 0;
-  letter-spacing: 1px;
-}
-.story-copy h1 span {
-  color: #b0e2d3;
-}
-.story-copy p {
-  font-size: 13px;
-  line-height: 2;
-  color: #c2cce3;
-}
-.story-tags {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  letter-spacing: 1.5px;
-  font-size: 11px;
-  margin-top: 32px;
-  color: #d2d8e7;
-}
-.story-tags i {
-  height: 14px;
-  width: 1px;
-  background: #ffffff40;
-}
-.story-footer {
-  position: absolute;
-  bottom: 30px;
-  left: 55px;
-  font-size: 10px;
-  color: #c7cce0;
-}
-.story-footer span {
-  display: block;
-  font-size: 8px;
-  letter-spacing: 1px;
-  margin-top: 7px;
-  opacity: 0.5;
-}
-.blueprint {
-  position: absolute;
-  right: -80px;
-  bottom: 70px;
-  width: 390px;
-  height: 390px;
-  color: #c7ddf3;
-  opacity: 0.4;
-  transform: rotate(-15deg);
-}
-.orbit {
-  border: 1px solid #cad5ff60;
+.login-brand img {
+  border: 1px solid #ffffff55;
   border-radius: 50%;
-  position: absolute;
-  inset: 0;
 }
-.o2 {
-  inset: 40px;
-  border-style: dashed;
+.login-season {
+  font-size: 13px;
+  color: #ffffffc4;
 }
-.o3 {
-  inset: 90px;
+.login-main {
+  max-width: 510px;
+  margin: 0 auto;
+  padding: 32px 16px 22px;
 }
-.blueprint-core {
-  position: absolute;
-  inset: 0;
+.login-heading {
+  text-align: center;
+  margin-bottom: 22px;
+}
+.team-avatar {
+  width: 64px;
+  height: 64px;
+  background: #e3f2fd;
+  color: #1976d2;
+  border-radius: 50%;
   display: grid;
   place-items: center;
+  margin: 0 auto 14px;
 }
-.coord {
-  position: absolute;
-  font-family: monospace;
-  font-size: 9px;
-  letter-spacing: 2px;
+.login-heading h1 {
+  font-size: 21px;
+  font-weight: 500;
+  margin: 0 0 6px;
 }
-.c1 {
-  top: 160px;
-  left: -40px;
+.login-heading p {
+  font-size: 13px;
+  color: #757575;
+  margin: 0;
 }
-.c2 {
-  bottom: 30px;
-  right: 15px;
-}
-.login-form-area {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 48px 40px;
+.login-card {
   background: white;
 }
+.login-tabs {
+  display: flex;
+  height: 53px;
+  border-bottom: 1px solid #eee;
+}
+.login-tabs button {
+  flex: 1;
+  font-size: 14px;
+  color: #757575;
+  border-bottom: 3px solid transparent;
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  align-items: center;
+}
+.login-tabs button.selected {
+  color: #1976d2;
+  border-bottom-color: #1976d2;
+  background: #f5faff;
+}
 .login-form {
-  width: 100%;
-  max-width: 370px;
+  padding: 26px 32px;
 }
 .login-form h2 {
-  font-size: 27px;
-  letter-spacing: -0.5px;
-  margin-bottom: 10px;
+  font-size: 20px;
+  font-weight: 500;
+  margin-bottom: 7px;
 }
 .form-description {
+  color: #757575;
   font-size: 13px;
-  color: #939bae;
-  margin-bottom: 35px;
-  line-height: 1.8;
+  margin-bottom: 22px;
+  line-height: 1.7;
 }
 .login-form label {
   display: block;
-  font-size: 12px;
-  margin-bottom: 9px;
-  font-weight: 600;
-}
-.switch-form {
-  text-align: center;
-  font-size: 12px;
-  color: #98a0af;
-  margin: 22px 0 30px;
-}
-.switch-form button {
-  color: #5364b4;
-  margin-left: 5px;
-  font-weight: 600;
+  font-size: 13px;
+  color: #616161;
+  margin-bottom: 1px;
 }
 .demo-box {
-  padding: 16px;
-  border: 1px dashed #dce2ed;
-  background: #f8f9fc;
-  border-radius: 12px;
+  border-top: 1px solid #eee;
+  margin-top: 24px;
+  padding-top: 18px;
 }
 .demo-box > div:first-child {
-  font-size: 11px;
-  font-weight: 600;
-  color: #65718a;
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
+  font-size: 13px;
+  color: #616161;
 }
 .demo-box span {
   margin-left: auto;
-  font-size: 9px;
-  color: #a1a9b8;
-  font-weight: 400;
+  font-size: 11px;
+  color: #9e9e9e;
 }
 .demo-box p {
-  font-size: 11px;
-  color: #939daf;
-  margin: 9px 0 12px;
+  color: #757575;
+  font-size: 12px;
+  margin: 8px 0 12px;
 }
-.form-footer {
+.login-footer {
   text-align: center;
-  font-size: 10px;
-  color: #a2aabb;
-  margin-top: 34px;
+  padding-top: 23px;
+  color: #757575;
+  font-size: 12px;
 }
-.form-footer span {
-  margin: 0 9px;
+.login-footer i {
+  display: inline-block;
+  height: 10px;
+  width: 1px;
+  background: #bbb;
+  margin: 0 13px;
 }
-@media (max-width: 960px) {
-  .login-story {
-    padding: 35px;
-  }
-  .story-copy h1 {
-    font-size: 34px;
-  }
-  .story-footer {
-    left: 35px;
-  }
-  .blueprint {
-    right: -190px;
-  }
+.login-footer p {
+  font-size: 11px;
+  color: #9e9e9e;
+  margin-top: 9px;
 }
-@media (max-width: 700px) {
-  .login-layout {
-    grid-template-columns: 1fr;
-  }
-  .login-story {
-    padding: 24px;
-    min-height: 180px;
-  }
-  .story-copy {
-    margin-top: 22px;
-  }
-  .story-copy h1 {
-    font-size: 25px;
-    margin: 10px 0;
-  }
-  .story-copy h1 br {
-    display: none;
-  }
-  .story-copy p,
-  .story-tags,
-  .story-footer,
-  .story-copy > .eyebrow {
-    display: none;
-  }
-  .blueprint {
-    bottom: -170px;
-    right: -90px;
-  }
-  .login-form-area {
-    padding: 35px 24px;
+@media (max-width: 600px) {
+  .login-topbar {
+    padding: 0 17px;
+    height: 58px;
   }
   .login-brand {
-    font-size: 19px;
+    font-size: 16px;
+    gap: 9px;
+  }
+  .login-season {
+    font-size: 11px;
+  }
+  .login-main {
+    padding-top: 24px;
+  }
+  .login-form {
+    padding: 23px;
   }
 }
 </style>

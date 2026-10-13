@@ -2,13 +2,13 @@
 
 **MR System** 是面向 RoboMaster / ROBOCON 高校机器人战队的招新与培养平台。第一版打通「报名 → 面试 → 录取 → 任务提交 → 导师审核」，让选人和培养共享一份成员记录。
 
-界面参考华南虎面试系统的蓝紫配色、侧栏、卡片和状态队列，代码与素材独立实现。项目不隶属于上述赛事或华南虎战队。
+界面参考[华南虎面试系统演示](https://www.bilibili.com/video/BV1DC4y1f7Fh/)的 Material 布局：青蓝紫渐变顶栏、黄色标签指示线、技术分组侧栏、紧凑人物名单和彩色统计卡。代码与素材独立实现，项目不隶属于上述赛事或华南虎战队。
 
 [![CI](https://github.com/goldenfishs/MR_system/actions/workflows/ci.yml/badge.svg)](https://github.com/goldenfishs/MR_system/actions/workflows/ci.yml)
 
-![工作台预览，数据均为虚构](docs/screenshots/dashboard-desktop.jpg)
+![招新管理预览，数据均为虚构](docs/screenshots/recruitment-desktop.jpg)
 
-另见 [手机界面](docs/screenshots/dashboard-mobile.jpg)。
+另见 [工作台](docs/screenshots/dashboard-desktop.jpg)、[手机界面](docs/screenshots/dashboard-mobile.jpg)和[界面参考说明](docs/ui-reference.md)。
 
 ## 当前功能
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { useDisplay } from "vuetify";
 import { api, ApiError } from "../lib/api";
 import { auth } from "../lib/auth";
@@ -8,13 +8,12 @@ import type { Task, Submission, Applicant } from "../lib/types";
 
 const { smAndDown } = useDisplay();
 const route = useRoute();
+const router = useRouter();
 const tasks = ref<Task[]>([]);
 const loading = ref(true);
 const error = ref("");
 const notice = ref("");
 const search = ref("");
-const directionFilter = ref("全部方向");
-const kindFilter = ref("all");
 const selected = ref<Task | null>(null);
 const submissions = ref<Submission[]>([]);
 const submissionsLoading = ref(false);
@@ -55,6 +54,32 @@ const kinds = [
   },
   { value: "quiz", title: "知识测评", icon: "mdi-clipboard-text-outline" },
 ];
+const kindFilter = computed(() =>
+  kinds.some((kind) => kind.value === route.query.kind)
+    ? String(route.query.kind)
+    : "all",
+);
+const directionFilter = computed({
+  get: () =>
+    typeof route.query.direction === "string" &&
+    directions.includes(route.query.direction)
+      ? route.query.direction
+      : "全部方向",
+  set: (direction: string) => {
+    router.replace({
+      query: {
+        ...route.query,
+        direction: direction === "全部方向" ? undefined : direction,
+      },
+    });
+  },
+});
+function clearFilters() {
+  search.value = "";
+  router.replace({
+    query: { ...route.query, kind: undefined, direction: undefined },
+  });
+}
 const isStudent = computed(() => auth.user?.role === "student");
 const canManage = computed(() =>
   ["admin", "mentor"].includes(auth.user?.role || ""),
@@ -381,34 +406,17 @@ onMounted(load);
 </script>
 
 <template>
+  <v-defaults-provider :defaults="{ VTextField: { density: 'compact' }, VSelect: { density: 'compact' }, VTextarea: { density: 'compact' } }">
   <div class="page-content learning-page">
     <div class="page-heading">
       <div>
-        <div class="eyebrow">LEARN · BUILD · ITERATE</div>
         <h1>学习与任务</h1>
-        <p>
-          {{
-            canManage
-              ? "用清晰的任务和及时的反馈，陪伴每一次进步。"
-              : "从第一个小实验，到真正运行的机器人。"
-          }}
-        </p>
+        <p>{{ canManage ? "发布训练任务，查看成员成果与审核进度" : "查看训练要求，提交成果并跟进导师反馈" }}</p>
       </div>
-      <v-btn
-        v-if="canManage"
-        color="primary"
-        size="large"
-        prepend-icon="mdi-plus"
-        @click="startCreate"
-        >发布任务</v-btn
-      ><v-btn
-        v-else
-        variant="outlined"
-        prepend-icon="mdi-refresh"
-        :loading="loading"
-        @click="load"
-        >刷新</v-btn
-      >
+      <div class="heading-actions">
+        <v-btn variant="text" prepend-icon="mdi-refresh" :loading="loading" @click="load">刷新</v-btn>
+        <v-btn v-if="canManage" color="primary" prepend-icon="mdi-plus" @click="startCreate">发布任务</v-btn>
+      </div>
     </div>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-5"
       >{{ error
@@ -422,62 +430,35 @@ onMounted(load);
       >
     </div>
     <template v-else>
-      <div class="learning-overview">
-        <div class="overview-copy">
-          <span class="section-kicker">{{
-            canManage ? "工程能力，来自真实交付" : "每一步实践，都算数"
-          }}</span>
-          <h2>
-            {{
-              canManage
-                ? "让学习有方向，让成长看得见。"
-                : "保持好奇，然后动手去做。"
-            }}
-          </h2>
-          <p>代码、文档、实验与实机验收，在这里积累可追溯的工程成果。</p>
-          <div class="overview-tags">
-            <span><v-icon size="15">mdi-source-branch</v-icon>保留提交版本</span
-            ><span
-              ><v-icon size="15">mdi-comment-check-outline</v-icon
-              >导师反馈</span
-            >
-          </div>
-        </div>
+      <div class="learning-overview" aria-label="任务数量概要">
         <div class="overview-stats">
           <div>
-            <strong>{{ isStudent ? completed : tasks.length }}</strong
-            ><span>{{ isStudent ? "已完成" : "已发布任务" }}</span>
+            <span>全部任务</span><strong>{{ tasks.length }}</strong>
           </div>
           <div>
+            <span>{{ isStudent ? "已完成" : "进行中" }}</span>
+            <strong>{{ isStudent ? completed : tasks.filter((t) => !isExpired(t.dueAt)).length }}</strong>
+          </div>
+          <div>
+            <span>{{ isStudent ? "待审核" : "必修任务" }}</span>
             <strong>{{
               isStudent
                 ? pending
-                : tasks.filter((t) => !isExpired(t.dueAt)).length
-            }}</strong
-            ><span>{{ isStudent ? "待审核" : "进行中" }}</span>
+                : tasks.filter((t) => t.required).length
+            }}</strong>
           </div>
           <div>
+            <span>{{ isStudent ? "待修改" : "成果提交" }}</span>
             <strong>{{
               isStudent
                 ? revisions
                 : tasks.reduce((sum, t) => sum + t.submissionCount, 0)
-            }}</strong
-            ><span>{{ isStudent ? "待修改" : "成果提交" }}</span>
+            }}</strong>
           </div>
         </div>
       </div>
       <div class="task-toolbar">
-        <div class="kind-tabs">
-          <button
-            v-for="kind in kinds"
-            :key="kind.value"
-            :class="{ active: kindFilter === kind.value }"
-            @click="kindFilter = kind.value"
-          >
-            <v-icon size="17">{{ kind.icon }}</v-icon
-            >{{ kind.title }}
-          </button>
-        </div>
+        <div class="filter-summary">{{ kindOf(kindFilter).title }}<span>{{ filtered.length }} 项</span></div>
         <div class="task-filters">
           <v-text-field
             v-model="search"
@@ -501,13 +482,14 @@ onMounted(load);
         <v-card
           v-for="task in filtered"
           :key="task.id"
-          rounded="xl"
-          elevation="0"
-          border
+          rounded="lg"
+          elevation="1"
           class="task-card"
+          :class="`task-kind-${task.kind}`"
           ><div class="task-top">
             <div :class="['task-icon', `icon-${task.kind}`]">
-              <v-icon size="25">{{ kindOf(task.kind).icon }}</v-icon>
+              <v-icon size="24">{{ kindOf(task.kind).icon }}</v-icon>
+              <span>{{ kindOf(task.kind).title }}</span>
             </div>
             <v-chip
               v-if="isStudent"
@@ -544,6 +526,7 @@ onMounted(load);
               ><v-icon size="14">mdi-star-outline</v-icon
               >{{ task.maxScore }} 分</span
             >
+            <span v-if="canManage"><v-icon size="14">mdi-tray-arrow-up</v-icon>{{ task.submissionCount }} 次提交</span>
           </div>
           <div class="task-card-footer">
             <div :class="{ overdue: isExpired(task.dueAt) }">
@@ -558,12 +541,12 @@ onMounted(load);
               size="small"
               append-icon="mdi-arrow-right"
               @click="openTask(task)"
-              >{{ canManage ? "查看成果" : "查看任务" }}</v-btn
+              >{{ canManage ? "查看成果" : task.mySubmission ? "查看提交" : "查看任务" }}</v-btn
             >
           </div></v-card
         >
       </div>
-      <v-card v-else class="empty-panel" elevation="0" rounded="xl" border
+      <v-card v-else class="empty-panel" elevation="1" rounded="lg"
         ><v-icon size="42" color="indigo-lighten-3"
           >mdi-notebook-outline</v-icon
         >
@@ -581,11 +564,7 @@ onMounted(load);
           v-if="tasks.length"
           variant="text"
           color="primary"
-          @click="
-            search = '';
-            directionFilter = '全部方向';
-            kindFilter = 'all';
-          "
+          @click="clearFilters"
           >清除筛选</v-btn
         ><v-btn v-else-if="canManage" color="primary" @click="startCreate"
           >发布第一项任务</v-btn
@@ -600,10 +579,10 @@ onMounted(load);
       :persistent="saving"
       scrollable
       @update:model-value="!$event && (selected = null)"
-      ><v-card v-if="selected" rounded="xl"
+      ><v-card v-if="selected" class="learning-dialog"
         ><v-card-title class="dialog-heading"
           ><div>
-            <div class="eyebrow">
+            <div class="dialog-caption">
               {{ kindOf(selected.kind).title }} ·
               {{ selected.direction || "全方向" }}
             </div>
@@ -670,7 +649,6 @@ onMounted(load);
                 ><v-btn
                   v-else-if="isStudent"
                   color="primary"
-                  size="large"
                   append-icon="mdi-arrow-right"
                   @click="detailTab = 'submit'"
                   >{{
@@ -679,7 +657,6 @@ onMounted(load);
                 ><v-btn
                   v-else-if="canManage"
                   color="primary"
-                  size="large"
                   append-icon="mdi-arrow-right"
                   @click="detailTab = 'history'"
                   >查看成员提交</v-btn
@@ -740,8 +717,7 @@ onMounted(load);
                     <span>编辑内容会尝试保存到当前浏览器</span
                     ><v-btn
                       color="primary"
-                      size="large"
-                      :loading="saving"
+                          :loading="saving"
                       type="submit"
                       >提交第
                       {{ (selectedSubmission?.version || 0) + 1 }} 版</v-btn
@@ -935,7 +911,7 @@ onMounted(load);
       :fullscreen="smAndDown"
       :persistent="saving"
       scrollable
-      ><v-card rounded="xl"
+      ><v-card class="learning-dialog"
         ><v-card-title class="dialog-heading"
           ><div>
             <h2>发布学习任务</h2>
@@ -1029,7 +1005,6 @@ onMounted(load);
                 color="primary"
                 :loading="saving"
                 type="submit"
-                size="large"
                 >发布任务</v-btn
               >
             </div></v-form
@@ -1042,7 +1017,7 @@ onMounted(load);
       max-width="580"
       :persistent="saving"
       @update:model-value="!$event && (reviewTarget = null)"
-      ><v-card v-if="reviewTarget && selected" rounded="xl"
+      ><v-card v-if="reviewTarget && selected" class="learning-dialog"
         ><v-card-title class="dialog-heading"
           ><div>
             <h2>审核 {{ reviewTarget.userName }} 的成果</h2>
@@ -1095,6 +1070,7 @@ onMounted(load);
       ></v-snackbar
     >
   </div>
+  </v-defaults-provider>
 </template>
 
 <style scoped>
@@ -1102,590 +1078,231 @@ onMounted(load);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 24px;
-  margin-bottom: 28px;
-}
-.eyebrow {
-  font-size: 11px;
-  letter-spacing: 1.8px;
-  font-weight: 700;
-  color: #7a819b;
+  gap: 20px;
+  margin-bottom: 20px;
 }
 .page-heading h1 {
-  font-size: 30px;
-  letter-spacing: -1px;
-  margin: 8px 0;
-  color: #232941;
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.4;
+  margin: 0 0 6px;
+  color: #263238;
 }
 .page-heading p,
 .dialog-heading p {
-  color: #7b8193;
+  color: #687680;
   font-size: 14px;
-  margin-top: 6px;
+  line-height: 1.6;
 }
+.heading-actions { display: flex; gap: 8px; flex-shrink: 0; }
 .loading-panel {
-  min-height: 260px;
+  min-height: 240px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 16px;
-  color: #7b8193;
+  gap: 14px;
+  color: #687680;
+  font-size: 14px;
 }
 .learning-overview {
-  border: 1px solid #e8eaf5;
-  border-radius: 20px;
-  background: linear-gradient(110deg, #eeeffc 0%, #f4f7fc 60%, #edf8f7 100%);
-  padding: 32px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 28px;
-  margin-bottom: 28px;
-}
-.section-kicker {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 1px;
-  color: #7d86b4;
-}
-.overview-copy h2 {
-  font-size: 23px;
-  color: #384366;
-  margin: 9px 0 12px;
-  letter-spacing: -0.5px;
-}
-.overview-copy p {
-  font-size: 13px;
-  color: #8790a7;
-  line-height: 1.8;
-}
-.overview-tags {
-  display: flex;
-  gap: 18px;
-  font-size: 11px;
-  color: #8a94ac;
-  margin-top: 22px;
-}
-.overview-tags > span {
-  display: flex;
-  align-items: center;
-  gap: 5px;
+  border: 1px solid #e2e6e9;
+  border-radius: 6px;
+  background: #fff;
+  margin-bottom: 20px;
 }
 .overview-stats {
-  display: flex;
-  gap: 34px;
-  padding: 10px 20px;
-  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 16px 0;
 }
 .overview-stats > div {
-  text-align: center;
-  min-width: 65px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 22px;
 }
+.overview-stats > div + div { border-left: 1px solid #e8ecef; }
 .overview-stats strong {
-  display: block;
-  font-size: 34px;
-  font-weight: 650;
-  color: #4c5b7e;
-  line-height: 1.2;
+  font-size: 25px;
+  font-weight: 500;
+  color: #1976d2;
+  line-height: 1.3;
 }
-.overview-stats span {
-  font-size: 12px;
-  display: block;
-  color: #98a1b4;
-  margin-top: 10px;
-}
+.overview-stats span { font-size: 13px; color: #687680; }
 .task-toolbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 20px;
-  margin-bottom: 24px;
+  margin-bottom: 16px;
 }
-.kind-tabs {
-  display: flex;
-  gap: 5px;
-  flex-wrap: wrap;
-}
-.kind-tabs button {
-  padding: 9px 11px;
-  font-size: 12px;
-  color: #818b9e;
-  border-radius: 9px;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-weight: 500;
-}
-.kind-tabs button.active {
-  color: #5e69ae;
-  background: #e9ecfa;
-}
-.kind-tabs button:hover {
-  background: #edf0f7;
-}
-.task-filters {
-  display: flex;
-  gap: 10px;
-  min-width: 320px;
-}
-.task-filters > .v-text-field {
-  width: 185px;
-}
-.task-filters > .v-select {
-  width: 135px;
-}
+.filter-summary { font-size: 16px; font-weight: 500; color: #37474f; }
+.filter-summary span { font-size: 12px; color: #687680; margin-left: 10px; font-weight: 400; }
+.task-filters { display: flex; gap: 12px; width: 390px; }
+.task-filters > .v-text-field { min-width: 0; flex: 1.6; }
+.task-filters > .v-select { min-width: 0; flex: 1; }
 .task-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 20px;
+  gap: 18px;
 }
 .task-card {
-  padding: 25px;
+  padding: 18px;
   display: flex;
   flex-direction: column;
-  transition:
-    transform 0.2s,
-    border-color 0.2s;
+  border-radius: 6px !important;
+  border-top: 3px solid #1976d2;
+  box-shadow: 0 1px 4px #2437461a !important;
+  transition: box-shadow 0.2s;
 }
-.task-card:hover {
-  border-color: #cfd5ee !important;
-  transform: translateY(-2px);
-}
+.task-card:hover { box-shadow: 0 3px 9px #24374624 !important; }
+.task-kind-document { border-top-color: #009688; }
+.task-kind-hardware { border-top-color: #f5a623; }
+.task-kind-quiz { border-top-color: #7e57c2; }
 .task-top {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 22px;
+  gap: 8px;
+  margin-bottom: 16px;
 }
-.task-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #eeeffb;
-  color: #7480c5;
-}
-.icon-document {
-  background: #eaf6f2;
-  color: #66a993;
-}
-.icon-hardware {
-  background: #fff4e6;
-  color: #c49761;
-}
-.icon-quiz {
-  background: #f3edfc;
-  color: #a58bc7;
-}
+.task-icon { display: flex; align-items: center; gap: 8px; color: #1976d2; }
+.task-icon span { font-size: 12px; color: #687680; }
+.icon-document { color: #00897b; }
+.icon-hardware { color: #d48a12; }
+.icon-quiz { color: #7e57c2; }
 .task-labels {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 11px;
-  color: #99a1b2;
-  margin-bottom: 10px;
+  gap: 7px;
+  font-size: 12px;
+  color: #687680;
+  margin-bottom: 8px;
 }
-.task-labels i {
-  font-style: normal;
-  color: #c2c8d3;
-}
-.task-labels > .v-chip {
-  margin-left: 4px;
-}
+.task-labels i { font-style: normal; color: #aeb7bd; }
+.task-labels > .v-chip { margin-left: 3px; }
 .task-card h2 {
   font-size: 17px;
-  line-height: 1.6;
-  color: #3e4862;
-  letter-spacing: -0.2px;
-  margin-bottom: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: #263238;
+  margin-bottom: 10px;
 }
 .task-description {
-  font-size: 12px;
-  color: #929aac;
-  line-height: 1.9;
+  font-size: 14px;
+  color: #687680;
+  line-height: 1.75;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  margin-bottom: 22px;
-  min-height: 69px;
+  margin-bottom: 18px;
+  min-height: 74px;
   overflow-wrap: anywhere;
 }
 .task-meta {
   display: flex;
   align-items: center;
-  gap: 22px;
-  font-size: 11px;
-  color: #a0a8b6;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: #687680;
   margin-top: auto;
-  margin-bottom: 20px;
+  margin-bottom: 14px;
 }
-.task-meta > span {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
+.task-meta > span { display: flex; align-items: center; gap: 4px; }
 .task-card-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 5px;
-  padding-top: 15px;
-  border-top: 1px solid #eff1f6;
+  gap: 4px;
+  padding-top: 10px;
+  border-top: 1px solid #edf0f2;
 }
 .task-card-footer > div {
   display: flex;
   align-items: center;
-  gap: 5px;
-  color: #98a3b5;
-  font-size: 10px;
+  gap: 4px;
+  color: #687680;
+  font-size: 12px;
 }
-.task-card-footer > div.overdue {
-  color: #b0918a;
-}
-.empty-panel {
-  padding: 65px 25px;
-  text-align: center;
-}
-.empty-panel h2 {
-  font-size: 19px;
-  color: #5f6981;
-  margin-top: 20px;
-}
-.empty-panel p {
-  font-size: 13px;
-  color: #9aa2b2;
-  margin: 13px 0 24px;
-  line-height: 1.9;
-}
+.task-card-footer > div.overdue { color: #ad5b4e; }
+.empty-panel { padding: 48px 24px; text-align: center; border-radius: 6px !important; }
+.empty-panel h2 { font-size: 18px; font-weight: 500; color: #455a64; margin-top: 16px; }
+.empty-panel p { font-size: 14px; color: #687680; margin: 12px 0 20px; line-height: 1.8; }
+.learning-dialog { border-radius: 6px !important; }
 .dialog-heading {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 25px 28px !important;
+  gap: 14px;
+  padding: 20px 24px !important;
   white-space: normal !important;
 }
-.dialog-heading h2 {
-  font-size: 21px;
-  line-height: 1.6;
-  color: #3a435e;
-  margin-top: 5px;
-}
-.dialog-heading p {
-  font-size: 12px;
-}
-.task-dialog-body {
-  padding: 28px !important;
-}
-.brief-meta {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  flex-wrap: wrap;
-  margin-bottom: 26px;
-}
-.brief-meta > span {
-  font-size: 12px;
-  color: #929bb1;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-left: auto;
-}
-.brief-description {
-  white-space: pre-wrap;
-  font-size: 14px;
-  color: #58627b;
-  line-height: 2;
-  overflow-wrap: anywhere;
-}
-.brief-actions {
-  margin-top: 30px;
-  padding-top: 24px;
-  border-top: 1px solid #eef0f7;
-}
-.content-title {
-  font-size: 18px;
-  color: #4a5571;
-  margin-bottom: 9px;
-}
-.content-hint {
-  font-size: 12px;
-  color: #949dae;
-  line-height: 1.9;
-  margin-bottom: 25px;
-}
-.submit-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 20px;
-  border-top: 1px solid #f0f2f7;
-  padding-top: 24px;
-  margin: 15px 0;
-}
-.submit-footer > span {
-  font-size: 12px;
-  color: #99a2b3;
-}
-.review-summary {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 12px;
-  color: #929cb0;
-  margin-bottom: 18px;
-}
-.submission-card {
-  border: 1px solid #e9ecf4;
-  border-radius: 16px;
-  padding: 24px;
-  margin-bottom: 18px;
-}
-.submission-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-.submission-heading strong {
-  display: block;
-  font-size: 15px;
-  color: #4b5570;
-}
-.submission-heading span {
-  font-size: 11px;
-  color: #96a0b3;
-  display: block;
-  margin-top: 6px;
-}
-.submission-content {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 13px;
-  line-height: 1.9;
-  color: #6d7890;
-  margin: 22px 0;
-}
-.submission-links {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.review-feedback {
-  background: #f6f8fc;
-  border-radius: 12px;
-  padding: 18px;
-  margin-top: 20px;
-}
-.review-feedback > div {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-}
-.review-feedback strong {
-  font-size: 12px;
-  color: #727e98;
-}
-.review-feedback > p,
-.feedback-text {
-  font-size: 13px;
-  line-height: 1.9;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  margin-top: 10px;
-  color: #66748d;
-}
-.review-feedback > span {
-  display: block;
-  font-size: 10px;
-  color: #a0a9ba;
-  margin-top: 12px;
-}
-.review-actions {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 15px;
-  border-top: 1px solid #f0f2f7;
-  padding-top: 20px;
-  margin-top: 20px;
-}
-.review-actions > span {
-  font-size: 11px;
-  color: #a0a9b9;
-}
-.review-form-actions {
-  display: flex;
-  gap: 10px;
-  justify-content: flex-end;
-}
-.older-versions {
-  margin-top: 20px;
-  font-size: 12px;
-  color: #8f9bb1;
-}
-.older-versions summary {
-  cursor: pointer;
-}
-.older-version {
-  padding: 18px;
-  margin-top: 14px;
-  background: #fafbfe;
-  border-radius: 10px;
-}
-.older-version strong {
-  font-size: 12px;
-  font-weight: 500;
-  color: #7e8ba5;
-}
-.older-version p {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  line-height: 1.9;
-  font-size: 12px;
-  margin-top: 10px;
-}
-.older-version a {
-  color: #6f7cac;
-  margin-top: 10px;
-}
+.dialog-caption { font-size: 12px; font-weight: 400; color: #687680; margin-bottom: 4px; }
+.dialog-heading h2 { font-size: 20px; font-weight: 500; line-height: 1.5; color: #263238; }
+.dialog-heading p { font-size: 12px; margin-top: 4px; }
+.task-dialog-body { padding: 24px !important; }
+.brief-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 20px; }
+.brief-meta > span { font-size: 12px; color: #687680; display: flex; align-items: center; gap: 5px; margin-left: auto; }
+.brief-description { white-space: pre-wrap; font-size: 14px; color: #455a64; line-height: 1.9; overflow-wrap: anywhere; }
+.brief-actions { margin-top: 24px; padding-top: 20px; border-top: 1px solid #e8ecef; }
+.content-title { font-size: 17px; font-weight: 500; color: #37474f; margin-bottom: 8px; }
+.content-hint { font-size: 12px; color: #687680; line-height: 1.8; margin-bottom: 20px; }
+.submit-footer { display: flex; justify-content: space-between; align-items: center; gap: 20px; border-top: 1px solid #e8ecef; padding-top: 20px; margin: 12px 0; }
+.submit-footer > span { font-size: 12px; color: #687680; }
+.review-summary { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #687680; margin-bottom: 14px; }
+.submission-card { border: 1px solid #e0e6e9; border-radius: 6px; padding: 20px; margin-bottom: 16px; }
+.submission-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.submission-heading strong { display: block; font-size: 15px; color: #37474f; }
+.submission-heading span { font-size: 12px; color: #687680; display: block; margin-top: 5px; }
+.submission-content { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.8; color: #455a64; margin: 18px 0; }
+.submission-links { display: flex; gap: 10px; flex-wrap: wrap; }
+.review-feedback { background: #f4f7f9; border-radius: 4px; padding: 16px; margin-top: 18px; }
+.review-feedback > div { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.review-feedback strong { font-size: 13px; color: #455a64; }
+.review-feedback > p, .feedback-text { font-size: 14px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 10px; color: #455a64; }
+.review-feedback > span { display: block; font-size: 12px; color: #687680; margin-top: 10px; }
+.review-actions { display: flex; justify-content: space-between; align-items: center; gap: 15px; border-top: 1px solid #e8ecef; padding-top: 16px; margin-top: 16px; }
+.review-actions > span { font-size: 12px; color: #687680; }
+.review-form-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.older-versions { margin-top: 18px; font-size: 12px; color: #687680; }
+.older-versions summary { cursor: pointer; color: #1976d2; }
+.older-version { padding: 16px; margin-top: 12px; background: #f7f9fa; border-radius: 4px; }
+.older-version strong { font-size: 12px; font-weight: 500; color: #455a64; }
+.older-version p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; font-size: 14px; margin-top: 10px; }
+.older-version a { color: #1976d2; margin-top: 10px; }
 @media (max-width: 1350px) {
-  .task-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .task-toolbar {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .task-filters {
-    max-width: 430px;
-  }
-  .overview-stats {
-    gap: 18px;
-    padding: 10px;
-  }
-  .learning-overview {
-    padding: 28px;
-  }
-  .overview-copy h2 {
-    font-size: 21px;
-  }
+  .task-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .overview-stats > div { padding: 0 18px; }
 }
 @media (max-width: 800px) {
-  .learning-overview {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .overview-stats {
-    justify-content: flex-start;
-    gap: 38px;
-  }
-  .overview-stats > div {
-    text-align: left;
-  }
-  .task-card {
-    padding: 21px;
-  }
+  .overview-stats > div { padding: 0 14px; flex-direction: column; align-items: flex-start; gap: 5px; }
+  .task-filters { width: 340px; }
 }
 @media (max-width: 600px) {
-  .page-heading {
-    gap: 14px;
-    align-items: flex-start;
-  }
-  .page-heading h1 {
-    font-size: 25px;
-  }
-  .page-heading p {
-    font-size: 12px;
-    line-height: 1.8;
-  }
-  .page-heading > .v-btn {
-    margin-top: 22px;
-  }
-  .eyebrow {
-    font-size: 10px;
-  }
-  .learning-overview {
-    padding: 23px;
-  }
-  .overview-copy h2 {
-    font-size: 19px;
-    line-height: 1.7;
-  }
-  .overview-stats {
-    justify-content: space-between;
-    gap: 10px;
-  }
-  .overview-stats strong {
-    font-size: 28px;
-  }
-  .overview-stats span {
-    font-size: 11px;
-  }
-  .overview-tags {
-    font-size: 10px;
-  }
-  .task-grid {
-    grid-template-columns: 1fr;
-  }
-  .kind-tabs {
-    gap: 3px;
-  }
-  .kind-tabs button {
-    font-size: 11px;
-    padding: 9px 7px;
-  }
-  .task-filters {
-    min-width: 0;
-  }
-  .task-filters > .v-text-field {
-    width: 58%;
-  }
-  .task-filters > .v-select {
-    width: 42%;
-  }
-  .task-description {
-    min-height: auto;
-  }
-  .dialog-heading {
-    padding: 20px !important;
-  }
-  .dialog-heading h2 {
-    font-size: 18px;
-  }
-  .task-dialog-body {
-    padding: 22px !important;
-  }
-  .brief-meta > span {
-    margin-left: 0;
-    flex-basis: 100%;
-    margin-top: 8px;
-  }
-  .submit-footer {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .submit-footer > span {
-    font-size: 11px;
-  }
-  .submission-card {
-    padding: 19px;
-  }
-  .review-actions {
-    align-items: flex-start;
-  }
-  .review-actions > span {
-    max-width: 150px;
-  }
-  .review-summary {
-    gap: 12px;
-  }
-  .submission-heading {
-    align-items: flex-start;
-  }
+  .page-heading { gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+  .page-heading h1 { font-size: 22px; }
+  .page-heading p { font-size: 13px; }
+  .heading-actions { margin-left: auto; }
+  .overview-stats { padding: 12px 0; }
+  .overview-stats > div { padding: 0 12px; }
+  .overview-stats strong { font-size: 22px; }
+  .overview-stats span { font-size: 12px; }
+  .task-toolbar { flex-direction: column; align-items: stretch; gap: 12px; }
+  .task-filters { width: 100%; }
+  .task-grid { grid-template-columns: 1fr; gap: 14px; }
+  .task-description { min-height: auto; }
+  .dialog-heading { padding: 16px !important; }
+  .dialog-heading h2 { font-size: 18px; }
+  .task-dialog-body { padding: 18px !important; }
+  .brief-meta > span { margin-left: 0; flex-basis: 100%; margin-top: 6px; }
+  .submit-footer { flex-direction: column; align-items: stretch; }
+  .submission-card { padding: 16px; }
+  .review-actions { align-items: flex-start; }
+  .review-actions > span { max-width: 145px; }
+  .review-summary { gap: 12px; }
+  .submission-heading { align-items: flex-start; }
 }
 </style>

@@ -53,7 +53,7 @@ async function loadSettings() {
 watch(() => auth.user?.id, loadSettings, { immediate: true });
 watch(mobile, (value) => (drawer.value = !value));
 watch(
-  () => route.path,
+  () => route.fullPath,
   () => {
     if (mobile.value) drawer.value = false;
   },
@@ -85,6 +85,55 @@ onUnmounted(() => {
   window.removeEventListener("session-expired", expired);
   window.removeEventListener("settings-updated", loadSettings);
 });
+
+const directions = [
+  { title: "机械", icon: "mdi-cog-outline" },
+  { title: "电控", icon: "mdi-chip" },
+  { title: "视觉算法", icon: "mdi-eye-outline" },
+  { title: "硬件", icon: "mdi-memory" },
+  { title: "运营", icon: "mdi-bullhorn-outline" },
+];
+const sectionTabs = computed(() => {
+  if (route.path === "/recruitment" && auth.user?.role !== "student")
+    return [
+      { value: "all", title: "全部报名" },
+      { value: "submitted", title: "待筛选" },
+      { value: "screening", title: "筛选中" },
+      { value: "interview", title: "待面试" },
+      { value: "accepted", title: "已录取" },
+      { value: "rejected", title: "未录取" },
+    ];
+  if (route.path === "/learning")
+    return [
+      { value: "all", title: "全部任务" },
+      { value: "code", title: "代码项目" },
+      { value: "document", title: "文档作业" },
+      { value: "hardware", title: "实机验收" },
+      { value: "quiz", title: "知识测评" },
+    ];
+  return [];
+});
+const tabKey = computed(() =>
+  route.path === "/recruitment" ? "status" : "kind",
+);
+const activeTab = computed(() => {
+  const value = route.query[tabKey.value];
+  return sectionTabs.value.some((item) => item.value === value) ? value : "all";
+});
+function selectTab(value: unknown) {
+  const query = { ...route.query };
+  delete query.applicant;
+  delete query.task;
+  if (value === "all") delete query[tabKey.value];
+  else query[tabKey.value] = String(value);
+  router.push({ path: route.path, query });
+}
+function directionLink(direction: string) {
+  return {
+    path: auth.user?.role === "student" ? "/learning" : "/recruitment",
+    query: { direction },
+  };
+}
 </script>
 
 <template>
@@ -93,21 +142,21 @@ onUnmounted(() => {
       <v-navigation-drawer
         v-model="drawer"
         :temporary="mobile"
-        width="238"
+        width="276"
         class="side-panel"
       >
-        <router-link to="/" class="brand"
-          ><img src="/mark.svg" alt="竞跃" width="38" height="38" />
+        <router-link to="/" class="brand">
+          <img src="/mark.svg" width="36" height="36" alt="竞跃" />
           <div>
-            <strong>竞跃<span>MR SYSTEM</span></strong
-            ><small>战队协作台</small>
-          </div></router-link
-        >
+            <strong>竞跃协作系统</strong><small>RoboMaster · ROBOCON</small>
+          </div>
+        </router-link>
         <div class="space-label">
-          <span class="space-dot" />
-          {{ settings?.organization || "机器人实验室" }}
+          <v-icon size="18" color="primary">mdi-school-outline</v-icon
+          ><span>{{ settings?.organization || "机器人实验室" }}</span>
         </div>
-        <div class="nav-caption">协作空间</div>
+        <v-divider />
+        <div class="nav-caption">工作空间</div>
         <v-list nav class="nav-list">
           <v-list-item
             v-for="item in navigation"
@@ -117,66 +166,75 @@ onUnmounted(() => {
             :prepend-icon="item.icon"
             :title="item.title"
             color="primary"
-            rounded="lg"
+            rounded="0"
           />
         </v-list>
-        <div class="side-divider" />
-        <div class="nav-caption">战队方向</div>
-        <div class="team-tag">
-          <span class="team-square rm">R</span>
-          <div>RoboMaster<small>机甲大师高校系列赛</small></div>
-        </div>
-        <div class="team-tag">
-          <span class="team-square rc">R</span>
-          <div>ROBOCON<small>大学生机器人大赛</small></div>
-        </div>
-        <template #append>
-          <div class="season-card">
-            <div class="d-flex align-center ga-2">
-              <v-icon size="17" color="primary">mdi-flag-outline</v-icon
-              ><strong>{{ settings?.season || "新赛季" }}</strong>
-            </div>
-            <p>一起，让想法落地。</p>
-            <div class="season-line"><i /></div>
-          </div>
-          <v-list nav class="px-3 pt-0" v-if="auth.user.role === 'admin'"
-            ><v-list-item
-              to="/settings"
-              prepend-icon="mdi-cog-outline"
-              title="空间设置"
-              color="primary"
-              rounded="lg"
-          /></v-list>
-          <div class="side-footer">
-            MR System <span>v0.1</span
-            ><v-chip
-              v-if="auth.demoMode"
-              size="x-small"
-              color="warning"
-              class="ml-2"
-              >演示</v-chip
+        <v-divider class="mx-4 my-2" />
+        <div class="nav-caption">技术分组</div>
+        <v-list nav density="compact" class="nav-list direction-list">
+          <v-list-item
+            v-for="item in directions"
+            :key="item.title"
+            :to="directionLink(item.title)"
+            :active="
+              route.query.direction === item.title &&
+              ['/learning', '/recruitment'].includes(route.path)
+            "
+            :prepend-icon="item.icon"
+            :title="item.title + '组'"
+            color="primary"
+            rounded="0"
+          >
+            <template #append
+              ><v-icon
+                v-if="auth.user.direction === item.title"
+                color="amber-darken-1"
+                size="18"
+                title="我的方向"
+                >mdi-star</v-icon
+              ></template
             >
+          </v-list-item>
+        </v-list>
+        <template #append>
+          <div class="sidebar-bottom">
+            <v-btn
+              v-if="auth.user.role === 'admin'"
+              to="/settings"
+              variant="text"
+              prepend-icon="mdi-cog-outline"
+              block
+              class="settings-link"
+              :color="route.path === '/settings' ? 'primary' : undefined"
+              >空间设置</v-btn
+            >
+            <div class="sidebar-meta">
+              <span>{{ settings?.season || "新赛季" }}</span
+              ><span v-if="auth.demoMode" class="demo-label">演示环境</span
+              ><span v-else>MR System</span>
+            </div>
           </div>
         </template>
       </v-navigation-drawer>
-
-      <v-app-bar flat height="68" class="topbar">
+      <v-app-bar
+        height="64"
+        :extended="!!sectionTabs.length"
+        extension-height="48"
+        class="topbar"
+        elevation="2"
+      >
         <v-app-bar-nav-icon
-          v-if="mobile"
           @click="drawer = !drawer"
-          aria-label="打开导航"
+          :aria-label="drawer ? '收起导航' : '打开导航'"
         />
-        <div class="topbar-path">
-          <span>协作空间</span><v-icon size="14">mdi-chevron-right</v-icon
-          ><strong>{{ route.meta.title }}</strong>
-        </div>
-        <v-spacer />
-        <span class="topbar-season d-none d-sm-flex"
-          ><span class="status-dot" />{{
-            settings?.season || "机器人战队"
-          }}</span
-        >
-        <v-divider vertical inset class="mx-5 d-none d-sm-block" />
+        <v-app-bar-title>{{
+          route.path === "/recruitment" && auth.user.role === "student"
+            ? "我的报名"
+            : route.meta.title
+        }}</v-app-bar-title>
+        <span class="topbar-season d-none d-sm-flex">{{
+          settings?.season || "机器人战队"
+        }}</span>
         <v-menu>
           <template #activator="{ props }"
             ><button
@@ -188,10 +246,10 @@ onUnmounted(() => {
               ><span class="profile-text"
                 >{{ auth.user.name
                 }}<small>{{ roleNames[auth.user.role] }}</small></span
-              ><v-icon size="17">mdi-chevron-down</v-icon>
+              ><v-icon size="18">mdi-chevron-down</v-icon>
             </button></template
           >
-          <v-list min-width="210"
+          <v-list min-width="230"
             ><v-list-item
               :title="auth.user.name"
               :subtitle="auth.user.email" /><v-divider /><v-list-item
@@ -201,228 +259,221 @@ onUnmounted(() => {
               @click="logout"
           /></v-list>
         </v-menu>
+        <template v-if="sectionTabs.length" #extension>
+          <v-tabs
+            :model-value="activeTab"
+            @update:model-value="selectTab"
+            color="white"
+            slider-color="yellow-accent-2"
+            class="context-tabs"
+            show-arrows
+            height="48"
+            aria-label="页面分类"
+          >
+            <v-tab
+              v-for="item in sectionTabs"
+              :key="item.value"
+              :value="item.value"
+              >{{ item.title }}</v-tab
+            >
+          </v-tabs>
+        </template>
       </v-app-bar>
     </template>
     <v-main><router-view /></v-main>
     <v-snackbar
       :model-value="!!logoutError"
       color="error"
-      @update:model-value="logoutError = ''"
+      @update:model-value="!$event && (logoutError = '')"
       >{{ logoutError }}</v-snackbar
     >
   </v-app>
 </template>
-
 <style scoped>
 .side-panel {
-  border-right: 1px solid #e8ecf4 !important;
+  border-right: 1px solid #e4e6e9 !important;
 }
 .brand {
+  height: 76px;
   display: flex;
   align-items: center;
-  gap: 11px;
-  padding: 25px 23px 22px;
+  gap: 12px;
+  padding: 0 22px;
+  color: #30343b;
   text-decoration: none;
-  color: #26304a;
 }
 .brand strong {
-  font-size: 20px;
-  letter-spacing: 1px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.brand strong span {
-  color: #a5adbd;
-  font-size: 8px;
-  letter-spacing: 1px;
-}
-.brand small {
-  color: #929bb0;
-  font-size: 10px;
-  letter-spacing: 2px;
-}
-.space-label {
-  margin: 0 19px 24px;
-  padding: 10px 12px;
-  border: 1px solid #edf0f5;
-  border-radius: 8px;
-  font-size: 12px;
-  color: #6c7690;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.space-dot {
-  height: 6px;
-  width: 6px;
-  border-radius: 50%;
-  background: #68bba1;
-}
-.nav-caption {
-  color: #a1a9b9;
-  font-size: 10px;
-  letter-spacing: 1px;
-  padding: 0 28px 9px;
-}
-.nav-list {
-  padding: 0 15px;
-}
-.nav-list .v-list-item {
-  margin-bottom: 7px;
-  min-height: 46px;
-}
-.nav-list :deep(.v-list-item__prepend > .v-icon) {
-  font-size: 20px;
-  margin-inline-end: 0;
-}
-.nav-list :deep(.v-list-item__spacer) {
-  width: 15px;
-}
-.nav-list :deep(.v-list-item-title) {
-  font-size: 13px;
-  font-weight: 550;
-}
-.side-divider {
-  height: 1px;
-  background: #eef0f5;
-  margin: 24px 25px;
-}
-.team-tag {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 10px 26px;
-  color: #58647d;
-  font-size: 12px;
-  font-weight: 600;
-}
-.team-tag small {
   display: block;
-  color: #a1a8b8;
-  font-size: 9px;
-  margin-top: 3px;
-  font-weight: 400;
-}
-.team-square {
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  font-family: monospace;
-  font-weight: 700;
-}
-.rm {
-  background: #fff2e9;
-  color: #c88b56;
-}
-.rc {
-  background: #eaf6f2;
-  color: #5a9a85;
-}
-.season-card {
-  margin: 16px 20px 18px;
-  padding: 15px;
-  background: #f6f7fc;
-  border: 1px solid #eef0f7;
-  border-radius: 10px;
-}
-.season-card strong {
-  font-size: 11px;
-}
-.season-card p {
-  font-size: 10px;
-  color: #989fb2;
-  margin: 9px 0 13px;
-}
-.season-line {
-  height: 3px;
-  background: #e5e9f5;
-  border-radius: 2px;
-}
-.season-line i {
-  display: block;
-  width: 36%;
-  height: 100%;
-  background: #8c9bdb;
-  border-radius: 2px;
-}
-.side-footer {
-  padding: 0 26px 18px;
-  font-size: 10px;
-  color: #aeb5c3;
-}
-.side-footer span {
-  margin-left: 4px;
-}
-.topbar {
-  background: #fff !important;
-  border-bottom: 1px solid #e8ecf4;
-  padding-right: 25px;
-}
-.topbar-path {
-  display: flex;
-  gap: 14px;
-  align-items: center;
-  padding-left: 36px;
-  font-size: 12px;
-  color: #a1a8b9;
-}
-.topbar-path strong {
-  color: #5f6b82;
+  font-size: 19px;
   font-weight: 500;
 }
-.topbar-season {
-  align-items: center;
-  gap: 8px;
+.brand small {
+  display: block;
+  margin-top: 3px;
+  color: #777;
   font-size: 11px;
-  color: #8590a6;
 }
-.status-dot {
-  width: 6px;
-  height: 6px;
-  background: #6db9a1;
-  border-radius: 50%;
+.space-label {
+  padding: 5px 22px 21px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  color: #687079;
+  font-size: 13px;
+}
+.space-label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-caption {
+  font-size: 12px;
+  color: #858585;
+  padding: 20px 23px 5px;
+}
+.nav-list {
+  padding: 4px 10px 8px;
+}
+.nav-list :deep(.v-list-item) {
+  min-height: 45px;
+  margin-bottom: 2px;
+  padding-left: 14px;
+}
+.nav-list :deep(.v-list-item-title) {
+  font-size: 14px;
+  font-weight: 400;
+}
+.nav-list :deep(.v-list-item__prepend > .v-icon) {
+  opacity: 0.7;
+  margin-inline-end: 23px;
+}
+.nav-list :deep(.v-list-item--active .v-list-item-title) {
+  font-weight: 500;
+}
+.direction-list :deep(.v-list-item) {
+  min-height: 40px;
+}
+.sidebar-bottom {
+  border-top: 1px solid #eee;
+  padding: 10px 16px 14px;
+  background: white;
+}
+.settings-link {
+  justify-content: flex-start;
+  height: 40px;
+}
+.sidebar-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 6px 0;
+  font-size: 11px;
+  color: #8b8b8b;
+}
+.demo-label {
+  color: #9c6c13;
+  background: #fff6dc;
+  padding: 2px 7px;
+  border-radius: 3px;
+}
+.topbar {
+  color: white !important;
+  background: linear-gradient(
+    110deg,
+    #167d87 0%,
+    #2854ad 33%,
+    #4630b3 65%,
+    #8426b7 100%
+  ) !important;
+}
+.topbar :deep(.v-toolbar__content) {
+  padding-right: 18px;
+}
+.topbar :deep(.v-toolbar-title) {
+  font-size: 20px;
+  font-weight: 400;
+  margin-inline-start: 12px !important;
+}
+.topbar-season {
+  font-size: 13px;
+  color: #ffffffbd;
+  margin-right: 24px;
 }
 .profile-button {
   display: flex;
   align-items: center;
   gap: 10px;
-  border-radius: 8px;
-  padding: 4px;
+  padding: 5px 7px;
+  border-radius: 4px;
+  color: white;
+}
+.profile-button:hover {
+  background: #ffffff12;
 }
 .profile-avatar {
+  border-radius: 50%;
   width: 34px;
   height: 34px;
-  border-radius: 11px;
+  background: #ffffff26;
+  border: 1px solid #ffffff50;
   display: grid;
   place-items: center;
-  background: #edf0fa;
-  color: #6675b6;
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 12px;
 }
 .profile-text {
-  font-size: 12px;
   text-align: left;
+  font-size: 13px;
 }
 .profile-text small {
   display: block;
-  font-size: 9px;
-  color: #9ba3b5;
-  margin-top: 2px;
+  font-size: 10px;
+  margin-top: 1px;
+  opacity: 0.7;
+}
+.context-tabs {
+  width: 100%;
+  padding-left: 18px;
+  background: #ffffff07;
+}
+.context-tabs :deep(.v-tab) {
+  min-width: 110px;
+  font-size: 14px;
+  font-weight: 400;
+  opacity: 0.8;
+}
+.context-tabs :deep(.v-tab--selected) {
+  opacity: 1;
+}
+.context-tabs :deep(.v-tab__slider) {
+  height: 3px;
 }
 @media (max-width: 600px) {
-  .topbar {
-    padding-right: 10px;
+  .topbar :deep(.v-toolbar__content) {
+    padding-right: 7px;
   }
-  .topbar-path {
-    padding-left: 0;
+  .topbar :deep(.v-toolbar-title) {
+    font-size: 18px;
+    margin-inline-start: 0 !important;
+  }
+  .profile-text small {
+    display: none;
+  }
+  .profile-avatar {
+    width: 30px;
+    height: 30px;
+  }
+  .profile-button {
     gap: 7px;
   }
-  .topbar-path > span {
-    display: none;
+  .profile-text {
+    font-size: 12px;
+  }
+  .context-tabs {
+    padding-left: 0;
+  }
+  .context-tabs :deep(.v-tab) {
+    min-width: 94px;
+    font-size: 13px;
   }
 }
 </style>

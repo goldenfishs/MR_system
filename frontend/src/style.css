@@ -1,13 +1,13 @@
 :root {
   font-family:
-    Inter,
+    Roboto,
     -apple-system,
     BlinkMacSystemFont,
     "Segoe UI",
     "PingFang SC",
     "Microsoft YaHei",
     sans-serif;
-  color: #26314a;
+  color: #424242;
   font-synthesis: none;
 }
 body {
@@ -15,20 +15,26 @@ body {
 }
 .v-application {
   font-family: inherit !important;
-  color: #26314a;
+  color: #424242;
 }
 .v-card {
-  border-color: #e8ebf2 !important;
+  border-color: #e7e7e7 !important;
+  border-radius: 6px !important;
+  box-shadow: 0 1px 3px #00000014 !important;
 }
 .v-btn {
-  font-weight: 600;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.v-btn:not(.v-btn--icon) {
+  border-radius: 4px !important;
 }
 .v-field {
-  border-radius: 10px !important;
+  border-radius: 4px !important;
   font-size: 14px;
 }
 .v-field__outline {
-  --v-field-border-opacity: 0.16;
+  --v-field-border-opacity: 0.3;
 }
 h1,
 h2,
@@ -38,60 +44,63 @@ p {
   margin-top: 0;
 }
 h1 {
-  letter-spacing: -0.7px;
+  letter-spacing: 0;
 }
 .muted {
-  color: #8490a6;
+  color: #757575;
 }
 .eyebrow {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 1.9px;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
 }
 .page-content {
-  max-width: 1500px;
+  max-width: 1640px;
   margin: 0 auto;
-  padding: 28px 36px 36px;
+  padding: 25px 26px 36px;
 }
 .page-title {
-  font-size: 26px;
-  font-weight: 750;
-  margin-bottom: 5px;
+  font-size: 24px;
+  font-weight: 500;
+  margin-bottom: 7px;
+}
+.page-title .dot,
+.page-title .text-secondary {
+  display: none;
 }
 .page-subtitle {
-  color: #8992a5;
-  font-size: 13px;
-  margin-bottom: 26px;
+  color: #757575;
+  font-size: 14px;
+  margin-bottom: 24px;
 }
 .section-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #2a354e;
+  font-size: 18px;
+  font-weight: 500;
+  color: #424242;
 }
 .section-caption {
-  color: #919aab;
+  color: #757575;
   font-size: 12px;
 }
 .v-table {
-  font-size: 13px;
+  font-size: 14px;
 }
 .v-table th {
-  color: #9199aa !important;
+  color: #757575 !important;
   font-size: 12px !important;
   font-weight: 500 !important;
-  background: #fafbfe;
+  background: #fafafa;
 }
 .v-table td {
-  border-color: #f0f2f7 !important;
+  border-color: #eeeeee !important;
 }
 .empty-state {
-  padding: 44px 20px;
+  padding: 42px 20px;
   text-align: center;
-  color: #8993a7;
+  color: #757575;
 }
 .empty-state .v-icon {
-  color: #b5bfd2;
+  color: #b0bec5;
   margin-bottom: 12px;
 }
 .empty-state p {
@@ -99,15 +108,15 @@ h1 {
   font-size: 14px;
 }
 a {
-  color: #4959bd;
+  color: #1976d2;
 }
 :focus-visible {
-  outline: 3px solid #9da8ea;
+  outline: 3px solid #64b5f6;
   outline-offset: 3px;
 }
 @media (max-width: 960px) {
   .page-content {
-    padding: 24px 20px;
+    padding: 22px 20px;
   }
 }
 @media (max-width: 600px) {
@@ -115,7 +124,7 @@ a {
     padding: 20px 14px;
   }
   .page-title {
-    font-size: 23px;
+    font-size: 22px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
