@@ -1,6 +1,6 @@
 # MVP API contract
 
-JSON API under `/api`. Successful responses are JSON, errors are `{ "error": "Human-readable message" }` with appropriate HTTP status. Auth uses HttpOnly SameSite=Lax session cookie. Mutations validate Origin when present. Dates are ISO 8601 strings. IDs are strings. Empty optional strings are permitted. There is no real external notification delivery in MVP.
+JSON API under `/api`. Successful responses are JSON, errors are `{ "error": "Human-readable message" }` with appropriate HTTP status. Verification rate-limit responses also include `retryAfterSeconds` and a `Retry-After` header. Auth uses HttpOnly SameSite=Lax session cookie. Mutations validate Origin when present. Dates are ISO 8601 strings. IDs are strings. Empty optional strings are permitted. SMTP delivery is used for registration verification; other external notifications are not implemented.
 
 ## Types
 
@@ -9,7 +9,7 @@ type Role = 'admin' | 'mentor' | 'interviewer' | 'student';
 type Team = 'RoboMaster' | 'ROBOCON';
 type Direction = '机械' | '电控' | '视觉算法' | '硬件' | '运营';
 type ApplicantStatus = 'submitted' | 'screening' | 'interview' | 'accepted' | 'rejected';
-interface User { id: string; name: string; email: string; role: Role; team: string; direction: string; joinedAt: string; }
+interface User { id: string; name: string; email: string; role: Role; team: string; direction: string; joinedAt: string; emailVerifiedAt?: string; }
 interface Applicant {
  id: string; userId: string; name: string; email: string; phone: string; university: string;
  major: string; year: string; team: string; direction: string; secondDirection: string;
@@ -38,10 +38,11 @@ interface Settings { organization: string; season: string; applicationOpen: bool
 
 - `GET /api/health` -> `{status:"ok"}`
 - `POST /api/auth/login` `{email,password}` -> `{user:User}`
-- `POST /api/auth/register` `{name,email,password}` -> `{user:User}`; student role only; logged in on success.
+- `POST /api/auth/send-verification-code` `{email}` -> `{message,cooldownSeconds:60,expiresInSeconds:600}` after successful SMTP delivery. Six decimal digits, 10 minute expiry, 60 second resend cooldown, at most 5 sends per email/hour and 10 requests per source IP/15 minutes. New codes invalidate previous codes; at most 5 verification attempts. SMTP unavailable: 503; throttled: 429. Codes are never returned by the API.
+- `POST /api/auth/register` `{name,email,password,verificationCode}` -> `{user:User}`; valid email-bound code required; student role only; logged in on success. Code consumption, identity and session creation are atomic. New public registrations set `emailVerifiedAt`; existing/bootstrap/staff-created accounts are retained without retroactively claiming verification.
 - `GET /api/auth/me` -> `{user:User,demoMode:boolean}` (401 anonymous)
 - `POST /api/auth/logout` -> `{ok:true}`
-- `GET /api/public/config` -> `{organization,season,demoMode,applicationOpen,applicationDeadline}` (no auth)
+- `GET /api/public/config` -> `{organization,season,demoMode,applicationOpen,applicationDeadline,emailVerificationRequired:true,registrationEnabled:boolean}` (no auth); registrationEnabled means SMTP configuration is present, not a guarantee of upstream availability.
 - `GET /api/dashboard` -> `{stats:{applicants:number,pendingReviews:number,activeTasks:number,members:number},pipeline:{status:ApplicantStatus,label:string,count:number}[],recentActivity:Activity[],upcomingInterviews:Applicant[]}`; student data scoped to own records.
 - `GET /api/applicants` -> `{items:Applicant[]}`; student own, interviewer assigned, admin/mentor all. Student does not receive notes or score.
 - `POST /api/applicants` -> `{item:Applicant}`; fields matching applicant form. Student creates own; admin may create. One application per user in MVP. Existing application updates only in submitted/screening state, before deadline. Applicant identity bound to session.
@@ -54,6 +55,7 @@ interface Settings { organization: string; season: string; applicationOpen: bool
 - `POST /api/tasks/:id/submissions` `{content,repoUrl,artifactUrl}` -> `{item:Submission}`; admitted student only, matching task team/direction (empty means all), deadline enforced. Creates immutable version; old versions remain.
 - `PATCH /api/submissions/:id` `{status:'approved'|'changes_requested',score:number,feedback:string}` -> `{item:Submission}`; admin/mentor only, only latest version can be reviewed; score within task.maxScore.
 - `GET /api/settings` -> `{settings:Settings}`; authenticated, safe public-facing settings.
+- `GET /api/settings/email` -> `{configured:boolean,from:string,security:string}`; admin only. SMTP credentials and server details are never exposed. Configure SMTP through server environment variables.
 - `PATCH /api/settings` partial Settings -> `{settings:Settings}`; admin only. hydroUrl must be http(s) or empty, no secrets.
 
 ## Seeded demo identities (DEMO_MODE=true only)

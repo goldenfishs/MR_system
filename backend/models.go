@@ -1,13 +1,14 @@
 package main
 
 type User struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Email     string `json:"email"`
-	Role      string `json:"role"`
-	Team      string `json:"team"`
-	Direction string `json:"direction"`
-	JoinedAt  string `json:"joinedAt"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Email           string `json:"email"`
+	Role            string `json:"role"`
+	Team            string `json:"team"`
+	Direction       string `json:"direction"`
+	JoinedAt        string `json:"joinedAt"`
+	EmailVerifiedAt string `json:"emailVerifiedAt,omitempty"`
 }
 type Applicant struct {
 	ID              string   `json:"id"`

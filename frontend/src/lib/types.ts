@@ -15,6 +15,7 @@ export interface User {
   team: string;
   direction: string;
   joinedAt: string;
+  emailVerifiedAt?: string;
 }
 export interface Applicant {
   id: string;
@@ -104,4 +105,11 @@ export interface PublicConfig {
   demoMode: boolean;
   applicationOpen: boolean;
   applicationDeadline: string;
+  emailVerificationRequired: boolean;
+  registrationEnabled: boolean;
+}
+export interface EmailServiceStatus {
+  configured: boolean;
+  from: string;
+  security: string;
 }

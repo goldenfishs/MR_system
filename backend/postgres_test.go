@@ -62,21 +62,23 @@ func TestPostgreSQLPersistence(t *testing.T) {
 		t.Fatalf("demo initialization duplicated or omitted applicants: count=%d err=%v", count, err)
 	}
 
-	app := newApp(store, Config{Demo: true, WebDir: t.TempDir()})
-	client := &testClient{t: t, handler: app.Handler()}
+	mailer := &testMailer{}
+	app := newApp(store, Config{Demo: true, WebDir: t.TempDir(), Mailer: mailer})
+	client := &testClient{t: t, handler: app.Handler(), mailer: mailer}
 	client.login("admin")
 	client.request("GET", "/api/auth/me", nil, 200)
 
 	email := "pg-" + randomID() + "@example.test"
 	password := "PostgresTestPassword!2026"
-	registered := unmarshal[User](t, client.request("POST", "/api/auth/register", map[string]string{
-		"name": "数据库验证学员", "email": email, "password": password,
-	}, 201)["user"])
+	registered := unmarshal[User](t, client.register("数据库验证学员", email, password)["user"])
 	application := unmarshal[Applicant](t, client.request("POST", "/api/applicants", map[string]any{
 		"name": "数据库验证学员", "phone": "13800008888", "university": "虚构测试大学",
 		"major": "自动化", "year": "大一", "team": "RoboMaster", "direction": "电控",
 		"motivation": "验证 PostgreSQL 持久化与中文数据", "experience": "测试记录",
 	}, 200)["item"])
+	if registered.EmailVerifiedAt == "" {
+		t.Fatal("PostgreSQL registration did not record verified email")
+	}
 	if application.UserID != registered.ID {
 		t.Fatal("application did not preserve registered identity")
 	}
@@ -128,7 +130,7 @@ func TestPostgreSQLPersistence(t *testing.T) {
 	if err = initialize(reopened, true); err != nil {
 		t.Fatalf("initialize after reconnect: %v", err)
 	}
-	client.handler = newApp(reopened, Config{Demo: true, WebDir: t.TempDir()}).Handler()
+	client.handler = newApp(reopened, Config{Demo: true, WebDir: t.TempDir(), Mailer: mailer}).Handler()
 	client.request("GET", "/api/auth/me", nil, 200)
 	history := unmarshal[[]Submission](t, client.request("GET", "/api/tasks/"+task.ID+"/submissions", nil, 200)["items"])
 	if len(history) != 2 || history[0].ID != latest.ID || history[0].Status != "approved" || history[0].Score == nil || *history[0].Score != 96 || history[0].Feedback != "数据库集成验证通过" {
@@ -139,7 +141,7 @@ func TestPostgreSQLPersistence(t *testing.T) {
 	}
 	client.request("POST", "/api/auth/login", map[string]string{"email": email, "password": password}, 200)
 	me := unmarshal[User](t, client.request("GET", "/api/auth/me", nil, 200)["user"])
-	if me.ID != registered.ID || me.Team != "RoboMaster" || me.Direction != "电控" {
+	if me.ID != registered.ID || me.Team != "RoboMaster" || me.Direction != "电控" || me.EmailVerifiedAt != registered.EmailVerifiedAt {
 		t.Fatal("admission transaction did not persist member identity and scope")
 	}
 	own := unmarshal[[]Applicant](t, client.request("GET", "/api/applicants", nil, 200)["items"])

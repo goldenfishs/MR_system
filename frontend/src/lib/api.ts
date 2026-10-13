@@ -2,10 +2,24 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public status: number,
+    public retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "ApiError";
   }
+}
+function retryAfterSeconds(response: Response, data?: any): number | undefined {
+  const header = response.headers.get("Retry-After");
+  if (header) {
+    const seconds = /^\d+$/.test(header)
+      ? Number(header)
+      : (Date.parse(header) - Date.now()) / 1000;
+    if (Number.isFinite(seconds)) return Math.max(0, Math.ceil(seconds));
+  }
+  const seconds = Number(data?.retryAfterSeconds ?? data?.cooldownSeconds);
+  return Number.isFinite(seconds) && seconds >= 0
+    ? Math.ceil(seconds)
+    : undefined;
 }
 async function request<T>(
   path: string,
@@ -31,12 +45,20 @@ async function request<T>(
   try {
     data = await response.json();
   } catch {
-    throw new ApiError("服务返回了无效响应，请稍后重试。", response.status);
+    throw new ApiError(
+      "服务返回了无效响应，请稍后重试。",
+      response.status,
+      retryAfterSeconds(response),
+    );
   }
   if (!response.ok) {
     if (response.status === 401 && !path.startsWith("/auth/"))
       window.dispatchEvent(new Event("session-expired"));
-    throw new ApiError(data.error || "操作失败，请稍后重试。", response.status);
+    throw new ApiError(
+      data.error || "操作失败，请稍后重试。",
+      response.status,
+      retryAfterSeconds(response, data),
+    );
   }
   return data as T;
 }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
 import { api } from "../lib/api";
-import type { Settings } from "../lib/types";
+import type { EmailServiceStatus, Settings } from "../lib/types";
 const form = reactive<Settings>({
   organization: "",
   season: "",
@@ -16,6 +16,20 @@ const deadline = ref(""),
   saving = ref(false),
   error = ref(""),
   saved = ref(false);
+const emailStatus = ref<EmailServiceStatus | null>(null),
+  emailStatusLoading = ref(true),
+  emailStatusError = ref("");
+async function loadEmailStatus() {
+  emailStatusLoading.value = true;
+  emailStatusError.value = "";
+  try {
+    emailStatus.value = await api.get<EmailServiceStatus>("/settings/email");
+  } catch (e) {
+    emailStatusError.value = (e as Error).message;
+  } finally {
+    emailStatusLoading.value = false;
+  }
+}
 function localDateTime(value: string) {
   if (!value) return "";
   const d = new Date(value);
@@ -71,7 +85,10 @@ async function save() {
     saving.value = false;
   }
 }
-onMounted(load);
+onMounted(() => {
+  void load();
+  void loadEmailStatus();
+});
 </script>
 <template>
   <div class="page-content">
@@ -144,6 +161,61 @@ onMounted(load);
           hint="当前版本提供外部入口，成绩与账号同步尚未接入。"
           persistent-hint
       /></v-card>
+      <v-card class="settings-card">
+        <div class="settings-heading">
+          <v-icon color="primary">mdi-email-check-outline</v-icon>
+          <div>
+            <h2>注册邮箱验证</h2>
+            <p>新账号需通过邮箱验证码验证后才能注册</p>
+          </div>
+        </div>
+        <v-progress-linear
+          v-if="emailStatusLoading"
+          indeterminate
+          color="primary"
+        />
+        <v-alert
+          v-else-if="emailStatusError"
+          type="warning"
+          variant="tonal"
+          density="compact"
+        >
+          邮件服务状态读取失败。
+          <v-btn
+            type="button"
+            variant="text"
+            size="small"
+            @click="loadEmailStatus"
+            >重试</v-btn
+          >
+        </v-alert>
+        <template v-else-if="emailStatus">
+          <v-chip
+            :color="emailStatus.configured ? 'success' : 'warning'"
+            size="small"
+            class="mb-3"
+            :prepend-icon="
+              emailStatus.configured
+                ? 'mdi-check-circle-outline'
+                : 'mdi-clock-outline'
+            "
+            >{{
+              emailStatus.configured ? "已配置发信服务" : "发信服务未配置"
+            }}</v-chip
+          >
+          <p v-if="emailStatus.configured" class="email-status-text">
+            发件邮箱：{{ emailStatus.from }}
+          </p>
+          <p class="email-status-text">
+            {{
+              emailStatus.configured
+                ? "账号注册已开放，验证码有效期为 10 分钟。"
+                : "暂不开放新账号注册，已有账号仍可登录。"
+            }}
+            如需调整发信服务，请联系部署管理员。
+          </p>
+        </template>
+      </v-card>
       <div class="d-flex align-center justify-space-between ga-4">
         <span class="save-hint">修改会写入操作记录</span
         ><v-btn
@@ -184,6 +256,13 @@ onMounted(load);
 .save-hint {
   font-size: 13px;
   color: #757575;
+}
+.email-status-text {
+  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #616161;
+  overflow-wrap: anywhere;
 }
 @media (max-width: 600px) {
   .settings-card {

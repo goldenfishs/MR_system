@@ -7,6 +7,7 @@ flowchart LR
   Browser[浏览器 · Vue 3] --> Proxy[HTTPS 反向代理]
   Proxy --> App[Go 服务 · API 与静态页面]
   App --> DB[(PostgreSQL / 本地 SQLite)]
+  App --> SMTP[SMTP · 注册验证码邮件]
   Browser -.配置的外部链接.-> Hydro[独立 Hydro 实例]
 ```
 
@@ -23,6 +24,7 @@ flowchart LR
 | 对象 | 责任与边界 |
 | --- | --- |
 | User | 登录身份、角色、已加入的赛队与方向 |
+| Email verification | 邮箱绑定的验证码哈希、过期时间、重发冷却、发送与验证次数；成功注册后消费 |
 | Applicant | 报名内容、审核状态、面试安排与内部评价；绑定登录用户 |
 | Task | 任务内容、类型、所属赛队与方向、截止时间、评分上限 |
 | Submission | 每次提交的说明和链接、版本号、审核结果与反馈 |
@@ -51,6 +53,8 @@ flowchart LR
 ## 会话与数据处理
 
 登录采用服务端会话及 HttpOnly、SameSite=Lax Cookie；正式环境通过 `SESSION_SECURE=true` 仅在 HTTPS 上发送。修改请求校验 `Origin`（请求提供时），不开放通配跨域。前后端部署在相同来源，避免跨站 Cookie 与额外 CORS 配置。
+
+公开注册必须完成 SMTP 邮箱验证；验证码哈希、冷却和邮箱限额保存在数据库，无需 Redis。消费验证码、创建用户和注册会话位于同一事务中。密码只留在页面内存，SMTP 密钥只通过部署环境注入。邮件配置不可用时保留既有登录，停止新注册。详细规则见[邮箱注册配置](email-registration.md)。
 
 用户身份从会话获取，不信任报名或提交正文中伪造的用户 ID。服务端检查报名开放时间、允许修改的状态、任务截止时间、评分范围、提交版本以及角色权限。客户端保存、提交或审核成功后，再更新界面；接口错误应保持可见并允许纠正。
 

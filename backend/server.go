@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,10 +28,13 @@ import (
 )
 
 type Config struct {
-	Demo         bool
-	Secure       bool
-	PublicOrigin string
-	WebDir       string
+	Demo          bool
+	Secure        bool
+	PublicOrigin  string
+	WebDir        string
+	Mailer        VerificationMailer
+	EmailFrom     string
+	EmailSecurity string
 }
 type attempt struct {
 	count int
@@ -43,12 +47,13 @@ type App struct {
 	rateMu   sync.Mutex
 }
 type apiError struct {
-	status  int
-	message string
+	status            int
+	message           string
+	retryAfterSeconds int
 }
 
 func (e *apiError) Error() string       { return e.message }
-func fail(status int, msg string) error { return &apiError{status, msg} }
+func fail(status int, msg string) error { return &apiError{status: status, message: msg} }
 func now() string                       { return time.Now().UTC().Format(time.RFC3339Nano) }
 func randomID() string {
 	b := make([]byte, 20)
@@ -117,6 +122,9 @@ func normalizedEmail(s string) (string, bool) {
 	return s, e == nil && addr.Address == s && len(s) <= 254
 }
 func (a *App) wrap(auth bool, handler func(http.ResponseWriter, *http.Request, User) error) http.HandlerFunc {
+	return a.wrapWithMutationLock(auth, true, handler)
+}
+func (a *App) wrapWithMutationLock(auth, mutationLock bool, handler func(http.ResponseWriter, *http.Request, User) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -145,8 +153,10 @@ func (a *App) wrap(auth bool, handler func(http.ResponseWriter, *http.Request, U
 				return
 			}
 			r.Body = io.NopCloser(bytes.NewReader(body))
-			a.store.mu.Lock()
-			defer a.store.mu.Unlock()
+			if mutationLock {
+				a.store.mu.Lock()
+				defer a.store.mu.Unlock()
+			}
 		}
 		var user User
 		var err error
@@ -160,7 +170,13 @@ func (a *App) wrap(auth bool, handler func(http.ResponseWriter, *http.Request, U
 		if err = handler(w, r, user); err != nil {
 			var ae *apiError
 			if errors.As(err, &ae) {
-				respond(w, ae.status, map[string]string{"error": ae.message})
+				body := map[string]any{"error": ae.message}
+				if ae.status == http.StatusTooManyRequests {
+					seconds := max(1, ae.retryAfterSeconds)
+					w.Header().Set("Retry-After", strconv.Itoa(seconds))
+					body["retryAfterSeconds"] = seconds
+				}
+				respond(w, ae.status, body)
 			} else if errors.Is(err, sql.ErrNoRows) {
 				respond(w, 404, map[string]string{"error": "记录不存在"})
 			} else {
@@ -182,6 +198,7 @@ func (a *App) Handler() http.Handler {
 	m.HandleFunc("GET /api/public/config", a.wrap(false, a.publicConfig))
 	m.HandleFunc("POST /api/auth/login", a.wrap(false, a.login))
 	m.HandleFunc("POST /api/auth/register", a.wrap(false, a.register))
+	m.HandleFunc("POST /api/auth/send-verification-code", a.wrapWithMutationLock(false, false, a.sendVerificationCode))
 	m.HandleFunc("POST /api/auth/logout", a.wrap(false, a.logout))
 	m.HandleFunc("GET /api/auth/me", a.wrap(true, func(w http.ResponseWriter, r *http.Request, u User) error {
 		respond(w, 200, map[string]any{"user": u, "demoMode": a.config.Demo})
@@ -199,6 +216,7 @@ func (a *App) Handler() http.Handler {
 	m.HandleFunc("POST /api/tasks/{id}/submissions", a.wrap(true, a.submitTask))
 	m.HandleFunc("PATCH /api/submissions/{id}", a.wrap(true, a.reviewSubmission))
 	m.HandleFunc("GET /api/settings", a.wrap(true, a.getSettings))
+	m.HandleFunc("GET /api/settings/email", a.wrap(true, a.emailSettings))
 	m.HandleFunc("PATCH /api/settings", a.wrap(true, a.updateSettings))
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, 404, map[string]string{"error": "接口不存在"})
@@ -259,21 +277,31 @@ func (a *App) currentUser(r *http.Request) (User, error) {
 	return readOne[User](a.store, `SELECT u.payload FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires_at>?`, tokenHash(c.Value), now())
 }
 func (a *App) setSession(w http.ResponseWriter, r *http.Request, u User) error {
+	cookie, err := a.createSession(a.store, r, u)
+	if err != nil {
+		return err
+	}
+	http.SetCookie(w, cookie)
+	return nil
+}
+
+// createSession accepts a transaction-scoped store so registration, challenge
+// consumption, and the initial session either commit together or roll back.
+func (a *App) createSession(s *Store, r *http.Request, u User) (*http.Cookie, error) {
 	if c, err := r.Cookie("robot_hub_session"); err == nil {
-		if err = a.store.exec("DELETE FROM sessions WHERE token_hash=?", tokenHash(c.Value)); err != nil {
-			return err
+		if err = s.exec("DELETE FROM sessions WHERE token_hash=?", tokenHash(c.Value)); err != nil {
+			return nil, err
 		}
 	}
 	token := randomID()
 	expiry := time.Now().UTC().Add(24 * time.Hour)
-	if err := a.store.exec("DELETE FROM sessions WHERE expires_at<?", now()); err != nil {
-		return err
+	if err := s.exec("DELETE FROM sessions WHERE expires_at<?", now()); err != nil {
+		return nil, err
 	}
-	if err := a.store.exec("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)", tokenHash(token), u.ID, expiry.Format(time.RFC3339Nano)); err != nil {
-		return err
+	if err := s.exec("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)", tokenHash(token), u.ID, expiry.Format(time.RFC3339Nano)); err != nil {
+		return nil, err
 	}
-	http.SetCookie(w, &http.Cookie{Name: "robot_hub_session", Value: token, Path: "/", HttpOnly: true, Secure: a.config.Secure, SameSite: http.SameSiteLaxMode, MaxAge: 86400, Expires: expiry})
-	return nil
+	return &http.Cookie{Name: "robot_hub_session", Value: token, Path: "/", HttpOnly: true, Secure: a.config.Secure, SameSite: http.SameSiteLaxMode, MaxAge: 86400, Expires: expiry}, nil
 }
 func rateKey(r *http.Request, email string) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -317,7 +345,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request, _ User) error {
 		return fail(401, "邮箱或密码不正确")
 	}
 	if !a.rateAllowed(r, email) {
-		return fail(429, "尝试次数过多，请 15 分钟后重试")
+		return rateLimit("尝试次数过多，请 15 分钟后重试", 900)
 	}
 	var raw, hash string
 	err := a.store.row("SELECT payload,password_hash FROM users WHERE email=?", email).Scan(&raw, &hash)
@@ -342,49 +370,6 @@ func (a *App) login(w http.ResponseWriter, r *http.Request, _ User) error {
 	respond(w, 200, map[string]any{"user": u})
 	return nil
 }
-func (a *App) register(w http.ResponseWriter, r *http.Request, _ User) error {
-	var in struct {
-		Name     string `json:"name"`
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
-	if err := decode(r, &in); err != nil {
-		return err
-	}
-	email, ok := normalizedEmail(in.Email)
-	if !ok || len(in.Password) > 72 || len(in.Password) < 10 {
-		return fail(400, "请填写有效邮箱和 10–72 字节密码")
-	}
-	if !a.rateAllowed(r, email) {
-		return fail(429, "尝试次数过多，请稍后重试")
-	}
-	in.Name = strings.TrimSpace(in.Name)
-	if !ok || len(in.Name) < 1 || len(in.Name) > 100 || len(in.Password) < 10 || len(in.Password) > 72 {
-		return fail(400, "请填写有效姓名、邮箱和 10–72 字节密码")
-	}
-	var count int
-	if err := a.store.row("SELECT COUNT(*) FROM users WHERE email=?", email).Scan(&count); err != nil {
-		return err
-	}
-	if count > 0 {
-		return fail(409, "该邮箱已注册")
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
-	if err != nil {
-		return err
-	}
-	u := User{ID: randomID(), Name: in.Name, Email: email, Role: "student", JoinedAt: now()}
-	if err = a.store.exec("INSERT INTO users(id,email,password_hash,payload) VALUES(?,?,?,?)", u.ID, u.Email, string(hash), encoded(u)); err != nil {
-		return err
-	}
-	if err = a.setSession(w, r, u); err != nil {
-		return err
-	}
-	a.clearRate(r, email)
-	a.activity(u, "注册账号", u.Name)
-	respond(w, 201, map[string]any{"user": u})
-	return nil
-}
 func (a *App) logout(w http.ResponseWriter, r *http.Request, _ User) error {
 	if c, err := r.Cookie("robot_hub_session"); err == nil {
 		if err = a.store.exec("DELETE FROM sessions WHERE token_hash=?", tokenHash(c.Value)); err != nil {
@@ -400,7 +385,7 @@ func (a *App) publicConfig(w http.ResponseWriter, r *http.Request, _ User) error
 	if err != nil {
 		return err
 	}
-	respond(w, 200, map[string]any{"organization": s.Organization, "season": s.Season, "demoMode": a.config.Demo, "applicationOpen": s.ApplicationOpen, "applicationDeadline": s.ApplicationDeadline})
+	respond(w, 200, map[string]any{"organization": s.Organization, "season": s.Season, "demoMode": a.config.Demo, "applicationOpen": s.ApplicationOpen, "applicationDeadline": s.ApplicationDeadline, "emailVerificationRequired": true, "registrationEnabled": a.config.Mailer != nil})
 	return nil
 }
 func (a *App) activity(u User, action, target string) {
@@ -979,7 +964,11 @@ func main() {
 	if err = initialize(store, demo); err != nil {
 		log.Fatal(err)
 	}
-	app := newApp(store, Config{Demo: demo, Secure: os.Getenv("SESSION_SECURE") == "true", PublicOrigin: os.Getenv("PUBLIC_ORIGIN"), WebDir: env("WEB_DIR", "../frontend/dist")})
+	mailer, emailConfig, err := smtpMailerFromEnv(demo)
+	if err != nil {
+		log.Fatal(err)
+	}
+	app := newApp(store, Config{Mailer: mailer, EmailFrom: emailConfig.From, EmailSecurity: emailConfig.Security, Demo: demo, Secure: os.Getenv("SESSION_SECURE") == "true", PublicOrigin: os.Getenv("PUBLIC_ORIGIN"), WebDir: env("WEB_DIR", "../frontend/dist")})
 	server := &http.Server{Addr: env("ADDR", "127.0.0.1:8080"), Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	log.Printf("Robot Team Hub listening on %s (demo=%v)", server.Addr, demo)
 	if err = server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

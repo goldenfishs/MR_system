@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { auth } from "../lib/auth";
 import type { PublicConfig, User } from "../lib/types";
 const route = useRoute(),
@@ -10,10 +10,32 @@ const register = ref(false),
   name = ref(""),
   email = ref(""),
   password = ref(""),
+  confirmPassword = ref(""),
+  verificationCode = ref(""),
   error = ref(""),
   loading = ref(false),
+  sending = ref(false),
+  sentMessage = ref(""),
   showPassword = ref(false);
 const config = ref<PublicConfig | null>(null);
+const configLoading = ref(true),
+  configError = ref("");
+const normalizedEmail = computed(() => email.value.trim().toLowerCase());
+const cooldowns = ref<Record<string, number>>({});
+const now = ref(Date.now());
+const cooldownSeconds = computed(() =>
+  Math.max(
+    0,
+    Math.ceil(
+      ((cooldowns.value[normalizedEmail.value] || 0) - now.value) / 1000,
+    ),
+  ),
+);
+const busy = computed(() => loading.value || sending.value);
+const registrationAvailable = computed(
+  () => !configLoading.value && config.value?.registrationEnabled === true,
+);
+let countdownTimer: ReturnType<typeof setInterval> | undefined;
 const demoAccounts = [
   { title: "管理员", email: "admin@demo.local", password: "DemoAdmin!2026" },
   { title: "导师", email: "mentor@demo.local", password: "DemoMentor!2026" },
@@ -24,14 +46,72 @@ const demoAccounts = [
     password: "DemoInterview!2026",
   },
 ];
-onMounted(async () => {
+watch(email, () => {
+  verificationCode.value = "";
+  sentMessage.value = "";
+  error.value = "";
+});
+async function loadConfig() {
+  configLoading.value = true;
+  configError.value = "";
   try {
     config.value = await api.get<PublicConfig>("/public/config");
   } catch (e) {
-    error.value = (e as Error).message;
+    configError.value = (e as Error).message;
+  } finally {
+    configLoading.value = false;
   }
+}
+onMounted(() => {
+  void loadConfig();
+  countdownTimer = setInterval(() => (now.value = Date.now()), 1000);
 });
+onUnmounted(() => clearInterval(countdownTimer));
+function selectMode(isRegister: boolean) {
+  if (busy.value) return;
+  register.value = isRegister;
+  error.value = "";
+}
+function startCooldown(address: string, seconds: number) {
+  now.value = Date.now();
+  cooldowns.value[address] = now.value + Math.max(1, seconds) * 1000;
+}
+async function sendVerificationCode() {
+  if (busy.value || !registrationAvailable.value || cooldownSeconds.value > 0)
+    return;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail.value)) {
+    error.value = "请先填写有效的邮箱地址。";
+    return;
+  }
+  const address = normalizedEmail.value;
+  sending.value = true;
+  error.value = "";
+  sentMessage.value = "";
+  try {
+    const result = await api.post<{
+      message: string;
+      cooldownSeconds: number;
+      expiresInSeconds: number;
+    }>("/auth/send-verification-code", { email: address });
+    startCooldown(address, result.cooldownSeconds || 60);
+    verificationCode.value = "";
+    sentMessage.value = result.message.includes(address)
+      ? result.message
+      : `${result.message} 收件邮箱：${address}。`;
+  } catch (e) {
+    error.value = (e as Error).message;
+    if (e instanceof ApiError && e.status === 429)
+      startCooldown(address, e.retryAfterSeconds || 60);
+  } finally {
+    sending.value = false;
+  }
+}
 async function submit() {
+  if (busy.value) return;
+  if (register.value && !registrationAvailable.value) {
+    error.value = "当前暂不能注册，请稍后重试或联系战队管理员。";
+    return;
+  }
   if (
     !email.value.trim() ||
     !password.value ||
@@ -40,15 +120,39 @@ async function submit() {
     error.value = "请完整填写账号信息。";
     return;
   }
+  if (register.value) {
+    if (!/^\d{6}$/.test(verificationCode.value.trim())) {
+      error.value = "请输入邮件中的 6 位验证码。";
+      return;
+    }
+    const passwordBytes = new TextEncoder().encode(password.value).length;
+    if (passwordBytes < 10) {
+      error.value = "密码太短，请使用至少 10 位字母、数字或符号。";
+      return;
+    }
+    if (passwordBytes > 72) {
+      error.value = "密码过长，请缩短后重试。";
+      return;
+    }
+    if (password.value !== confirmPassword.value) {
+      error.value = "两次输入的密码不一致。";
+      return;
+    }
+  }
   error.value = "";
   loading.value = true;
   try {
     const result = await api.post<{ user: User }>(
       register.value ? "/auth/register" : "/auth/login",
       {
-        email: email.value.trim(),
+        email: normalizedEmail.value,
         password: password.value,
-        ...(register.value ? { name: name.value.trim() } : {}),
+        ...(register.value
+          ? {
+              name: name.value.trim(),
+              verificationCode: verificationCode.value.trim(),
+            }
+          : {}),
       },
     );
     auth.user = result.user;
@@ -89,24 +193,22 @@ async function submit() {
       <v-card class="login-card">
         <div class="login-tabs" role="tablist" aria-label="登录或注册">
           <button
+            type="button"
             role="tab"
             :aria-selected="!register"
             :class="{ selected: !register }"
-            @click="
-              register = false;
-              error = '';
-            "
+            :disabled="busy"
+            @click="selectMode(false)"
           >
             <v-icon size="19">mdi-login</v-icon>账号登录
           </button>
           <button
+            type="button"
             role="tab"
             :aria-selected="register"
             :class="{ selected: register }"
-            @click="
-              register = true;
-              error = '';
-            "
+            :disabled="busy"
+            @click="selectMode(true)"
           >
             <v-icon size="19">mdi-account-plus-outline</v-icon>注册报名
           </button>
@@ -116,7 +218,7 @@ async function submit() {
           <p class="form-description">
             {{
               register
-                ? "注册后填写个人资料，查看报名和面试进度。"
+                ? "验证邮箱后创建账号，填写报名资料并查看面试进度。"
                 : "使用邮箱与密码登录，继续处理战队事务。"
             }}
           </p>
@@ -129,6 +231,37 @@ async function submit() {
             >登录已过期，请重新登录。</v-alert
           >
           <v-alert
+            v-if="register && configError"
+            type="warning"
+            variant="tonal"
+            class="mb-4"
+            density="compact"
+            >无法获取注册服务状态，请重试。已有账号可以正常登录。
+            <v-btn
+              type="button"
+              variant="text"
+              size="small"
+              :loading="configLoading"
+              @click="loadConfig"
+              >重试</v-btn
+            ></v-alert
+          >
+          <v-alert
+            v-else-if="register && !configLoading && !registrationAvailable"
+            type="info"
+            variant="tonal"
+            class="mb-4"
+            density="compact"
+            >邮箱验证服务暂未开放，请联系战队管理员。已有账号可以正常登录。</v-alert
+          >
+          <v-progress-linear
+            v-if="register && configLoading"
+            indeterminate
+            color="primary"
+            class="mb-4"
+            aria-label="正在获取注册服务状态"
+          />
+          <v-alert
             v-if="error"
             type="error"
             variant="tonal"
@@ -136,19 +269,15 @@ async function submit() {
             density="compact"
             >{{ error }}</v-alert
           >
+          <v-alert
+            v-if="register && sentMessage"
+            type="success"
+            variant="tonal"
+            class="mb-4"
+            density="compact"
+            >{{ sentMessage }}</v-alert
+          >
           <form @submit.prevent="submit">
-            <label v-if="register" for="login-name">姓名</label
-            ><v-text-field
-              v-if="register"
-              id="login-name"
-              v-model="name"
-              placeholder="请输入你的姓名"
-              autocomplete="name"
-              maxlength="60"
-              hide-details
-              class="mb-5"
-              required
-            />
             <label for="login-email">邮箱</label
             ><v-text-field
               id="login-email"
@@ -157,33 +286,103 @@ async function submit() {
               placeholder="you@example.com"
               autocomplete="username"
               prepend-inner-icon="mdi-email-outline"
+              :disabled="busy"
+              maxlength="254"
               hide-details
               class="mb-5"
               required
             />
+            <template v-if="register">
+              <label for="login-code">邮箱验证码</label>
+              <div class="verification-row">
+                <v-text-field
+                  id="login-code"
+                  v-model="verificationCode"
+                  placeholder="6 位数字验证码"
+                  autocomplete="one-time-code"
+                  inputmode="numeric"
+                  pattern="[0-9]{6}"
+                  maxlength="6"
+                  :disabled="busy"
+                  hide-details
+                  required
+                />
+                <v-btn
+                  type="button"
+                  color="primary"
+                  variant="tonal"
+                  :loading="sending"
+                  :disabled="
+                    loading || !registrationAvailable || cooldownSeconds > 0
+                  "
+                  @click="sendVerificationCode"
+                  >{{
+                    cooldownSeconds > 0
+                      ? `${cooldownSeconds} 秒后重发`
+                      : "发送验证码"
+                  }}</v-btn
+                >
+              </div>
+              <p class="verification-hint">
+                验证码 10 分钟内有效，请留意垃圾邮件箱。
+              </p>
+              <label for="login-name">姓名</label>
+              <v-text-field
+                id="login-name"
+                v-model="name"
+                placeholder="请输入你的姓名"
+                autocomplete="name"
+                maxlength="60"
+                :disabled="busy"
+                hide-details
+                class="mb-5"
+                required
+              />
+            </template>
             <label for="login-password">密码</label
             ><v-text-field
               id="login-password"
               v-model="password"
               :type="showPassword ? 'text' : 'password'"
               :autocomplete="register ? 'new-password' : 'current-password'"
-              :placeholder="register ? '至少 10 位字符' : '请输入密码'"
+              :placeholder="
+                register ? '建议至少 10 位字母、数字或符号' : '请输入密码'
+              "
               :append-inner-icon="
                 showPassword ? 'mdi-eye-off-outline' : 'mdi-eye-outline'
               "
               @click:append-inner="showPassword = !showPassword"
               prepend-inner-icon="mdi-lock-outline"
-              hide-details
+              :disabled="busy"
+              :hint="register ? '建议组合使用字母、数字和符号。' : undefined"
+              :persistent-hint="register"
+              :hide-details="!register"
               class="mb-6"
               required
             />
+            <template v-if="register">
+              <label for="login-confirm-password">确认密码</label>
+              <v-text-field
+                id="login-confirm-password"
+                v-model="confirmPassword"
+                :type="showPassword ? 'text' : 'password'"
+                autocomplete="new-password"
+                placeholder="再次输入密码"
+                prepend-inner-icon="mdi-lock-check-outline"
+                :disabled="busy"
+                hide-details
+                class="mb-6"
+                required
+              />
+            </template>
             <v-btn
               type="submit"
               color="primary"
               block
               height="48"
               :loading="loading"
-              >{{ register ? "创建账号" : "登录协作台"
+              :disabled="sending || (register && !registrationAvailable)"
+              >{{ register ? "验证邮箱并注册" : "登录协作台"
               }}<v-icon end size="18">mdi-arrow-right</v-icon></v-btn
             >
           </form>
@@ -199,6 +398,7 @@ async function submit() {
                 :key="a.email"
                 size="small"
                 variant="outlined"
+                :disabled="busy"
                 @click="
                   email = a.email;
                   password = a.password;
@@ -307,6 +507,10 @@ async function submit() {
   border-bottom-color: #1976d2;
   background: #f5faff;
 }
+.login-tabs button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
 .login-form {
   padding: 26px 32px;
 }
@@ -326,6 +530,27 @@ async function submit() {
   font-size: 13px;
   color: #616161;
   margin-bottom: 1px;
+}
+.login-form :deep(.v-alert__content) {
+  overflow-wrap: anywhere;
+}
+.verification-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.verification-row :deep(.v-input) {
+  min-width: 0;
+}
+.verification-row :deep(.v-btn) {
+  flex-shrink: 0;
+  min-width: 112px;
+}
+.verification-hint {
+  margin: 7px 0 20px;
+  color: #757575;
+  font-size: 12px;
+  line-height: 1.6;
 }
 .demo-box {
   border-top: 1px solid #eee;

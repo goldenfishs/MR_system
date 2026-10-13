@@ -14,9 +14,11 @@ import (
 )
 
 type testClient struct {
-	t       *testing.T
-	handler http.Handler
-	cookie  *http.Cookie
+	t          *testing.T
+	handler    http.Handler
+	cookie     *http.Cookie
+	mailer     *testMailer
+	lastHeader http.Header
 }
 
 func setup(t *testing.T) (*App, *testClient) {
@@ -29,8 +31,9 @@ func setup(t *testing.T) (*App, *testClient) {
 	if err = initialize(s, true); err != nil {
 		t.Fatal(err)
 	}
-	a := newApp(s, Config{Demo: true, WebDir: t.TempDir()})
-	return a, &testClient{t: t, handler: a.Handler()}
+	mailer := &testMailer{}
+	a := newApp(s, Config{Demo: true, WebDir: t.TempDir(), Mailer: mailer})
+	return a, &testClient{t: t, handler: a.Handler(), mailer: mailer}
 }
 func (c *testClient) request(method, path string, body any, status int) map[string]json.RawMessage {
 	c.t.Helper()
@@ -47,6 +50,7 @@ func (c *testClient) request(method, path string, body any, status int) map[stri
 	}
 	w := httptest.NewRecorder()
 	c.handler.ServeHTTP(w, r)
+	c.lastHeader = w.Header().Clone()
 	if w.Code != status {
 		c.t.Fatalf("%s %s: got %d, expected %d: %s", method, path, w.Code, status, w.Body.String())
 	}
@@ -96,7 +100,7 @@ func TestAuthenticationAndOrigin(t *testing.T) {
 func TestRegistrationCannotEscalate(t *testing.T) {
 	_, c := setup(t)
 	c.request("POST", "/api/auth/register", map[string]string{"name": "新人", "email": "new@example.com", "password": "LongPassword!123", "role": "admin"}, 400)
-	result := c.request("POST", "/api/auth/register", map[string]string{"name": "新人", "email": "new@example.com", "password": "LongPassword!123"}, 201)
+	result := c.register("新人", "new@example.com", "LongPassword!123")
 	u := unmarshal[User](t, result["user"])
 	if u.Role != "student" {
 		t.Fatal("registration elevated role")
@@ -129,7 +133,7 @@ func TestApplicantPrivacyAndAssignment(t *testing.T) {
 }
 func TestApplicationIdentityAndDeadline(t *testing.T) {
 	a, c := setup(t)
-	c.request("POST", "/api/auth/register", map[string]string{"name": "测试学员", "email": "learner@example.com", "password": "LongPassword!123"}, 201)
+	c.register("测试学员", "learner@example.com", "LongPassword!123")
 	me := unmarshal[User](t, c.request("GET", "/api/auth/me", nil, 200)["user"])
 	form := map[string]any{"userId": "demo-admin", "name": "测试学员", "email": "admin@demo.local", "phone": "13800009999", "university": "测试大学", "major": "自动化", "year": "大一", "team": "RoboMaster", "direction": "电控", "motivation": "学习控制系统", "status": "accepted", "notes": "forged", "score": 100}
 	ap := unmarshal[Applicant](t, c.request("POST", "/api/applicants", form, 200)["item"])
@@ -215,7 +219,7 @@ func TestSubmissionAdmissionScopeAndDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.request("POST", "/api/tasks/"+own.ID+"/submissions", map[string]string{"content": "late"}, 409)
-	c.request("POST", "/api/auth/register", map[string]string{"name": "未录取学生", "email": "unaccepted@example.com", "password": "LongPassword!123"}, 201)
+	c.register("未录取学生", "unaccepted@example.com", "LongPassword!123")
 	c.request("POST", "/api/tasks/"+other.ID+"/submissions", map[string]string{"content": "test"}, 403)
 	mine := unmarshal[[]Submission](t, c.request("GET", "/api/tasks/"+own.ID+"/submissions", nil, 200)["items"])
 	if len(mine) != 0 {

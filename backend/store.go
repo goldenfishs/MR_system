@@ -63,12 +63,27 @@ func openStore(databaseURL, dataDir string) (*Store, error) {
 		`CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at)`,
 		`CREATE INDEX IF NOT EXISTS submission_task ON submissions(task_id,user_id)`,
 		`INSERT INTO schema_migrations(version,applied_at) VALUES (1, CURRENT_TIMESTAMP) ON CONFLICT(version) DO NOTHING`,
+		`CREATE TABLE IF NOT EXISTS email_verifications (email TEXT PRIMARY KEY, code_hash TEXT NOT NULL, expires_at BIGINT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_sent_at BIGINT NOT NULL, delivered INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE IF NOT EXISTS verification_send_events (id TEXT PRIMARY KEY, email TEXT NOT NULL, ip_hash TEXT NOT NULL, created_at BIGINT NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS verification_email_time ON verification_send_events(email,created_at)`,
+		`CREATE INDEX IF NOT EXISTS verification_ip_time ON verification_send_events(ip_hash,created_at)`,
+		`INSERT INTO schema_migrations(version,applied_at) VALUES (2, CURRENT_TIMESTAMP) ON CONFLICT(version) DO NOTHING`,
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		db.Close()
+		return nil, err
 	}
 	for _, q := range statements {
-		if _, err = db.ExecContext(ctx, q); err != nil {
+		if _, err = tx.ExecContext(ctx, q); err != nil {
+			tx.Rollback()
 			db.Close()
 			return nil, err
 		}
+	}
+	if err = tx.Commit(); err != nil {
+		db.Close()
+		return nil, err
 	}
 	return s, nil
 }
