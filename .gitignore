@@ -1,0 +1,31 @@
+# Dependencies and generated frontend output
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+# Database, logs, local binaries, and test artifacts
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+coverage/
+test-results/
+playwright-report/
+backend/server
+backend/mr-system
+bin/
+
+# Editors and OS metadata
+.DS_Store
+.idea/
+.vscode/
+*.swp

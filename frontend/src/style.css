@@ -1,0 +1,128 @@
+:root {
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    "PingFang SC",
+    "Microsoft YaHei",
+    sans-serif;
+  color: #26314a;
+  font-synthesis: none;
+}
+body {
+  margin: 0;
+}
+.v-application {
+  font-family: inherit !important;
+  color: #26314a;
+}
+.v-card {
+  border-color: #e8ebf2 !important;
+}
+.v-btn {
+  font-weight: 600;
+}
+.v-field {
+  border-radius: 10px !important;
+  font-size: 14px;
+}
+.v-field__outline {
+  --v-field-border-opacity: 0.16;
+}
+h1,
+h2,
+h3,
+h4,
+p {
+  margin-top: 0;
+}
+h1 {
+  letter-spacing: -0.7px;
+}
+.muted {
+  color: #8490a6;
+}
+.eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.9px;
+  text-transform: uppercase;
+}
+.page-content {
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 28px 36px 36px;
+}
+.page-title {
+  font-size: 26px;
+  font-weight: 750;
+  margin-bottom: 5px;
+}
+.page-subtitle {
+  color: #8992a5;
+  font-size: 13px;
+  margin-bottom: 26px;
+}
+.section-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #2a354e;
+}
+.section-caption {
+  color: #919aab;
+  font-size: 12px;
+}
+.v-table {
+  font-size: 13px;
+}
+.v-table th {
+  color: #9199aa !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  background: #fafbfe;
+}
+.v-table td {
+  border-color: #f0f2f7 !important;
+}
+.empty-state {
+  padding: 44px 20px;
+  text-align: center;
+  color: #8993a7;
+}
+.empty-state .v-icon {
+  color: #b5bfd2;
+  margin-bottom: 12px;
+}
+.empty-state p {
+  margin: 8px 0;
+  font-size: 14px;
+}
+a {
+  color: #4959bd;
+}
+:focus-visible {
+  outline: 3px solid #9da8ea;
+  outline-offset: 3px;
+}
+@media (max-width: 960px) {
+  .page-content {
+    padding: 24px 20px;
+  }
+}
+@media (max-width: 600px) {
+  .page-content {
+    padding: 20px 14px;
+  }
+  .page-title {
+    font-size: 23px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
