@@ -229,7 +229,7 @@ func TestPlatformMigrationPreservesLegacyAccounts(t *testing.T) {
 		t.Fatal("legacy profile should require explicit completion")
 	}
 	var version int
-	if err = s.row("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil || version != 3 {
+	if err = s.row("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil || version != 4 {
 		t.Fatal("platform migration missing")
 	}
 }

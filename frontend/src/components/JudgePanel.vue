@@ -72,6 +72,7 @@ async function refresh() {
     if (current !== token) return;
     error.value = "";
     run.value = item;
+    if (item.status === "completed" && !props.readonly) emit("run", item);
     if (item.status === "queued" || item.status === "running")
       timer = setTimeout(refresh, 1500);
   } catch (e) {

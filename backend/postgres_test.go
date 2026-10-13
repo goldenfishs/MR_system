@@ -207,4 +207,5 @@ func TestPostgreSQLPersistence(t *testing.T) {
 	if err = reopened.row("SELECT COUNT(*) FROM applicants").Scan(&count); err != nil || count != 11 {
 		t.Fatalf("reinitialization changed application count: count=%d err=%v", count, err)
 	}
+	exerciseLearningPostgres(t, client)
 }

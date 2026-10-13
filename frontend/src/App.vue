@@ -21,7 +21,7 @@ const navigation = computed(() => [
   },
   {
     path: "/teams",
-    title: "团队招募",
+    title: "团队报名",
     icon: "mdi-account-multiple-plus-outline",
   },
   {
@@ -29,14 +29,13 @@ const navigation = computed(() => [
     title: "学习与任务",
     icon: "mdi-book-open-page-variant-outline",
   },
-  { path: "/assessment", title: "在线测评", icon: "mdi-code-braces" },
-  { path: "/files", title: "文件中心", icon: "mdi-folder-outline" },
+  { path: "/discussions", title: "讨论区", icon: "mdi-forum-outline" },
   {
     path: "/records",
-    title: auth.user?.role === "admin" ? "档案发放" : "我的档案",
+    title: "荣誉中心",
     icon: "mdi-certificate-outline",
   },
-  { path: "/profile", title: "个人资料", icon: "mdi-account-outline" },
+  { path: "/profile", title: "个人中心", icon: "mdi-account-circle-outline" },
   ...(auth.user?.role === "admin"
     ? [{ path: "/mail", title: "批量邮件", icon: "mdi-email-multiple-outline" }]
     : []),
@@ -70,6 +69,9 @@ async function loadSettings() {
   }
 }
 watch(() => auth.user?.id, loadSettings, { immediate: true });
+watch([settings, () => route.fullPath], () => {
+  document.title = `${route.meta.title || "工作台"} · ${settings.value?.brandName || "QUT机器人战队"}`;
+});
 watch(mobile, (value) => (drawer.value = !value));
 watch(
   () => route.fullPath,
@@ -124,33 +126,40 @@ const sectionTabs = computed(() => {
     ];
   if (route.path === "/learning")
     return [
-      { value: "all", title: "全部任务" },
-      { value: "code", title: "代码项目" },
-      { value: "document", title: "文档作业" },
-      { value: "hardware", title: "实机验收" },
-      { value: "quiz", title: "知识测评" },
+      { value: "home", title: "首页" },
+      { value: "knowledge", title: "知识库" },
+      { value: "tasks", title: "作业" },
+      { value: "exam", title: "考试" },
+      ...(["电控", "视觉算法", "硬件"].includes(String(route.query.direction))
+        ? [{ value: "bank", title: "题库" }]
+        : []),
     ];
   return [];
 });
 const tabKey = computed(() =>
-  route.path === "/recruitment" ? "status" : "kind",
+  route.path === "/recruitment" ? "status" : "section",
 );
 const activeTab = computed(() => {
   const value = route.query[tabKey.value];
-  return sectionTabs.value.some((item) => item.value === value) ? value : "all";
+  return sectionTabs.value.some((item) => item.value === value)
+    ? value
+    : route.path === "/learning"
+      ? route.query.kind ? "tasks" : "home"
+      : "all";
 });
 function selectTab(value: unknown) {
   const query = { ...route.query };
   delete query.applicant;
   delete query.task;
-  if (value === "all") delete query[tabKey.value];
+  if (route.path === "/learning") delete query.kind;
+  if (value === "all" || value === "home") delete query[tabKey.value];
   else query[tabKey.value] = String(value);
   router.push({ path: route.path, query });
 }
 function directionLink(direction: string) {
   return {
     path: "/learning",
-    query: { direction },
+    query: { direction, section: "home" },
   };
 }
 </script>
@@ -164,14 +173,14 @@ function directionLink(direction: string) {
         width="276"
         class="side-panel"
       >
-        <router-link to="/" class="brand" aria-label="竞跃协作系统 · 工作台">
-          <img src="/mark.svg" width="28" height="28" alt="" />
+        <router-link to="/" class="brand" :aria-label="`${settings?.brandName || 'QUT机器人战队'} · 工作台`">
+          <img :src="settings?.logoUrl || '/mark.svg'" width="34" height="34" alt="M" @error="($event.target as HTMLImageElement).src = '/mark.svg'" />
           <div class="brand-copy">
-            <span class="brand-title">竞跃协作系统</span>
+            <span class="brand-title">{{ settings?.brandName || "QUT机器人战队" }}</span>
             <span
               class="brand-organization"
-              :title="settings?.organization || '机器人实验室'"
-              >{{ settings?.organization || "机器人实验室" }}</span
+              :title="settings?.organization || '青岛理工大学机器人战队'"
+              >{{ settings?.teamName || "沧溟" }} / {{ settings?.secondaryTeamName || "MOVE" }} · {{ settings?.organization || "青岛理工大学机器人战队" }}</span
             >
           </div>
         </router-link>
@@ -255,7 +264,9 @@ function directionLink(direction: string) {
         <v-app-bar-title>{{
           route.path === "/recruitment" && auth.user.role === "student"
             ? "我的报名"
-            : route.meta.title
+            : route.path === "/learning" && route.query.direction
+              ? `${route.query.direction}组`
+              : route.meta.title
         }}</v-app-bar-title>
         <span class="topbar-season d-none d-sm-flex">{{
           settings?.season || "机器人战队"
@@ -278,6 +289,12 @@ function directionLink(direction: string) {
             ><v-list-item
               :title="auth.user.name"
               :subtitle="auth.user.email" /><v-divider /><v-list-item
+              to="/profile"
+              prepend-icon="mdi-account-circle-outline"
+              title="个人中心" /><v-list-item
+              to="/records"
+              prepend-icon="mdi-certificate-outline"
+              title="荣誉中心" /><v-divider /><v-list-item
               prepend-icon="mdi-logout"
               title="退出登录"
               :disabled="loggingOut"
@@ -329,6 +346,7 @@ function directionLink(direction: string) {
 }
 .brand img {
   flex-shrink: 0;
+  object-fit: contain;
 }
 .brand-copy {
   min-width: 0;

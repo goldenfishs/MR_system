@@ -2,7 +2,7 @@
 import { onMounted, ref } from "vue";
 import { api } from "../lib/api";
 import { auth } from "../lib/auth";
-import type { Task } from "../lib/types";
+import type { Task, Settings } from "../lib/types";
 import type { TeamSpace } from "../lib/platform";
 
 type Summary = {
@@ -10,8 +10,14 @@ type Summary = {
   pipeline: { status: string; label: string; count: number }[];
   profileComplete: boolean;
 };
+const brand = ref<Settings | null>(null);
+const competitionLabel = (team: TeamSpace) => (team.competitions?.length ? team.competitions : [team.competition]).map(c => c === "ROBOCON" ? "RoboCon" : c).join(" / ");
 const summary = ref<Summary | null>(null);
 const teams = ref<TeamSpace[]>([]);
+const taskCompetitionLabel = (task: Task) => {
+  const team = teams.value.find(item => item.id === task.teamId);
+  return team ? competitionLabel(team) : task.team === "ROBOCON" ? "RoboCon" : task.team || "所有团队";
+};
 const tasks = ref<Task[]>([]);
 const loading = ref(true);
 const error = ref("");
@@ -27,14 +33,16 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const [space, teamList, learning] = await Promise.all([
+    const [space, teamList, learning, settings] = await Promise.all([
       api.get<Summary>("/workspace-summary"),
       api.get<{ items: TeamSpace[] }>("/teams"),
       api.get<{ items: Task[] }>("/tasks"),
+      api.get<{ settings: Settings }>("/settings"),
     ]);
     summary.value = space;
     teams.value = teamList.items || [];
     tasks.value = learning.items || [];
+    brand.value = settings.settings;
   } catch (e) {
     error.value = (e as Error).message;
   } finally {
@@ -83,7 +91,7 @@ onMounted(load);
     <div class="shortcut-grid">
       <router-link to="/teams" class="shortcut-card"
         ><div>
-          <span class="eyebrow">团队招募</span>
+          <span class="eyebrow">团队报名</span>
           <h2>{{ isAdmin ? "团队与申请" : "开放团队" }}</h2>
           <p>
             {{ isAdmin ? "发布团队并审核简历" : "选择方向，提交 PDF 简历" }}
@@ -119,8 +127,8 @@ onMounted(load);
       >
       <router-link to="/records" class="shortcut-card"
         ><div>
-          <span class="eyebrow">个人档案</span>
-          <h2>{{ isAdmin ? "档案发放" : "我的奖状与通知" }}</h2>
+          <span class="eyebrow">荣誉中心</span>
+          <h2>{{ isAdmin ? "荣誉发放" : "我的证书与奖状" }}</h2>
           <p>
             {{
               isAdmin ? "将证书和奖励发给指定成员" : "统一查询个人奖励与材料"
@@ -131,22 +139,22 @@ onMounted(load);
               ? "—"
               : isAdmin
                 ? counts("members") + " 位团队成员"
-                : counts("records") + " 份个人档案"
+                : counts("records") + " 份荣誉记录"
           }}</strong>
         </div>
         <v-icon color="deep-purple" size="43"
           >mdi-certificate-outline</v-icon
         ></router-link
       >
-      <router-link to="/files" class="shortcut-card"
+      <router-link to="/discussions" class="shortcut-card"
         ><div>
-          <span class="eyebrow">文件中心</span>
-          <h2>我的文件</h2>
-          <p>简历、图片、代码和项目附件</p>
-          <strong>{{ loading ? "—" : counts("files") + " 个文件" }}</strong>
+          <span class="eyebrow">交流答疑</span>
+          <h2>讨论区</h2>
+          <p>向指定组别提问，查阅精选解答</p>
+          <strong>一起解决问题</strong>
         </div>
         <v-icon color="orange-darken-1" size="43"
-          >mdi-folder-multiple-outline</v-icon
+          >mdi-forum-outline</v-icon
         ></router-link
       >
     </div>
@@ -196,7 +204,7 @@ onMounted(load);
             ><span class="team-copy"
               ><strong>{{ team.name }}</strong
               ><small
-                >{{ team.competition }} ·
+                >{{ competitionLabel(team) }} ·
                 {{ team.directions.join("、") }}</small
               ></span
             ><v-chip size="small" variant="tonal" color="success"
@@ -236,7 +244,7 @@ onMounted(load);
           <router-link
             v-for="task in tasks.slice(0, 4)"
             :key="task.id"
-            :to="{ path: '/learning', query: { task: task.id } }"
+            :to="{ path: '/learning', query: { task: task.id, direction: task.direction || undefined, section: task.category === 'exam' ? 'exam' : task.category === 'problem' ? 'bank' : 'tasks' } }"
             class="task-row"
           >
             <span class="task-mark"
@@ -253,7 +261,7 @@ onMounted(load);
             <span class="task-copy"
               ><strong>{{ task.title }}</strong
               ><small
-                >{{ task.team || "所有团队" }} ·
+                >{{ taskCompetitionLabel(task) }} ·
                 {{ task.direction || "综合方向"
                 }}{{
                   task.dueAt
@@ -274,7 +282,7 @@ onMounted(load);
       </v-card>
     </div>
     <footer class="dashboard-footer">
-      <span>竞跃 · RoboMaster / ROBOCON 团队协作台</span
+      <span>{{ brand?.organization || "青岛理工大学机器人战队" }} · {{ brand?.teamName || "沧溟" }} / {{ brand?.secondaryTeamName || "MOVE" }} · {{ (brand?.competitions?.length ? brand.competitions : ["RoboCon", "RoboMaster"]).join(" & ") }}</span
       ><span v-if="auth.demoMode">演示空间 · 数据均为虚构</span>
     </footer>
   </div>

@@ -1,6 +1,27 @@
 import type { JudgeConfig } from "./platform";
 export type Role = "admin" | "mentor" | "interviewer" | "student";
-export type Team = "RoboMaster" | "ROBOCON";
+export type Team = "RoboMaster" | "RoboCon" | "ROBOCON";
+
+export interface DiscussionReply {
+  id: string;
+  content: string;
+  userId: string;
+  userName: string;
+  createdAt: string;
+}
+export interface Discussion {
+  id: string;
+  title: string;
+  content: string;
+  direction: string;
+  status: "open" | "resolved";
+  published: boolean;
+  createdBy: string;
+  authorName: string;
+  createdAt: string;
+  updatedAt: string;
+  replies: DiscussionReply[];
+}
 export type Direction = "机械" | "电控" | "视觉算法" | "硬件" | "运营";
 export type ApplicantStatus =
   "submitted" | "screening" | "interview" | "accepted" | "rejected";
@@ -38,6 +59,12 @@ export interface Applicant {
   updatedAt: string;
 }
 export interface Task {
+  category?: "assignment" | "exam" | "problem";
+  tags?: string[];
+  acceptedCount?: number;
+  attemptCount?: number;
+  locked?: boolean;
+  myAccepted?: boolean;
   teamId?: string;
   fileIds?: string[];
   submissionType?: "files" | "code" | "project";
@@ -87,6 +114,12 @@ export interface Activity {
 export interface Settings {
   organization: string;
   season: string;
+  /** Optional branding fields supplied by newer servers. */
+  brandName?: string;
+  logoUrl?: string;
+  teamName?: string;
+  secondaryTeamName?: string;
+  competitions?: string[];
   applicationOpen: boolean;
   applicationDeadline: string;
   hydroUrl: string;
@@ -106,6 +139,11 @@ export interface Dashboard {
 export interface PublicConfig {
   organization: string;
   season: string;
+  brandName?: string;
+  logoUrl?: string;
+  teamName?: string;
+  secondaryTeamName?: string;
+  competitions?: string[];
   demoMode: boolean;
   applicationOpen: boolean;
   applicationDeadline: string;

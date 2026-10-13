@@ -99,7 +99,15 @@ func validateJudgeConfig(t *Task) error {
 	return nil
 }
 func publicTask(t Task, u User) Task {
-	if t.Judge == nil || isStaff(u) {
+	normalizeTask(&t)
+	if taskLocked(t, u) {
+		t.Locked = true
+		t.Description, t.ResourcesURL = "", ""
+		t.FileIDs = []string{}
+		t.Judge = nil
+		return t
+	}
+	if t.Judge == nil || canManage(u) {
 		return t
 	}
 	config := *t.Judge
@@ -268,6 +276,24 @@ func (a *App) startJudge(w http.ResponseWriter, r *http.Request, u User) error {
 	// this short write section; running programs never hold the write lock.
 	a.store.mu.Lock()
 	defer a.store.mu.Unlock()
+	// A scheduled task can be edited while source bytes are read. Reload it under
+	// the mutation lock before enqueueing so deadlines and tests cannot be stale.
+	task, err = a.store.task(task.ID)
+	if err != nil {
+		return err
+	}
+	if task.Judge == nil || !task.Judge.Enabled {
+		return fail(409, "任务判题配置已变更，请重新打开任务")
+	}
+	languageAllowed := false
+	for _, id := range task.Judge.LanguageIDs {
+		if id == in.LanguageID {
+			languageAllowed = true
+		}
+	}
+	if !languageAllowed {
+		return fail(409, "任务编程语言已变更，请重新选择")
+	}
 	if err = a.requireTaskSubmission(task, u); err != nil {
 		return err
 	}

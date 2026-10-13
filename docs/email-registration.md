@@ -1,6 +1,6 @@
 # 邮箱验证注册
 
-注册使用「姓名、邮箱、验证码、密码」创建学员身份，成功后自动登录。普通登录继续使用邮箱和密码。发送验证码不会预先创建账号；必须在注册时完成校验。
+注册使用邮箱、验证码与密码验证身份，同时必填姓名、性别、学校、专业、班级、学号、联系电话和本人照片，兴趣爱好选填。照片为 2 MiB 以内的 JPEG／PNG。成功后创建学员账号并自动登录，后续在「个人中心」更新资料。普通登录继续使用邮箱和密码。发送验证码不会预先创建账号；必须在注册时完成校验。
 
 交互参考 [Sub2API 的邮箱验证页](https://github.com/Wei-Shaw/sub2api/blob/ab80abc6d1f929a6864c8804fd077b509d21fda2/frontend/src/views/auth/EmailVerifyView.vue)，实现独立编写。密码仅保留在当前页面内存，不写入 localStorage 或 sessionStorage。
 
@@ -27,14 +27,14 @@ SMTP_SECURITY=starttls
 SMTP_USERNAME=mailer@example.com
 SMTP_PASSWORD=replace-with-provider-smtp-credential
 SMTP_FROM=mailer@example.com
-SMTP_FROM_NAME=竞跃
+SMTP_FROM_NAME=QUT机器人战队
 ```
 
 上面的地址和密码仅为占位符。`SMTP_FROM` 必须是服务商允许发送的地址。服务商要求隐式 TLS 时改为 `SMTP_PORT=465`、`SMTP_SECURITY=tls`；两种方式均验证服务器证书，不提供忽略证书的开关。使用可信 SMTP 中继且中继不要求认证时可同时留空用户名和密码。
 
 Docker Compose 会将这些变量传给应用，修改后执行 `docker compose up -d app` 重建应用容器。直接运行二进制或 `scripts/dev.sh` 时需将变量导出到进程环境，程序不会自动加载 `.env`。
 
-管理员可在「空间设置 → 注册邮箱验证」查看配置状态和发件邮箱；页面不读取或展示 SMTP 密码。配置状态仅表示参数可用，不保证上游网络、认证或投递成功。实际注册发送成功后，再检查收件箱及垃圾邮件。发件域名的 SPF、DKIM 和 DMARC 由邮件服务商／域名管理员配置。
+管理员可在「空间设置 → 注册邮箱验证」查看配置状态和发件邮箱；页面不读取或展示 SMTP 密码。配置状态仅表示参数可用，不保证上游网络、认证或投递成功。实际注册发送成功后，再检查收件箱及垃圾邮件。发件域名的 SPF、DKIM 和 DMARC 由邮件服务商／域名管理员配置。后台品牌名称与 SMTP 发件显示名分别配置，修改页面品牌不会自动改写 `SMTP_FROM_NAME`。
 
 ## 本地测试邮箱
 
@@ -48,7 +48,7 @@ mailpit --listen 127.0.0.1:8025 --smtp 127.0.0.1:1025
 
 ```sh
 SMTP_HOST=127.0.0.1 SMTP_PORT=1025 SMTP_SECURITY=none \
-SMTP_FROM=no-reply@demo.local SMTP_FROM_NAME=竞跃 \
+SMTP_FROM=no-reply@demo.local SMTP_FROM_NAME=QUT机器人战队 \
   bash scripts/dev.sh
 ```
 
@@ -58,6 +58,6 @@ SMTP_FROM=no-reply@demo.local SMTP_FROM_NAME=竞跃 \
 
 ## 持久化与部署边界
 
-启动时自动追加 v2 邮箱验证码表和发送记录表，支持 SQLite 与 PostgreSQL。验证码、邮箱冷却、发送窗口和验证错误次数保存在数据库，重启不会重置；来源 IP 以哈希形式参与持久化发送限流。发送记录保留近一小时，验证码存储不需要额外 Redis。
+启动时自动追加邮箱验证码表和发送记录表，支持 SQLite 与 PostgreSQL。验证码、邮箱冷却、发送窗口和验证错误次数保存在数据库，重启不会重置；来源 IP 以哈希形式参与持久化发送限流。发送记录保留近一小时，验证码存储不需要额外 Redis。
 
-当前应用仍要求单实例部署。来源 IP 取直接连接地址，不信任任意 `X-Forwarded-For`，因此经过同一反向代理的请求可能共用限额；公网部署应同时设置代理层限流。此功能不包含密码找回、验证码免密登录或面试邮件通知。
+当前应用仍要求单实例部署。来源 IP 取直接连接地址，不信任任意 `X-Forwarded-For`，因此经过同一反向代理的请求可能共用限额；公网部署应同时设置代理层限流。此功能不包含密码找回、验证码免密登录或自动触发的面试邮件通知；管理员可使用「批量邮件」手动通知已注册成员。真实 SMTP 服务需要另行配置，本地捕获测试不代表真实邮箱投递已经验收。

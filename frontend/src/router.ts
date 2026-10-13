@@ -22,22 +22,27 @@ const router = createRouter({
     {
       path: "/teams",
       component: () => import("./views/TeamsView.vue"),
-      meta: { title: "团队招募" },
+      meta: { title: "团队报名" },
     },
     {
       path: "/profile",
       component: () => import("./views/ProfileView.vue"),
-      meta: { title: "个人资料" },
+      meta: { title: "个人中心" },
     },
     {
       path: "/records",
       component: () => import("./views/RecordsView.vue"),
-      meta: { title: "个人档案" },
+      meta: { title: "荣誉中心" },
+    },
+    {
+      path: "/discussions",
+      component: () => import("./views/DiscussionView.vue"),
+      meta: { title: "讨论区" },
     },
     {
       path: "/files",
       component: () => import("./views/FilesView.vue"),
-      meta: { title: "文件中心" },
+      meta: { title: "我的附件" },
     },
     {
       path: "/mail",
@@ -85,6 +90,6 @@ router.beforeEach(async (to) => {
   if (auth.user && to.path === "/login") return "/";
   if (to.meta.admin && auth.user?.role !== "admin") return "/";
   if (to.meta.staff && auth.user?.role === "student") return "/";
-  document.title = `${to.meta.title || "工作台"} · 竞跃`;
+  document.title = `${to.meta.title || "工作台"} · QUT机器人战队`;
 });
 export default router;

@@ -41,7 +41,7 @@ DEMO_MODE=true go run .
 | `SMTP_HOST` / `SMTP_PORT` | SMTP 地址与端口（默认 587）；未配置时关闭公开注册 |
 | `SMTP_SECURITY` | `starttls`（默认）或 `tls`，严格验证证书 |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | SMTP 认证用户名与授权密码 |
-| `SMTP_FROM` / `SMTP_FROM_NAME` | 经服务商授权的发件邮箱与显示名（默认 `竞跃`） |
+| `SMTP_FROM` / `SMTP_FROM_NAME` | 经服务商授权的发件邮箱与显示名（默认 `QUT机器人战队`） |
 
 管理员可在成员页面创建导师、面试官账号。新账号使用手动设置的初始密码；MVP 尚未提供找回密码、改密或工作人员邀请邮件，应仅向可信内部人员提供工作人员账号。普通注册必须验证邮箱，仅创建学生，无法自行获取导师、面试官或管理员权限。建议通过运维密钥管理注入初始密码，初始化完成后移除 bootstrap 环境变量。已有管理员时不会被环境变量重置。
 

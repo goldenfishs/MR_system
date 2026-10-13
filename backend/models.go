@@ -34,6 +34,12 @@ type Applicant struct {
 	UpdatedAt       string   `json:"updatedAt"`
 }
 type Task struct {
+	Category        string       `json:"category"`
+	Tags            []string     `json:"tags"`
+	MyAccepted      bool         `json:"myAccepted"`
+	AcceptedCount   int          `json:"acceptedCount"`
+	AttemptCount    int          `json:"attemptCount"`
+	Locked          bool         `json:"locked"`
 	TeamID          string       `json:"teamId,omitempty"`
 	FileIDs         []string     `json:"fileIds"`
 	SubmissionType  string       `json:"submissionType,omitempty"`
@@ -82,10 +88,15 @@ type Activity struct {
 	UserID    string `json:"-"`
 }
 type Settings struct {
-	Organization        string `json:"organization"`
-	Season              string `json:"season"`
-	ApplicationOpen     bool   `json:"applicationOpen"`
-	ApplicationDeadline string `json:"applicationDeadline"`
-	HydroURL            string `json:"hydroUrl"`
-	Announcement        string `json:"announcement"`
+	BrandName           string   `json:"brandName"`
+	LogoURL             string   `json:"logoUrl"`
+	TeamName            string   `json:"teamName"`
+	SecondaryTeamName   string   `json:"secondaryTeamName"`
+	Competitions        []string `json:"competitions"`
+	Organization        string   `json:"organization"`
+	Season              string   `json:"season"`
+	ApplicationOpen     bool     `json:"applicationOpen"`
+	ApplicationDeadline string   `json:"applicationDeadline"`
+	HydroURL            string   `json:"hydroUrl"`
+	Announcement        string   `json:"announcement"`
 }

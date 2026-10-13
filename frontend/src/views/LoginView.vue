@@ -24,6 +24,7 @@ const register = ref(false),
 const config = ref<PublicConfig | null>(null);
 const configLoading = ref(true),
   configError = ref("");
+const competitions = computed(() => config.value?.competitions?.length ? config.value.competitions : ["RoboCon", "RoboMaster"]);
 const normalizedEmail = computed(() => email.value.trim().toLowerCase());
 const cooldowns = ref<Record<string, number>>({});
 const now = ref(Date.now());
@@ -60,6 +61,7 @@ async function loadConfig() {
   configError.value = "";
   try {
     config.value = await api.get<PublicConfig>("/public/config");
+    document.title = `登录 · ${config.value.brandName || "QUT机器人战队"}`;
   } catch (e) {
     configError.value = (e as Error).message;
   } finally {
@@ -197,18 +199,19 @@ async function submit() {
   <div class="login-page">
     <header class="login-topbar">
       <a href="/" class="login-brand"
-        ><img src="/mark.svg" width="32" height="32" alt="竞跃" /><span
-          >竞跃 · 战队协作系统</span
+        ><img :src="config?.logoUrl || '/mark.svg'" width="34" height="34" alt="M" @error="($event.target as HTMLImageElement).src = '/mark.svg'" /><span
+          >{{ config?.brandName || "QUT机器人战队" }}</span
         ></a
       ><span class="login-season">{{ config?.season || "机器人战队" }}</span>
     </header>
     <main :class="['login-main', { 'register-main': register }]">
       <div class="login-heading">
         <div class="team-avatar">
-          <v-icon size="38">mdi-account-group</v-icon>
+          <img :src="config?.logoUrl || '/mark.svg'" width="52" height="52" alt="M" @error="($event.target as HTMLImageElement).src = '/mark.svg'" />
         </div>
-        <h1>{{ config?.organization || "机器人实验室" }}</h1>
-        <p>招新、学习与协作，从这里开始。</p>
+        <h1>{{ config?.organization || "青岛理工大学机器人战队" }}</h1>
+        <p class="team-name">{{ config?.teamName || "沧溟" }} <span>/</span> {{ config?.secondaryTeamName || "MOVE" }}</p>
+        <p>同一支战队，奔赴 {{ competitions.join(" 与 ") }}。</p>
       </div>
       <v-card class="login-card">
         <div class="login-tabs" role="tablist" aria-label="登录或注册">
@@ -438,8 +441,10 @@ async function submit() {
         </div>
       </v-card>
       <footer class="login-footer">
-        <span>RoboMaster</span><i /> <span>ROBOCON</span>
-        <p>竞跃 MR System · 开源战队协作平台</p>
+        <template v-for="(competition, index) in competitions" :key="competition">
+          <i v-if="index" /><span>{{ competition }}</span>
+        </template>
+        <p>{{ config?.brandName || "QUT机器人战队" }} · 战队协作平台</p>
       </footer>
     </main>
   </div>
@@ -474,8 +479,10 @@ async function submit() {
   text-decoration: none;
 }
 .login-brand img {
-  border: 1px solid #ffffff55;
-  border-radius: 50%;
+  object-fit: contain;
+  background: white;
+  border-radius: 6px;
+  padding: 3px;
 }
 .login-season {
   font-size: 13px;
@@ -496,8 +503,10 @@ async function submit() {
 .team-avatar {
   width: 64px;
   height: 64px;
-  background: #e3f2fd;
-  color: #1976d2;
+  background: #fff;
+  color: #f42168;
+  border: 1px solid #ece5ed;
+  box-shadow: 0 3px 10px #e7d8e74d;
   border-radius: 50%;
   display: grid;
   place-items: center;
@@ -508,6 +517,14 @@ async function submit() {
   font-weight: 500;
   margin: 0 0 6px;
 }
+.login-heading .team-name {
+  font-size: 16px;
+  font-weight: 500;
+  color: #565060;
+  letter-spacing: 0;
+  margin: 8px 0 7px;
+}
+.team-name span { color: #c0b5c5; margin: 0 6px; }
 .login-heading p {
   font-size: 13px;
   color: #757575;

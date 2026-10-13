@@ -30,7 +30,7 @@ type SMTPConfig struct {
 type smtpMailer struct{ config SMTPConfig }
 
 func smtpMailerFromEnv(demo bool) (VerificationMailer, SMTPConfig, error) {
-	cfg := SMTPConfig{Host: strings.TrimSpace(os.Getenv("SMTP_HOST")), Username: os.Getenv("SMTP_USERNAME"), Password: os.Getenv("SMTP_PASSWORD"), From: strings.TrimSpace(os.Getenv("SMTP_FROM")), FromName: env("SMTP_FROM_NAME", "竞跃"), Security: strings.ToLower(env("SMTP_SECURITY", "starttls")), Demo: demo}
+	cfg := SMTPConfig{Host: strings.TrimSpace(os.Getenv("SMTP_HOST")), Username: os.Getenv("SMTP_USERNAME"), Password: os.Getenv("SMTP_PASSWORD"), From: strings.TrimSpace(os.Getenv("SMTP_FROM")), FromName: env("SMTP_FROM_NAME", "QUT机器人战队"), Security: strings.ToLower(env("SMTP_SECURITY", "starttls")), Demo: demo}
 	if cfg.Host == "" {
 		if cfg.Username != "" || cfg.Password != "" || cfg.From != "" {
 			return nil, cfg, errors.New("SMTP_HOST is required when email credentials or sender are configured")
@@ -170,8 +170,8 @@ func (m *smtpMailer) send(ctx context.Context, recipient string, message []byte)
 }
 
 func verificationMessage(cfg SMTPConfig, recipient, code string) []byte {
-	body := fmt.Sprintf("你正在注册竞跃协作系统。\r\n\r\n邮箱验证码：%s\r\n\r\n验证码 10 分钟内有效，仅限本次邮箱注册使用。请勿将验证码告诉他人。\r\n如非本人操作，请忽略此邮件。\r\n", code)
-	return mailMessage(cfg, recipient, "竞跃 · 邮箱注册验证码", body)
+	body := fmt.Sprintf("你正在注册%s。\r\n\r\n邮箱验证码：%s\r\n\r\n验证码 10 分钟内有效，仅限本次邮箱注册使用。请勿将验证码告诉他人。\r\n如非本人操作，请忽略此邮件。\r\n", cfg.FromName, code)
+	return mailMessage(cfg, recipient, cfg.FromName+" · 邮箱注册验证码", body)
 }
 func mailMessage(cfg SMTPConfig, recipient, subject, body string) []byte {
 	from := (&mail.Address{Name: cfg.FromName, Address: cfg.From}).String()

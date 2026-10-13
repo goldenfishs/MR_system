@@ -12,6 +12,7 @@ import {
   type TeamApplication,
   type Profile,
 } from "../lib/platform";
+import type { Settings } from "../lib/types";
 import FileUpload from "../components/FileUpload.vue";
 const { smAndDown } = useDisplay();
 const teams = ref<TeamSpace[]>([]),
@@ -33,11 +34,13 @@ const canApply = computed(() => auth.user?.role === "student");
 const form = reactive({
   name: "",
   description: "",
-  competition: "RoboMaster",
+  competitions: ["RoboCon", "RoboMaster"],
   directions: [...directions],
   status: "open",
   deadline: "",
 });
+const brand = ref<Settings | null>(null);
+const competitionsOf = (t: TeamSpace) => t.competitions?.length ? t.competitions : [t.competition === "ROBOCON" ? "RoboCon" : t.competition].filter(Boolean);
 const application = reactive({
   direction: "",
   resume: [] as string[],
@@ -46,7 +49,7 @@ const application = reactive({
 const feedback = ref<Record<string, string>>({});
 const filtered = computed(() =>
   teams.value.filter((t) =>
-    `${t.name} ${t.description} ${t.competition}`
+    `${t.name} ${t.description} ${competitionsOf(t).join(" ")}`
       .toLowerCase()
       .includes(search.value.toLowerCase()),
   ),
@@ -74,12 +77,14 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const [data, p] = await Promise.all([
+    const [data, p, settings] = await Promise.all([
       api.get<{ items: TeamSpace[] }>("/teams"),
       api.get<{ profile: Profile }>("/profile"),
+      api.get<{ settings: Settings }>("/settings"),
     ]);
     teams.value = data.items;
     profile.value = p.profile;
+    brand.value = settings.settings;
   } catch (e) {
     error.value = (e as Error).message;
   } finally {
@@ -89,9 +94,9 @@ async function load() {
 function edit(team?: TeamSpace) {
   editing.value = team?.id || "";
   Object.assign(form, {
-    name: team?.name || "",
+    name: team?.name || `${brand.value?.teamName || "沧溟"} / ${brand.value?.secondaryTeamName || "MOVE"}`,
     description: team?.description || "",
-    competition: team?.competition || "RoboMaster",
+    competitions: team ? competitionsOf(team) : [...(brand.value?.competitions?.length ? brand.value.competitions : ["RoboCon", "RoboMaster"])],
     directions: team ? [...team.directions] : [...directions],
     status: team?.status || "open",
     deadline: team?.deadline
@@ -109,15 +114,17 @@ async function saveTeam() {
   if (
     !form.name.trim() ||
     !form.description.trim() ||
-    !form.directions.length
+    !form.directions.length ||
+    !form.competitions.length
   ) {
-    notice.value = "请填写团队名称、介绍，并至少选择一个方向。";
+    notice.value = "请填写团队名称、介绍，并至少选择一个赛事和方向。";
     return;
   }
   saving.value = true;
   try {
     const body = {
       ...form,
+      competition: form.competitions[0],
       deadline: form.deadline ? new Date(form.deadline).toISOString() : "",
     };
     if (editing.value) await api.patch(`/teams/${editing.value}`, body);
@@ -211,9 +218,9 @@ onMounted(load);
   <div class="page-content">
     <div class="page-head">
       <div>
-        <h1 class="page-title">团队与报名</h1>
+        <h1 class="page-title">团队报名</h1>
         <p class="page-subtitle">
-          找到适合你的团队，提交简历，经管理员审核后正式加入。
+          {{ brand?.teamName || "沧溟" }} / {{ brand?.secondaryTeamName || "MOVE" }} 机器人战队 · {{ (brand?.competitions || ["RoboCon", "RoboMaster"]).join(" / ") }}。选择方向、提交简历，审核后入队。
         </p>
       </div>
       <v-btn
@@ -243,10 +250,10 @@ onMounted(load);
     /><v-progress-linear v-if="loading" indeterminate />
     <div v-else-if="filtered.length" class="team-grid">
       <v-card v-for="team in filtered" :key="team.id" class="team-card"
-        ><div class="d-flex align-center ga-2 mb-4">
+        ><div class="d-flex flex-wrap align-center ga-2 mb-4">
           <v-avatar color="primary" variant="tonal"
             ><v-icon>mdi-account-group</v-icon></v-avatar
-          ><v-chip size="small">{{ team.competition }}</v-chip
+          ><v-chip v-for="competition in competitionsOf(team)" :key="competition" size="small">{{ competition }}</v-chip
           ><v-chip
             :color="closed(team) ? 'grey' : 'success'"
             size="small"
@@ -538,9 +545,11 @@ onMounted(load);
               maxlength="10000"
               required
             /><v-select
-              v-model="form.competition"
-              :items="['RoboMaster', 'ROBOCON']"
-              label="赛事"
+              v-model="form.competitions"
+              :items="['RoboCon', 'RoboMaster']"
+              multiple chips
+              label="同时参加的赛事 *"
+              aria-required="true"
             /><v-select
               v-model="form.directions"
               :items="directions"

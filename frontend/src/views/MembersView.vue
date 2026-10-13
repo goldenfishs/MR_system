@@ -3,17 +3,17 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { api } from "../lib/api";
 import { auth, roleNames } from "../lib/auth";
 import { dateTime } from "../lib/format";
-import type { User } from "../lib/types";
+import type { Settings, User } from "../lib/types";
 type Member = User & {
-  teams: { id: string; name: string; competition: string; direction: string }[];
+  teams: { id: string; name: string; competition: string; competitions?: string[]; direction: string }[];
 };
 const members = ref<Member[]>([]),
+  brand = ref<Settings | null>(null),
   loading = ref(true),
   saving = ref(false),
   error = ref(""),
   formError = ref(""),
   search = ref(""),
-  team = ref("全部赛队"),
   direction = ref("全部方向"),
   dialog = ref(false),
   success = ref(false);
@@ -22,27 +22,33 @@ const draft = reactive({
   email: "",
   password: "",
   role: "mentor",
-  team: "RoboMaster",
+  team: "",
   direction: "电控",
 });
 const filtered = computed(() =>
   members.value.filter(
     (u) =>
-      (team.value === "全部赛队" ||
-        u.team === team.value ||
-        u.teams?.some((t) => t.competition === team.value)) &&
       (direction.value === "全部方向" ||
         u.direction === direction.value ||
         u.teams?.some((t) => t.direction === direction.value)) &&
       `${u.name} ${u.email}`.toLowerCase().includes(search.value.toLowerCase()),
   ),
 );
+const teamName = computed(() =>
+  [brand.value?.teamName || "沧溟", brand.value ? brand.value.secondaryTeamName : "MOVE"]
+    .filter(Boolean)
+    .join(" / "),
+);
 async function load() {
   loading.value = true;
   error.value = "";
   try {
-    members.value =
-      (await api.get<{ items: Member[] }>("/members")).items || [];
+    const [directory, settings] = await Promise.all([
+      api.get<{ items: Member[] }>("/members"),
+      api.get<{ settings: Settings }>("/settings"),
+    ]);
+    members.value = directory.items || [];
+    brand.value = settings.settings;
   } catch (e) {
     error.value = (e as Error).message;
   } finally {
@@ -111,11 +117,6 @@ onMounted(load);
         clearable
         @click:clear="search = ''"
       /><v-select
-        v-model="team"
-        :items="['全部赛队', 'RoboMaster', 'ROBOCON']"
-        label="赛队"
-        hide-details
-      /><v-select
         v-model="direction"
         :items="['全部方向', '机械', '电控', '视觉算法', '硬件', '运营']"
         label="方向"
@@ -131,12 +132,12 @@ onMounted(load);
     <div v-else-if="!filtered.length" class="empty-state">
       <v-icon size="46">mdi-account-search-outline</v-icon>
       <p>没有找到符合条件的成员</p>
-      <small>调整筛选条件，或在团队招募中审核新成员。</small>
+      <small>调整筛选条件，或在团队报名中审核新成员。</small>
     </div>
     <div v-else class="members-grid">
       <v-card v-for="u in filtered" :key="u.id" class="member-card"
         ><div class="member-top">
-          <div class="member-avatar" :class="{ green: u.team === 'ROBOCON' }">
+          <div class="member-avatar">
             {{ u.name.slice(-2) }}
           </div>
           <v-chip
@@ -159,9 +160,7 @@ onMounted(load);
           >
         </div>
         <div v-else class="d-flex ga-2 mt-4">
-          <v-chip size="small" variant="outlined" color="primary">{{
-            u.team || "跨赛队"
-          }}</v-chip
+          <v-chip size="small" variant="outlined" color="primary">{{ teamName }}</v-chip
           ><v-chip size="small" variant="tonal">{{
             u.direction || "团队协作"
           }}</v-chip>
@@ -202,8 +201,8 @@ onMounted(load);
             ><v-col
               ><v-select
                 v-model="draft.team"
-                :items="['RoboMaster', 'ROBOCON']"
-                label="赛队" /></v-col
+                :items="[{ title: '共同支持两项赛事', value: '' }, { title: 'RoboCon', value: 'RoboCon' }, { title: 'RoboMaster', value: 'RoboMaster' }]"
+                label="主要负责赛事" /></v-col
             ><v-col
               ><v-select
                 v-model="draft.direction"
@@ -268,7 +267,7 @@ onMounted(load);
 }
 .filters {
   display: grid;
-  grid-template-columns: 2fr 1fr 1fr;
+  grid-template-columns: 2fr 1fr;
   gap: 16px;
   margin-bottom: 24px;
 }
@@ -294,10 +293,6 @@ onMounted(load);
   font-size: 17px;
   display: grid;
   place-items: center;
-}
-.member-avatar.green {
-  background: #eaf5ef;
-  color: #388e3c;
 }
 .member-card h3 {
   margin: 18px 0 7px;

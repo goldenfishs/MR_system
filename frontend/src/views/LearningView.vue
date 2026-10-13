@@ -5,11 +5,12 @@ import { useDisplay } from "vuetify";
 import { api, ApiError } from "../lib/api";
 import { auth } from "../lib/auth";
 import type { Task, Submission, Applicant } from "../lib/types";
-import type { JudgeConfig, Membership, TeamSpace } from "../lib/platform";
+import type { JudgeConfig, JudgeRun, Membership, TeamSpace } from "../lib/platform";
 import FileUpload from "../components/FileUpload.vue";
 import AttachmentList from "../components/AttachmentList.vue";
 import JudgePanel from "../components/JudgePanel.vue";
 import JudgeFields from "../components/JudgeFields.vue";
+import KnowledgeLibrary from "../components/KnowledgeLibrary.vue";
 
 const { smAndDown } = useDisplay();
 const route = useRoute();
@@ -27,6 +28,8 @@ const submissionsLoading = ref(false);
 const submissionsError = ref("");
 const saving = ref(false);
 const createOpen = ref(false);
+const editingTaskId = ref("");
+const removingTask = ref<Task | null>(null);
 const admitted = ref(false);
 const memberScope = reactive({ team: "", direction: "" });
 const reviewTarget = ref<Submission | null>(null);
@@ -59,6 +62,8 @@ const taskForm = reactive({
   direction: "",
   team: "",
   kind: "document",
+  category: "assignment" as "assignment" | "exam" | "problem",
+  tags: [] as string[],
   difficulty: "入门",
   dueAt: "",
   resourcesUrl: "",
@@ -83,10 +88,28 @@ watch(
   },
 );
 const directions = ["机械", "电控", "视觉算法", "硬件", "运营"];
+const sections = ["home", "knowledge", "tasks", "exam", "bank"] as const;
+const section = computed(() => {
+  const value = String(route.query.section || "");
+  if (sections.includes(value as (typeof sections)[number])) return value;
+  // Preserve old deep links such as /learning?kind=code.
+  return route.query.kind ? "tasks" : "home";
+});
+const categoryOf = (task: Task) => task.category || "assignment";
+const taskTypeLabel = (task: Task) => categoryOf(task) === "exam" ? "定时考试" : categoryOf(task) === "problem" ? "题库练习" : kindOf(task.kind).title;
+const competitionLabel = (value: string) => value === "ROBOCON" ? "RoboCon" : value;
+const taskCompetition = (task: Task) => {
+  const team = teamsForTasks.value.find(team => team.id === task.teamId);
+  return team?.competitions?.length ? team.competitions.map(competitionLabel).join(" / ") : competitionLabel(task.team) || "RoboCon / RoboMaster";
+};
+const categoryFilter = computed(() =>
+  section.value === "exam" ? "exam" : section.value === "bank" ? "problem" : section.value === "tasks" ? "assignment" : "",
+);
 const taskDirections = computed(
-  () =>
-    teamsForTasks.value.find((t) => t.id === taskForm.teamId)?.directions ||
-    directions,
+  () => {
+    const available = teamsForTasks.value.find((t) => t.id === taskForm.teamId)?.directions || directions;
+    return taskForm.category === "problem" ? available.filter(direction => ["电控", "视觉算法", "硬件"].includes(direction)) : available;
+  },
 );
 watch(
   () => taskForm.teamId,
@@ -101,15 +124,39 @@ watch(
 );
 const kinds = [
   { value: "all", title: "全部任务", icon: "mdi-view-grid-outline" },
-  { value: "code", title: "代码项目", icon: "mdi-code-braces" },
+  { value: "code", title: "代码作业", icon: "mdi-code-braces" },
   { value: "document", title: "文档作业", icon: "mdi-file-document-outline" },
   {
     value: "hardware",
-    title: "实机验收",
+    title: "设计与实践",
     icon: "mdi-robot-industrial-outline",
   },
-  { value: "quiz", title: "知识测评", icon: "mdi-clipboard-text-outline" },
+  { value: "quiz", title: "书面考核", icon: "mdi-clipboard-text-outline" },
 ];
+const availableKinds = computed(() => kinds.filter(kind => kind.value !== "all" && (taskForm.direction !== "运营" || !["code", "quiz"].includes(kind.value)) && (taskForm.direction !== "机械" || kind.value !== "code")));
+const availableSubmissionTypes = computed(() => ["机械", "运营"].includes(taskForm.direction) ? [
+  { title: taskForm.direction === "机械" ? "图纸 / 文件 / 工程材料" : "图片 / 设计稿 / 素材文件", value: "files" },
+  { title: "完整项目 / 压缩包", value: "project" },
+] : [
+  { title: "文件 / 压缩包", value: "files" },
+  { title: "单文件代码评测", value: "code" },
+  { title: "完整工程 / 项目", value: "project" },
+]);
+watch(() => taskForm.category, value => {
+  if (value === "problem") {
+    taskForm.kind = "code";
+    taskForm.submissionType = "code";
+    taskForm.judge.enabled = true;
+    if (!["电控", "视觉算法", "硬件"].includes(taskForm.direction)) taskForm.direction = "";
+  }
+});
+watch(() => taskForm.direction, value => {
+  if (["机械", "运营"].includes(value)) {
+    if (taskForm.kind === "code" || value === "运营" && taskForm.kind === "quiz") taskForm.kind = "document";
+    if (taskForm.submissionType === "code") taskForm.submissionType = "files";
+    taskForm.judge.enabled = false;
+  }
+});
 const kindFilter = computed(() =>
   kinds.some((kind) => kind.value === route.query.kind)
     ? String(route.query.kind)
@@ -130,6 +177,49 @@ const directionFilter = computed({
     });
   },
 });
+const taskFitsDirection = (task: Task) =>
+  (directionFilter.value === "全部方向" || !task.direction || task.direction === directionFilter.value) &&
+  (task.direction !== "运营" || !["code", "quiz"].includes(task.kind)) &&
+  (task.direction !== "机械" || task.kind !== "code") &&
+  (directionFilter.value !== "运营" || !["code", "quiz"].includes(task.kind)) &&
+  (directionFilter.value !== "机械" || task.kind !== "code");
+const scopedTasks = computed(() => tasks.value.filter(taskFitsDirection));
+const listedTasks = computed(() => scopedTasks.value.filter(task => !categoryFilter.value || categoryOf(task) === categoryFilter.value));
+const selectedDirection = computed(() => directionFilter.value === "全部方向" ? "" : directionFilter.value);
+const supportsBank = computed(() => !selectedDirection.value || ["电控", "视觉算法", "硬件"].includes(selectedDirection.value));
+const groupName = computed(() => selectedDirection.value ? `${selectedDirection.value}组` : "技术组");
+const groupIntro = computed(() => ({
+  机械: "从机构方案到加工装配，在实践中完成一台可靠的机器人。",
+  电控: "连接传感、控制与执行，让代码成为机器人的行动。",
+  视觉算法: "从图像与数据中理解环境，为机器人建立感知与决策。",
+  硬件: "从原理图到电路板，为机器人建立稳定的硬件基础。",
+  运营: "记录团队、讲好故事，让每一次探索被更多人看见。",
+})[selectedDirection.value as "机械" | "电控" | "视觉算法" | "硬件" | "运营"] || "共享知识与项目经验，一起参加 RoboCon 与 RoboMaster。" );
+const isFuture = (task: Task) => Boolean(task.locked || task.startsAt && new Date(task.startsAt).getTime() > currentTime.value);
+const exams = computed(() => scopedTasks.value.filter((task) => categoryOf(task) === "exam"));
+const assignments = computed(() => scopedTasks.value.filter((task) => categoryOf(task) === "assignment"));
+const upcomingExams = computed(() => exams.value.filter((task) => !isExpired(task.dueAt)).sort((a, b) => (a.startsAt || "").localeCompare(b.startsAt || "")).slice(0, 4));
+const recentTasks = computed(() => assignments.value.slice(0, 4));
+const problemTag = ref("全部标签"), problemDifficulty = ref("全部难度"), problemSort = ref("newest"), problemPage = ref(1);
+const problemTags = computed(() => [...new Set(scopedTasks.value.filter(task => categoryOf(task) === "problem").flatMap(task => task.tags || []))].sort());
+const problems = computed(() => {
+  const result = filtered.value.filter(task =>
+    (problemTag.value === "全部标签" || task.tags?.includes(problemTag.value)) &&
+    (problemDifficulty.value === "全部难度" || task.difficulty === problemDifficulty.value),
+  );
+  if (problemSort.value === "title") result.sort((a, b) => a.title.localeCompare(b.title, "zh-CN"));
+  else if (problemSort.value === "accepted") result.sort((a, b) => (b.acceptedCount || 0) - (a.acceptedCount || 0));
+  else result.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return result;
+});
+const pagedProblems = computed(() => problems.value.slice((problemPage.value - 1) * 15, problemPage.value * 15));
+watch([search, problemTag, problemDifficulty, problemSort, directionFilter], () => problemPage.value = 1);
+function goSection(value: string) {
+  router.push({ path: "/learning", query: { direction: selectedDirection.value || undefined, section: value } });
+}
+function randomProblem() {
+  if (problems.value.length) openTask(problems.value[Math.floor(Math.random() * problems.value.length)]!);
+}
 function clearFilters() {
   search.value = "";
   router.replace({
@@ -140,27 +230,26 @@ const isStudent = computed(() => auth.user?.role === "student");
 const canManage = computed(() =>
   ["admin", "mentor"].includes(auth.user?.role || ""),
 );
+const canManageTask = (task: Task) => canManage.value && (auth.user?.role === "admin" || task.createdBy === auth.user?.id);
 const filtered = computed(() =>
-  tasks.value.filter(
+  scopedTasks.value.filter(
     (t) =>
+      (!categoryFilter.value || categoryOf(t) === categoryFilter.value) &&
       (kindFilter.value === "all" || t.kind === kindFilter.value) &&
-      (directionFilter.value === "全部方向" ||
-        !t.direction ||
-        t.direction === directionFilter.value) &&
-      `${t.title} ${t.description} ${t.team}`
+      `${t.title} ${t.description} ${t.team} ${(t.tags || []).join(' ')}`
         .toLowerCase()
         .includes(search.value.toLowerCase()),
   ),
 );
 const completed = computed(
-  () => tasks.value.filter((t) => t.mySubmission?.status === "approved").length,
+  () => listedTasks.value.filter((t) => t.mySubmission?.status === "approved").length,
 );
 const pending = computed(
-  () => tasks.value.filter((t) => t.mySubmission?.status === "pending").length,
+  () => listedTasks.value.filter((t) => t.mySubmission?.status === "pending").length,
 );
 const revisions = computed(
   () =>
-    tasks.value.filter((t) => t.mySubmission?.status === "changes_requested")
+    listedTasks.value.filter((t) => t.mySubmission?.status === "changes_requested")
       .length,
 );
 const latestSubmissions = computed(() => {
@@ -258,11 +347,23 @@ const messageOf = (e: unknown) =>
     : "操作失败，请稍后重试";
 const draftKey = (id: string) => `robotlab:submission:${auth.user?.id}:${id}`;
 
-async function load() {
+let loadVersion = 0;
+let lastUnlockRefresh = 0;
+async function load(quiet = false) {
+  if (quiet && loading.value) return;
+  const version = ++loadVersion;
   loading.value = true;
   error.value = "";
   try {
-    tasks.value = (await api.get<{ items: Task[] }>("/tasks")).items;
+    const category = categoryFilter.value;
+    const taskPath = category ? `/tasks?category=${category}` : "/tasks";
+    const result = await api.get<{ items: Task[] }>(taskPath);
+    if (version !== loadVersion) return;
+    tasks.value = result.items;
+    if (selected.value) {
+      const refreshed = tasks.value.find(task => task.id === selected.value?.id);
+      if (refreshed) selected.value = refreshed;
+    }
     if (isStudent.value) {
       memberships.value = (
         await api.get<{ items: Membership[] }>("/memberships")
@@ -276,17 +377,22 @@ async function load() {
       memberScope.team = legacy?.team || "";
       memberScope.direction =
         legacy?.direction || memberships.value[0]?.direction || "";
-    } else if (canManage.value) {
-      teamsForTasks.value = (
-        await api.get<{ items: TeamSpace[] }>("/teams")
-      ).items;
     }
+    teamsForTasks.value = (await api.get<{ items: TeamSpace[] }>("/teams")).items;
   } catch (e) {
-    error.value = messageOf(e);
+    if (version === loadVersion) error.value = messageOf(e);
   } finally {
-    loading.value = false;
+    if (version === loadVersion) loading.value = false;
   }
 }
+watch(section, () => { selected.value = null; search.value = ""; void load(); });
+watch(currentTime, (time) => {
+  if (loading.value || time - lastUnlockRefresh < 15000) return;
+  if (tasks.value.some(task => task.locked && task.startsAt && new Date(task.startsAt).getTime() <= time)) {
+    lastUnlockRefresh = time;
+    void load(true);
+  }
+});
 async function loadSubmissions(taskId: string) {
   submissionsLoading.value = true;
   submissionsError.value = "";
@@ -304,6 +410,17 @@ async function loadSubmissions(taskId: string) {
   } finally {
     if (selected.value?.id === taskId) submissionsLoading.value = false;
   }
+}
+async function onJudgeRun(run: JudgeRun) {
+  submissionForm.fileIds = [...new Set([...submissionForm.fileIds, run.sourceFileId])];
+  if (run.status !== "completed" || section.value !== "bank") return;
+  const version = loadVersion;
+  try {
+    const result = await api.get<{ items: Task[] }>("/tasks?category=problem");
+    if (version !== loadVersion || section.value !== "bank") return;
+    tasks.value = result.items;
+    if (selected.value) selected.value = tasks.value.find(task => task.id === selected.value?.id) || selected.value;
+  } catch { /* Judge results remain available even if the list refresh fails. */ }
 }
 function openTask(task: Task) {
   if (saving.value || uploadBusy.value || judgeBusy.value) return;
@@ -441,12 +558,15 @@ async function submitWork() {
 }
 function startCreate() {
   if (saving.value || uploadBusy.value || judgeBusy.value) return;
+  editingTaskId.value = "";
   Object.assign(taskForm, {
     title: "",
     description: "",
-    direction: "",
+    direction: selectedDirection.value,
     team: "",
     kind: "document",
+    category: section.value === "exam" ? "exam" : section.value === "bank" ? "problem" : "assignment",
+    tags: [],
     difficulty: "入门",
     dueAt: "",
     resourcesUrl: "",
@@ -464,7 +584,47 @@ function startCreate() {
     },
   });
   taskFiles.value = [];
+  if (taskForm.category === "problem") {
+    taskForm.kind = "code";
+    taskForm.submissionType = "code";
+    taskForm.judge.enabled = true;
+  }
+  if (teamsForTasks.value.length === 1) taskForm.teamId = teamsForTasks.value[0]!.id;
   createOpen.value = true;
+}
+function localDate(value?: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+function startEdit(task: Task, asNew = false) {
+  if (saving.value || uploadBusy.value || judgeBusy.value) return;
+  editingTaskId.value = asNew ? "" : task.id;
+  Object.assign(taskForm, {
+    title: `${task.title}${asNew ? ' · 新版本' : ''}`, description: task.description,
+    direction: task.direction, team: task.team, kind: task.kind,
+    category: categoryOf(task), tags: [...(task.tags || [])], difficulty: task.difficulty,
+    dueAt: localDate(task.dueAt), resourcesUrl: task.resourcesUrl, maxScore: task.maxScore,
+    required: task.required, teamId: task.teamId || "", submissionType: task.submissionType || "files",
+    startsAt: localDate(task.startsAt),
+    judge: task.judge ? { ...task.judge, testCases: task.judge.testCases.map(test => ({ ...test })), languageIds: [...task.judge.languageIds] } : { enabled: false, testCases: [], languageIds: [], timeLimitSeconds: 2, totalCases: 0 },
+  });
+  taskFiles.value = [...(task.fileIds || [])];
+  createOpen.value = true;
+}
+async function removeTask() {
+  if (!removingTask.value || saving.value) return;
+  const id = removingTask.value.id;
+  saving.value = true;
+  try {
+    await api.delete(`/tasks/${id}`);
+    tasks.value = tasks.value.filter(task => task.id !== id);
+    if (selected.value?.id === id) selected.value = null;
+    removingTask.value = null;
+    notice.value = "内容已移除";
+  } catch (e) { notice.value = messageOf(e); }
+  finally { saving.value = false; }
 }
 async function createTask() {
   if (saving.value || uploadBusy.value) return;
@@ -496,13 +656,16 @@ async function createTask() {
     notice.value = "请选择已发布的团队；如无团队，请先在团队与报名中发布。";
     return;
   }
-  if (
-    taskForm.submissionType === "code" &&
-    taskForm.judge.enabled &&
-    taskForm.kind === "quiz" &&
-    (!taskForm.startsAt || !taskForm.dueAt)
-  ) {
-    notice.value = "编程考试必须设置开始和截止时间";
+  if (taskForm.category === "exam" && (!taskForm.startsAt || !taskForm.dueAt)) {
+    notice.value = "考试必须设置发布开始时间和截止时间";
+    return;
+  }
+  if (taskForm.category === "problem" && (!["电控", "视觉算法", "硬件"].includes(taskForm.direction) || !taskForm.judge.enabled)) {
+    notice.value = "题库题目请选择电控、视觉算法或硬件组，并启用自动评测";
+    return;
+  }
+  if (["机械", "运营"].includes(taskForm.direction) && (taskForm.submissionType === "code" || taskForm.judge.enabled)) {
+    notice.value = "机械组和运营组使用文件、工程或作品提交，不设置代码自动评测";
     return;
   }
   if (
@@ -515,7 +678,7 @@ async function createTask() {
   }
   saving.value = true;
   try {
-    const { item } = await api.post<{ item: Task }>("/tasks", {
+    const body = {
       ...taskForm,
       fileIds: taskFiles.value,
       judge:
@@ -527,10 +690,14 @@ async function createTask() {
         : "",
       maxScore: Number(taskForm.maxScore),
       dueAt: taskForm.dueAt ? new Date(taskForm.dueAt).toISOString() : "",
-    });
-    tasks.value = [item, ...tasks.value];
+    };
+    const { item } = editingTaskId.value
+      ? await api.patch<{ item: Task }>(`/tasks/${editingTaskId.value}`, body)
+      : await api.post<{ item: Task }>("/tasks", body);
+    tasks.value = [item, ...tasks.value.filter(task => task.id !== item.id)];
+    if (selected.value?.id === item.id) selected.value = item;
     createOpen.value = false;
-    notice.value = "任务已发布，成员可以查看任务并提交成果";
+    notice.value = editingTaskId.value ? "内容已更新" : taskForm.category === "exam" ? "考试已排期，题目将在开始时间开放" : taskForm.category === "problem" ? "题目已发布到题库" : "作业已发布，成员可以查看要求并提交成果";
   } catch (e) {
     notice.value = messageOf(e);
   } finally {
@@ -600,12 +767,20 @@ onUnmounted(() => clearInterval(timeTicker));
     <div class="page-content learning-page">
       <div class="page-heading">
         <div>
-          <h1>学习与任务</h1>
+          <h1>{{ groupName }} · {{ section === 'knowledge' ? '知识库' : section === 'exam' ? '考试' : section === 'bank' ? '题库' : section === 'tasks' ? '作业' : '首页' }}</h1>
           <p>
             {{
-              canManage
-                ? "发布训练任务，查看成员成果与审核进度"
-                : "查看训练要求，提交成果并跟进导师反馈"
+              section === 'knowledge'
+                ? '下载文件、阅读 PDF，观看技术组学习资料'
+                : section === 'bank'
+                  ? '按题目练习代码，查看通过率并运行自动评测'
+                  : section === 'exam'
+                    ? '管理员定时发布考核内容，按开始和截止时间参加考试'
+                    : section === 'home'
+                      ? '从知识库到实践任务，记录每一步机器人能力成长'
+                      : canManage
+                        ? '发布训练任务，查看成员成果与审核进度'
+                        : '查看训练要求，提交成果并跟进导师反馈'
             }}
           </p>
         </div>
@@ -614,22 +789,22 @@ onUnmounted(() => clearInterval(timeTicker));
             variant="text"
             prepend-icon="mdi-refresh"
             :loading="loading"
-            @click="load"
+            @click="load()"
             >刷新</v-btn
           >
           <v-btn
-            v-if="canManage"
+            v-if="canManage && section !== 'knowledge' && (section !== 'bank' || supportsBank)"
             color="primary"
             prepend-icon="mdi-plus"
             @click="startCreate"
-            >发布任务</v-btn
+            >{{ section === 'exam' ? '安排考试' : section === 'bank' ? '发布题目' : '发布作业' }}</v-btn
           >
         </div>
       </div>
       <v-alert v-if="error" type="error" variant="tonal" class="mb-5"
         >{{ error
         }}<template #append
-          ><v-btn variant="text" @click="load">重试</v-btn></template
+          ><v-btn variant="text" @click="load()">重试</v-btn></template
         ></v-alert
       >
       <div v-if="loading" class="loading-panel">
@@ -638,43 +813,68 @@ onUnmounted(() => clearInterval(timeTicker));
         >
       </div>
       <template v-else>
+        <template v-if="section === 'home'">
+          <v-card class="group-welcome" elevation="1">
+            <div><span class="welcome-caption">QUT ROBOT TEAM</span><h2>{{ groupName }}的成长空间</h2><p>{{ groupIntro }}</p><div class="welcome-links"><v-btn color="primary" variant="tonal" prepend-icon="mdi-bookshelf" @click="goSection('knowledge')">进入知识库</v-btn><v-btn color="primary" variant="text" prepend-icon="mdi-message-question-outline" :to="{ path: '/discussions', query: { direction: selectedDirection || undefined } }">向{{ groupName }}提问</v-btn></div></div>
+            <div class="welcome-stats"><div><strong>{{ assignments.length }}</strong><span>作业与考核</span></div><div><strong>{{ exams.length }}</strong><span>考试安排</span></div><div><strong>{{ scopedTasks.filter(task => task.mySubmission?.status === 'approved').length }}</strong><span>{{ isStudent ? '已完成任务' : '通过提交' }}</span></div></div>
+          </v-card>
+          <div class="group-shortcuts">
+            <v-card elevation="1" @click="goSection('knowledge')"><v-icon color="teal">mdi-bookshelf</v-icon><div><h3>知识库</h3><p>讲义、PDF、视频与资料下载</p></div><v-icon color="grey">mdi-chevron-right</v-icon></v-card>
+            <v-card elevation="1" @click="goSection('tasks')"><v-icon color="primary">mdi-clipboard-text-outline</v-icon><div><h3>作业</h3><p>{{ selectedDirection === '运营' ? '图片、设计稿与运营实践' : '训练任务、实践成果与阶段考核' }}</p></div><v-icon color="grey">mdi-chevron-right</v-icon></v-card>
+            <v-card elevation="1" @click="goSection('exam')"><v-icon color="deep-purple">mdi-calendar-clock-outline</v-icon><div><h3>考试</h3><p>查看排期，按时参加考试</p></div><v-icon color="grey">mdi-chevron-right</v-icon></v-card>
+            <v-card v-if="supportsBank" elevation="1" @click="goSection('bank')"><v-icon color="deep-orange">mdi-code-braces</v-icon><div><h3>题库</h3><p>电控、视觉与硬件编程练习</p></div><v-icon color="grey">mdi-chevron-right</v-icon></v-card>
+          </div>
+          <div class="group-home-grid">
+            <v-card class="group-home-panel" elevation="1"><div class="home-panel-heading"><h2>近期作业</h2><v-btn variant="text" color="primary" size="small" @click="goSection('tasks')">全部作业</v-btn></div>
+              <button v-for="task in recentTasks" :key="task.id" class="home-task-row" @click="openTask(task)"><v-icon color="primary" size="21">{{ kindOf(task.kind).icon }}</v-icon><div><strong>{{ task.title }}</strong><span>{{ task.direction || '全组共享' }} · {{ task.dueAt ? formatDate(task.dueAt) + ' 截止' : '不限截止时间' }}</span></div><v-chip v-if="isStudent" size="x-small" :color="statusOf(task.mySubmission?.status).color" variant="tonal">{{ statusOf(task.mySubmission?.status).label }}</v-chip><v-icon v-else color="grey" size="18">mdi-chevron-right</v-icon></button>
+              <p v-if="!recentTasks.length" class="home-empty">{{ canManage ? '发布作业后，成员将在这里查看最新的训练安排。' : '管理员发布作业后，将在这里展示最新安排。' }}</p>
+            </v-card>
+            <v-card class="group-home-panel" elevation="1"><div class="home-panel-heading"><h2>考试日程</h2><v-btn variant="text" color="primary" size="small" @click="goSection('exam')">全部考试</v-btn></div>
+              <button v-for="task in upcomingExams" :key="task.id" class="home-task-row" @click="openTask(task)"><v-icon color="deep-purple" size="21">mdi-calendar-clock-outline</v-icon><div><strong>{{ task.title }}</strong><span>{{ task.startsAt ? formatDate(task.startsAt) + ' 开始' : '等待安排' }}</span></div><v-chip size="x-small" :color="isFuture(task) ? 'blue-grey' : 'teal'" variant="tonal">{{ isFuture(task) ? '待开考' : '进行中' }}</v-chip></button>
+              <p v-if="!upcomingExams.length" class="home-empty">暂无即将开始或进行中的考试。</p>
+            </v-card>
+          </div>
+        </template>
+        <KnowledgeLibrary v-else-if="section === 'knowledge'" :direction="selectedDirection" />
+        <v-card v-else-if="section === 'bank' && !supportsBank" class="empty-panel" elevation="1"><v-icon size="42" color="indigo-lighten-3">mdi-notebook-outline</v-icon><h2>{{ groupName }}以文件与实践任务为主</h2><p>查看知识库、作业和考试安排，完成本组的训练内容。</p><v-btn color="primary" variant="tonal" @click="goSection('tasks')">进入作业</v-btn></v-card>
+        <template v-else>
         <div class="learning-overview" aria-label="任务数量概要">
           <div class="overview-stats">
             <div>
-              <span>全部任务</span><strong>{{ tasks.length }}</strong>
+              <span>{{ section === 'bank' ? '题库题目' : section === 'exam' ? '考试数量' : '全部作业' }}</span><strong>{{ listedTasks.length }}</strong>
             </div>
             <div>
-              <span>{{ isStudent ? "已完成" : "进行中" }}</span>
+              <span>{{ section === 'bank' ? '已通过题目' : isStudent ? "已完成" : "进行中" }}</span>
               <strong>{{
-                isStudent
+                section === 'bank' ? listedTasks.filter(task => task.myAccepted).length : isStudent
                   ? completed
-                  : tasks.filter((t) => !isExpired(t.dueAt)).length
+                  : listedTasks.filter((t) => !isExpired(t.dueAt)).length
               }}</strong>
             </div>
             <div>
-              <span>{{ isStudent ? "待审核" : "必修任务" }}</span>
+              <span>{{ section === 'bank' ? '通过次数' : isStudent ? "待审核" : "必修任务" }}</span>
               <strong>{{
-                isStudent ? pending : tasks.filter((t) => t.required).length
+                section === 'bank' ? listedTasks.reduce((sum, task) => sum + (task.acceptedCount || 0), 0) : isStudent ? pending : listedTasks.filter((t) => t.required).length
               }}</strong>
             </div>
             <div>
-              <span>{{ isStudent ? "待修改" : "成果提交" }}</span>
+              <span>{{ section === 'bank' ? '评测次数' : isStudent ? "待修改" : "成果提交" }}</span>
               <strong>{{
-                isStudent
+                section === 'bank' ? listedTasks.reduce((sum, task) => sum + (task.attemptCount || 0), 0) : isStudent
                   ? revisions
-                  : tasks.reduce((sum, t) => sum + t.submissionCount, 0)
+                  : listedTasks.reduce((sum, t) => sum + t.submissionCount, 0)
               }}</strong>
             </div>
           </div>
         </div>
         <div class="task-toolbar">
           <div class="filter-summary">
-            {{ kindOf(kindFilter).title }}<span>{{ filtered.length }} 项</span>
+            {{ section === 'bank' ? '编程题目' : section === 'exam' ? '考试安排' : '作业与考核' }}<span>{{ filtered.length }} 项</span>
           </div>
           <div class="task-filters">
             <v-text-field
               v-model="search"
-              placeholder="搜索任务"
+              :placeholder="section === 'bank' ? '搜索题目或标签' : section === 'exam' ? '搜索考试' : '搜索作业'"
               prepend-inner-icon="mdi-magnify"
               variant="outlined"
               density="compact"
@@ -690,7 +890,16 @@ onUnmounted(() => clearInterval(timeTicker));
             />
           </div>
         </div>
-        <div v-if="filtered.length" class="task-grid">
+        <div v-if="section === 'bank'" class="problem-layout">
+          <v-card class="problem-list" elevation="1">
+            <div class="problem-list-tools"><v-select v-model="problemSort" :items="[{value:'newest',title:'最新发布'},{value:'title',title:'题目名称'},{value:'accepted',title:'通过次数'}]" density="compact" variant="outlined" hide-details aria-label="题库排序" /><span>{{ problems.length }} 道题目</span></div>
+            <div class="problem-table-scroll"><table class="problem-table"><thead><tr><th>状态</th><th>题目</th><th>标签</th><th>AC / 尝试</th><th>难度</th></tr></thead><tbody><tr v-for="task in pagedProblems" :key="task.id"><td><v-icon size="19" :color="task.myAccepted ? 'teal' : 'grey-lighten-1'">{{ task.myAccepted ? 'mdi-check-circle-outline' : 'mdi-circle-outline' }}</v-icon></td><td><button class="problem-title" @click="openTask(task)"><span>#{{ task.id.slice(0, 6).toUpperCase() }}</span><strong>{{ task.title }}</strong></button></td><td><div class="problem-tags"><v-chip v-for="tag in task.tags || []" :key="tag" size="x-small" color="primary" variant="tonal" @click="problemTag = tag">{{ tag }}</v-chip><span v-if="!task.tags?.length">{{ task.direction }}</span></div></td><td>{{ task.acceptedCount || 0 }} / {{ task.attemptCount || 0 }}</td><td><v-chip size="x-small" :color="task.difficulty === '挑战' ? 'deep-orange' : task.difficulty === '进阶' ? 'amber-darken-2' : 'teal'" variant="tonal">{{ task.difficulty }}</v-chip></td></tr></tbody></table></div>
+            <div v-if="!problems.length" class="problem-empty"><v-icon size="38" color="indigo-lighten-3">mdi-code-braces</v-icon><h2>暂无匹配的题目</h2><p>{{ canManage ? '发布带测试用例的题目，成员即可在题库中练习。' : '更换搜索条件，或等待管理员发布新的练习题目。' }}</p></div>
+            <v-pagination v-if="problems.length > 15" v-model="problemPage" :length="Math.ceil(problems.length / 15)" :total-visible="5" density="compact" class="my-3" />
+          </v-card>
+          <aside class="problem-sidebar"><v-card elevation="1"><h3>题目分类</h3><v-select v-model="problemTag" :items="['全部标签', ...problemTags]" label="知识标签" density="compact" variant="outlined" hide-details /><v-select v-model="problemDifficulty" :items="['全部难度', '入门', '进阶', '挑战']" label="题目难度" density="compact" variant="outlined" hide-details class="mt-4" /><v-btn color="primary" variant="text" class="mt-3" @click="search = ''; problemTag = '全部标签'; problemDifficulty = '全部难度'">清除筛选</v-btn></v-card><v-card elevation="1"><h3>练习一道题</h3><p>从当前筛选结果中随机挑选，开始今天的练习。</p><v-btn color="primary" variant="tonal" block prepend-icon="mdi-shuffle-variant" :disabled="!problems.length" @click="randomProblem">随机题目</v-btn></v-card></aside>
+        </div>
+        <div v-else-if="filtered.length" class="task-grid">
           <v-card
             v-for="task in filtered"
             :key="task.id"
@@ -701,7 +910,7 @@ onUnmounted(() => clearInterval(timeTicker));
             ><div class="task-top">
               <div :class="['task-icon', `icon-${task.kind}`]">
                 <v-icon size="24">{{ kindOf(task.kind).icon }}</v-icon>
-                <span>{{ kindOf(task.kind).title }}</span>
+                <span>{{ taskTypeLabel(task) }}</span>
               </div>
               <v-chip
                 v-if="isStudent"
@@ -711,10 +920,10 @@ onUnmounted(() => clearInterval(timeTicker));
                 >{{ statusOf(task.mySubmission?.status).label }}</v-chip
               ><v-chip
                 v-else
-                :color="isExpired(task.dueAt) ? 'grey' : 'teal'"
+                :color="isExpired(task.dueAt) ? 'grey' : isFuture(task) ? 'blue-grey' : 'teal'"
                 size="small"
                 variant="tonal"
-                >{{ isExpired(task.dueAt) ? "已截止" : "进行中" }}</v-chip
+                >{{ isExpired(task.dueAt) ? "已截止" : isFuture(task) ? "待开考" : "进行中" }}</v-chip
               >
             </div>
             <div class="task-labels">
@@ -729,11 +938,12 @@ onUnmounted(() => clearInterval(timeTicker));
               >
             </div>
             <h2>{{ task.title }}</h2>
-            <p class="task-description">{{ task.description }}</p>
+            <p class="task-description">{{ task.locked ? '考试题目将在开始时间开放。你可以先查看考试排期和分值。' : task.description }}</p>
+            <p v-if="task.startsAt" class="exam-start"><v-icon size="14">mdi-clock-outline</v-icon>{{ formatDate(task.startsAt) }} 开始</p>
             <div class="task-meta">
               <span
                 ><v-icon size="14">mdi-account-group-outline</v-icon
-                >{{ task.team || "全赛队" }}</span
+                >{{ taskCompetition(task) }}</span
               ><span
                 ><v-icon size="14">mdi-star-outline</v-icon
                 >{{ task.maxScore }} 分</span
@@ -793,6 +1003,7 @@ onUnmounted(() => clearInterval(timeTicker));
             >发布第一项任务</v-btn
           ></v-card
         >
+        </template>
       </template>
 
       <v-dialog
@@ -806,7 +1017,7 @@ onUnmounted(() => clearInterval(timeTicker));
           ><v-card-title class="dialog-heading"
             ><div>
               <div class="dialog-caption">
-                {{ kindOf(selected.kind).title }} ·
+                {{ taskTypeLabel(selected) }} ·
                 {{ selected.direction || "全方向" }}
               </div>
               <h2>{{ selected.title }}</h2>
@@ -831,7 +1042,7 @@ onUnmounted(() => clearInterval(timeTicker));
               ><v-window-item value="brief"
                 ><div class="brief-meta">
                   <v-chip size="small" variant="tonal" color="primary">{{
-                    selected.team || "全赛队"
+                    taskCompetition(selected)
                   }}</v-chip
                   ><v-chip size="small" variant="tonal">{{
                     selected.difficulty
@@ -847,8 +1058,8 @@ onUnmounted(() => clearInterval(timeTicker));
                     }}</span
                   >
                 </div>
-                <div class="brief-description">{{ selected.description }}</div>
-                <AttachmentList :ids="selected.fileIds" />
+                <v-alert v-if="selected.locked" type="info" variant="tonal" class="mb-5">本场考试尚未开始，题目和附件将在开考时间开放。</v-alert>
+                <template v-else><div class="brief-description">{{ selected.description }}</div><AttachmentList :ids="selected.fileIds" /></template>
                 <v-alert
                   v-if="selected.startsAt"
                   type="info"
@@ -862,7 +1073,7 @@ onUnmounted(() => clearInterval(timeTicker));
                   }}</v-alert
                 >
                 <v-alert
-                  v-if="selected.kind === 'quiz' || selected.kind === 'code'"
+                  v-if="!selected.locked && selected.submissionType === 'code' && selected.direction !== '运营'"
                   type="info"
                   variant="tonal"
                   class="my-5"
@@ -901,6 +1112,7 @@ onUnmounted(() => clearInterval(timeTicker));
                     @click="detailTab = 'history'"
                     >查看成员提交</v-btn
                   >
+                  <div v-if="canManageTask(selected)" class="task-management-actions"><v-btn color="primary" variant="tonal" prepend-icon="mdi-pencil-outline" :disabled="selected.submissionCount > 0" @click="startEdit(selected)">编辑{{ categoryOf(selected) === 'exam' ? '考试' : categoryOf(selected) === 'problem' ? '题目' : '作业' }}</v-btn><v-btn variant="text" prepend-icon="mdi-content-copy" @click="startEdit(selected, true)">发布新版本</v-btn><v-btn color="error" variant="text" :disabled="selected.submissionCount > 0" @click="removingTask = selected">删除</v-btn><p>已有提交或评测记录的内容需发布新版本，以保留原始成绩。</p></div>
                 </div></v-window-item
               >
               <v-window-item value="submit"
@@ -942,14 +1154,7 @@ onUnmounted(() => clearInterval(timeTicker));
                       :task="selected"
                       :disabled="saving || Boolean(eligibility)"
                       @busy="judgeBusy = $event"
-                      @run="
-                        submissionForm.fileIds = [
-                          ...new Set([
-                            ...submissionForm.fileIds,
-                            $event.sourceFileId,
-                          ]),
-                        ]
-                      "
+                      @run="onJudgeRun"
                     /><FileUpload
                       v-model="submissionForm.fileIds"
                       :label="
@@ -966,6 +1171,7 @@ onUnmounted(() => clearInterval(timeTicker));
                       :disabled="saving || judgeBusy"
                       @busy="uploadBusy = $event"
                     /><v-text-field
+                      v-if="selected.direction !== '运营' && selected.direction !== '机械'"
                       v-model="submissionForm.repoUrl"
                       label="代码仓库链接（选填）"
                       type="url"
@@ -984,7 +1190,7 @@ onUnmounted(() => clearInterval(timeTicker));
                       {{
                         sourceOnly
                           ? "请在上方运行代码评测后提交评测结果；自动分数与管理员人工成绩分开展示。"
-                          : "可上传多个附件，单个文件最多 25 MB；也可附代码仓库链接。"
+                          : "可上传多个成果附件，单个文件最多 25 MB。"
                       }}
                     </p>
                     <div class="submit-footer">
@@ -1203,7 +1409,7 @@ onUnmounted(() => clearInterval(timeTicker));
         ><v-card class="learning-dialog"
           ><v-card-title class="dialog-heading"
             ><div>
-              <h2>发布学习任务</h2>
+              <h2>{{ editingTaskId ? '编辑' : '发布' }}{{ taskForm.category === 'exam' ? '考试' : taskForm.category === 'problem' ? '题库题目' : '作业任务' }}</h2>
               <p>把目标、提交要求与验收标准说明清楚。</p>
             </div>
             <v-btn
@@ -1214,7 +1420,8 @@ onUnmounted(() => clearInterval(timeTicker));
               @click="createOpen = false" /></v-card-title
           ><v-card-text
             ><v-form @submit.prevent="createTask"
-              ><v-text-field
+              ><v-select v-model="taskForm.category" :items="[{ value: 'assignment', title: '作业与阶段考核' }, { value: 'exam', title: '定时考试' }, ...(supportsBank ? [{ value: 'problem', title: '题库练习' }] : [])]" label="发布到栏目" variant="outlined" />
+              <v-text-field
                 v-model="taskForm.title"
                 label="任务名称 *"
                 variant="outlined"
@@ -1230,17 +1437,6 @@ onUnmounted(() => clearInterval(timeTicker));
                 counter
                 required
               /><v-row
-                ><v-col cols="12" sm="6"
-                  ><v-select
-                    v-model="taskForm.team"
-                    :items="[
-                      { title: '所有赛队', value: '' },
-                      { title: 'RoboMaster', value: 'RoboMaster' },
-                      { title: 'ROBOCON', value: 'ROBOCON' },
-                    ]"
-                    label="所属赛事"
-                    :disabled="Boolean(taskForm.teamId)"
-                    variant="outlined" /></v-col
                 ><v-col cols="12" sm="6"
                   ><v-select
                     v-model="taskForm.teamId"
@@ -1261,17 +1457,15 @@ onUnmounted(() => clearInterval(timeTicker));
                 ><v-col cols="12" sm="6"
                   ><v-select
                     v-model="taskForm.kind"
-                    :items="kinds.filter((k) => k.value !== 'all')"
+                    :items="availableKinds"
+                    :disabled="taskForm.category === 'problem'"
                     label="任务类型"
                     variant="outlined" /></v-col
                 ><v-col cols="12" sm="6"
                   ><v-select
                     v-model="taskForm.submissionType"
-                    :items="[
-                      { title: '文件 / 压缩包', value: 'files' },
-                      { title: '单文件代码评测', value: 'code' },
-                      { title: '完整工程 / 项目', value: 'project' },
-                    ]"
+                    :items="availableSubmissionTypes"
+                    :disabled="taskForm.category === 'problem'"
                     label="提交方式"
                     variant="outlined"
                 /></v-col>
@@ -1285,13 +1479,15 @@ onUnmounted(() => clearInterval(timeTicker));
                   ><v-text-field
                     v-model="taskForm.startsAt"
                     type="datetime-local"
-                    label="考试开始时间（选填）"
+                    :label="taskForm.category === 'exam' ? '考试发布开始时间 *' : '开放时间（选填）'"
+                    :required="taskForm.category === 'exam'"
                     variant="outlined" /></v-col
                 ><v-col cols="12" sm="6"
                   ><v-text-field
                     v-model="taskForm.dueAt"
                     type="datetime-local"
-                    label="截止时间（选填）"
+                    :label="taskForm.category === 'exam' ? '考试截止时间 *' : '截止时间（选填）'"
+                    :required="taskForm.category === 'exam'"
                     variant="outlined" /></v-col
                 ><v-col cols="12" sm="6"
                   ><v-text-field
@@ -1302,7 +1498,8 @@ onUnmounted(() => clearInterval(timeTicker));
                     label="满分"
                     variant="outlined"
                     required /></v-col></v-row
-              ><v-text-field
+              ><v-combobox v-if="taskForm.category === 'problem'" v-model="taskForm.tags" multiple chips closable-chips :items="problemTags" label="知识标签（输入后回车添加）" variant="outlined" />
+              <v-text-field
                 v-model="taskForm.resourcesUrl"
                 label="学习资料 / 外部测评链接（选填）"
                 type="url"
@@ -1314,28 +1511,30 @@ onUnmounted(() => clearInterval(timeTicker));
                 :disabled="saving"
                 @busy="uploadBusy = $event"
               /><JudgeFields
-                v-if="taskForm.submissionType === 'code'"
+                v-if="taskForm.submissionType === 'code' && !['机械', '运营'].includes(taskForm.direction)"
                 v-model="taskForm.judge"
               /><v-switch
                 v-model="taskForm.required"
                 color="primary"
-                label="设为必修任务"
+                label="设为必修作业"
+                v-if="taskForm.category === 'assignment'"
                 hide-details
               />
               <div class="submit-footer">
-                <span>任务发布后，对适用赛队与方向可见</span
+                <span>{{ taskForm.category === 'exam' ? '题目与附件将在开始时间自动开放' : '发布后，对团队内适用组别可见' }}</span
                 ><v-btn
                   color="primary"
                   :loading="saving"
                   :disabled="uploadBusy"
                   type="submit"
-                  >发布任务</v-btn
+                  >{{ editingTaskId ? '保存修改' : taskForm.category === 'exam' ? '安排考试' : taskForm.category === 'problem' ? '发布题目' : '发布作业' }}</v-btn
                 >
               </div></v-form
             ></v-card-text
           ></v-card
         ></v-dialog
       >
+      <v-dialog :model-value="Boolean(removingTask)" max-width="440" :persistent="saving" @update:model-value="!$event && (removingTask = null)"><v-card><v-card-title>删除这项内容？</v-card-title><v-card-text>“{{ removingTask?.title }}”将不再显示。已有提交或评测记录的内容无法删除。</v-card-text><v-card-actions><v-spacer /><v-btn :disabled="saving" @click="removingTask = null">取消</v-btn><v-btn color="error" :loading="saving" @click="removeTask">确认删除</v-btn></v-card-actions></v-card></v-dialog>
       <v-dialog
         :model-value="!!reviewTarget"
         max-width="580"
@@ -1432,6 +1631,323 @@ onUnmounted(() => clearInterval(timeTicker));
   gap: 14px;
   color: #687680;
   font-size: 14px;
+}
+.group-welcome,
+.group-shortcuts > .v-card,
+.group-home-panel,
+.problem-list,
+.problem-sidebar > .v-card {
+  border-radius: 6px !important;
+  box-shadow: 0 1px 4px #2437461a !important;
+}
+.group-welcome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 32px;
+  padding: 28px;
+  margin-bottom: 20px;
+  border-top: 3px solid #1976d2;
+}
+.group-welcome > div:first-child {
+  min-width: 0;
+}
+.welcome-caption {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1.4px;
+  color: #1976d2;
+  margin-bottom: 8px;
+}
+.group-welcome h2 {
+  font-size: 23px;
+  line-height: 1.5;
+  font-weight: 500;
+  color: #263238;
+}
+.group-welcome p {
+  font-size: 14px;
+  line-height: 1.8;
+  color: #687680;
+  margin-top: 8px;
+}
+.welcome-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 20px;
+}
+.welcome-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(72px, 1fr));
+  flex-shrink: 0;
+  min-width: 290px;
+  padding: 20px 0;
+}
+.welcome-stats > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+}
+.welcome-stats > div + div {
+  border-left: 1px solid #e8ecef;
+}
+.welcome-stats strong {
+  font-size: 29px;
+  line-height: 1.2;
+  font-weight: 500;
+  color: #1976d2;
+}
+.welcome-stats span {
+  color: #687680;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.group-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin-bottom: 20px;
+}
+.group-shortcuts:has(> :nth-child(4)) {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.group-shortcuts > .v-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 16px;
+  cursor: pointer;
+}
+.group-shortcuts > .v-card > .v-icon:first-child {
+  font-size: 27px;
+}
+.group-shortcuts > .v-card > div {
+  min-width: 0;
+  flex: 1;
+}
+.group-shortcuts h3 {
+  color: #37474f;
+  font-size: 16px;
+  line-height: 1.5;
+  font-weight: 500;
+}
+.group-shortcuts p {
+  color: #839099;
+  font-size: 12px;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+.group-shortcuts > .v-card > .v-icon:last-child {
+  font-size: 19px;
+}
+.group-home-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.group-home-panel {
+  min-width: 0;
+}
+.home-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 16px 20px;
+  border-bottom: 1px solid #edf0f2;
+}
+.home-panel-heading h2 {
+  font-size: 16px;
+  font-weight: 500;
+  color: #37474f;
+}
+.home-task-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 12px;
+  padding: 17px 20px;
+  text-align: left;
+  transition: background-color .15s;
+}
+.home-task-row + .home-task-row {
+  border-top: 1px solid #edf0f2;
+}
+.home-task-row:hover {
+  background: #f6f9fc;
+}
+.home-task-row > div {
+  flex: 1;
+  min-width: 0;
+}
+.home-task-row strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: #455a64;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.home-task-row > div > span {
+  display: block;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #839099;
+  margin-top: 4px;
+}
+.home-task-row > .v-chip {
+  flex-shrink: 0;
+}
+.home-empty {
+  font-size: 13px;
+  line-height: 1.8;
+  color: #839099;
+  padding: 26px 20px;
+}
+.problem-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 225px;
+  align-items: start;
+  gap: 20px;
+}
+.problem-list {
+  min-width: 0;
+}
+.problem-list-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 18px;
+  border-bottom: 1px solid #edf0f2;
+}
+.problem-list-tools > .v-select {
+  flex: 0 1 170px;
+  min-width: 0;
+}
+.problem-list-tools > span {
+  color: #839099;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.problem-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+.problem-table {
+  width: 100%;
+  min-width: 590px;
+  border-collapse: collapse;
+  text-align: left;
+}
+.problem-table th {
+  font-size: 12px;
+  font-weight: 500;
+  color: #687680;
+  background: #fafbfc;
+  padding: 13px 14px;
+  white-space: nowrap;
+}
+.problem-table td {
+  font-size: 12px;
+  color: #687680;
+  padding: 15px 14px;
+  border-top: 1px solid #edf0f2;
+}
+.problem-table th:first-child,
+.problem-table td:first-child {
+  width: 54px;
+  text-align: center;
+}
+.problem-table th:nth-child(4),
+.problem-table td:nth-child(4) {
+  white-space: nowrap;
+}
+.problem-table tbody tr:hover {
+  background: #f6f9fc;
+}
+.problem-title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 120px;
+  text-align: left;
+}
+.problem-title > span {
+  font-size: 10px;
+  color: #99a5ad;
+}
+.problem-title strong {
+  font-size: 14px;
+  line-height: 1.5;
+  font-weight: 500;
+  color: #1976d2;
+}
+.problem-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.problem-empty {
+  text-align: center;
+  padding: 48px 24px;
+}
+.problem-empty h2 {
+  font-size: 18px;
+  font-weight: 500;
+  color: #455a64;
+  margin: 14px 0 8px;
+}
+.problem-empty p,
+.problem-sidebar p {
+  font-size: 13px;
+  color: #839099;
+  line-height: 1.8;
+}
+.problem-sidebar {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+.problem-sidebar > .v-card {
+  padding: 20px 16px;
+}
+.problem-sidebar h3 {
+  font-size: 15px;
+  color: #455a64;
+  font-weight: 500;
+  margin-bottom: 18px;
+}
+.problem-sidebar p {
+  margin-bottom: 18px;
+}
+.exam-start {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #7e57c2;
+  margin: -6px 0 15px;
+}
+.task-management-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 20px;
+  margin-top: 24px;
+  border-top: 1px solid #e8ecef;
+}
+.task-management-actions > p {
+  flex-basis: 100%;
+  font-size: 12px;
+  line-height: 1.8;
+  color: #839099;
+  margin-top: 4px;
 }
 .learning-overview {
   border: 1px solid #e2e6e9;
@@ -1838,6 +2354,16 @@ onUnmounted(() => clearInterval(timeTicker));
   margin-top: 10px;
 }
 @media (max-width: 1350px) {
+  .group-shortcuts:has(> :nth-child(4)) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .group-welcome {
+    gap: 20px;
+    padding: 24px;
+  }
+  .welcome-stats {
+    min-width: 248px;
+  }
   .task-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1846,6 +2372,25 @@ onUnmounted(() => clearInterval(timeTicker));
   }
 }
 @media (max-width: 800px) {
+  .group-welcome {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .welcome-stats {
+    width: 100%;
+    padding: 18px 0 0;
+    border-top: 1px solid #e8ecef;
+  }
+  .group-shortcuts,
+  .group-home-grid {
+    grid-template-columns: 1fr;
+  }
+  .problem-layout {
+    grid-template-columns: 1fr;
+  }
+  .problem-sidebar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .overview-stats > div {
     padding: 0 14px;
     flex-direction: column;
@@ -1857,6 +2402,26 @@ onUnmounted(() => clearInterval(timeTicker));
   }
 }
 @media (max-width: 600px) {
+  .group-welcome {
+    padding: 20px;
+  }
+  .group-welcome h2 {
+    font-size: 21px;
+  }
+  .group-shortcuts,
+  .group-shortcuts:has(> :nth-child(4)),
+  .problem-sidebar {
+    grid-template-columns: 1fr;
+  }
+  .group-shortcuts,
+  .group-home-grid {
+    gap: 14px;
+  }
+  .home-task-row,
+  .home-panel-heading {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
   .page-heading {
     gap: 12px;
     align-items: flex-start;

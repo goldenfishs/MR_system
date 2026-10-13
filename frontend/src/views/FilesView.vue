@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { api } from "../lib/api";
+import { auth } from "../lib/auth";
 import {
   downloadUrl,
   fileSize,
@@ -8,6 +9,7 @@ import {
   type FileAsset,
 } from "../lib/platform";
 import FileUpload from "../components/FileUpload.vue";
+const props = defineProps<{ embedded?: boolean; personalOnly?: boolean }>();
 const files = ref<FileAsset[]>([]),
   uploaded = ref<string[]>([]),
   loading = ref(true),
@@ -29,6 +31,7 @@ const typeOf = (f: FileAsset) =>
 const filtered = computed(() =>
   files.value.filter(
     (f) =>
+      (!props.personalOnly || f.ownerId === auth.user?.id) &&
       (kind.value === "全部" || typeOf(f) === kind.value) &&
       f.name.toLowerCase().includes(search.value.toLowerCase()),
   ),
@@ -51,10 +54,10 @@ function uploadedFiles(ids: string[]) {
 onMounted(load);
 </script>
 <template>
-  <div class="page-content">
-    <h1 class="page-title">文件中心</h1>
+  <div :class="props.embedded ? 'embedded-files' : 'page-content'">
+    <h1 class="page-title">我的附件</h1>
     <p class="page-subtitle">
-      统一保存简历、设计文件、代码、图片和工程压缩包，可在报名与作业中重复选择。
+      保存简历、设计文件、代码、图片和工程压缩包，可在报名与作业中重复选择。
     </p>
     <v-card class="pa-5 mb-5"
       ><FileUpload
@@ -106,6 +109,7 @@ onMounted(load);
   </div>
 </template>
 <style scoped>
+.embedded-files .page-title { font-size:22px; }
 .file-filters {
   display: flex;
   gap: 14px;

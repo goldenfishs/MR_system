@@ -84,7 +84,7 @@ func (a *App) requireTaskSubmission(t Task, u User) error {
 		if err != nil {
 			return err
 		}
-		if t.Team != "" && t.Team != u.Team || t.Direction != "" && t.Direction != u.Direction {
+		if t.Team != "" && !sameCompetition(t.Team, u.Team) || t.Direction != "" && t.Direction != u.Direction {
 			return fail(403, "该任务不属于你的赛队或技术方向")
 		}
 	} else {
@@ -108,6 +108,28 @@ func (a *App) requireTaskSubmission(t Task, u User) error {
 	return nil
 }
 func (a *App) validateTaskPlatform(t *Task, u User) error {
+	normalizeTask(t)
+	if (t.Direction == "机械" || t.Direction == "运营") && (t.Kind == "code" || t.SubmissionType == "code" || t.Judge != nil) {
+		return fail(400, "机械和运营组使用文字或文件作业，不启用代码题与编程测评")
+	}
+	if t.Category != "assignment" && t.Category != "exam" && t.Category != "problem" {
+		return fail(400, "无效的内容分类")
+	}
+	if t.Category == "exam" && (t.StartsAt == "" || t.DueAt == "") {
+		return fail(400, "考试必须设置发布开始时间和截止时间")
+	}
+	if t.Category == "problem" && (t.Direction != "电控" && t.Direction != "视觉算法" && t.Direction != "硬件" || t.Kind != "code" || t.Judge == nil) {
+		return fail(400, "题库仅支持电控、视觉算法和硬件组的在线编程题，请配置测试用例")
+	}
+	if len(t.Tags) > 10 {
+		return fail(400, "最多设置 10 个题目标签")
+	}
+	for _, tag := range t.Tags {
+		if tag == "" || len(tag) > 60 {
+			return fail(400, "题目标签不能为空或超过 60 字节")
+		}
+	}
+
 	if t.TeamID != "" {
 		var found string
 		if err := a.store.row("SELECT id FROM teams WHERE id=?", t.TeamID).Scan(&found); errors.Is(err, sql.ErrNoRows) {
@@ -184,7 +206,7 @@ func (a *App) taskFileAccess(u User, fileID string) (bool, error) {
 		return false, err
 	}
 	for _, t := range tasks {
-		if includesID(t.FileIDs, fileID) {
+		if includesID(t.FileIDs, fileID) && !taskLocked(t, u) {
 			visible, err := a.taskVisibleTo(t, u)
 			if err != nil || visible {
 				return visible, err

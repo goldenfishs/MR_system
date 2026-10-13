@@ -60,7 +60,7 @@ func TestSMTPEnvironmentConfiguration(t *testing.T) {
 	t.Setenv("SMTP_HOST", "smtp.example.com")
 	t.Setenv("SMTP_FROM", "sender@example.com")
 	mailer, cfg, err := smtpMailerFromEnv(false)
-	if err != nil || mailer == nil || cfg.Port != 587 || cfg.Security != "starttls" || cfg.FromName != "竞跃" {
+	if err != nil || mailer == nil || cfg.Port != 587 || cfg.Security != "starttls" || cfg.FromName != "QUT机器人战队" {
 		t.Fatal("incorrect SMTP defaults")
 	}
 	t.Setenv("SMTP_PORT", "invalid")

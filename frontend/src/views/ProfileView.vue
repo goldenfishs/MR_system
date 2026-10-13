@@ -9,6 +9,9 @@ import {
   type PhotoInput,
 } from "../lib/platform";
 import ProfileFields from "../components/ProfileFields.vue";
+import RecordsView from "./RecordsView.vue";
+import FilesView from "./FilesView.vue";
+const activeTab = ref("profile");
 const form = ref(blankProfile()),
   photo = ref<PhotoInput | null>(null),
   profile = ref<Profile | null>(null),
@@ -38,6 +41,7 @@ async function load() {
   }
 }
 async function save() {
+  if (saving.value || loading.value || !profile.value) return;
   error.value = profileError(
     form.value,
     Boolean(photo.value || profile.value?.photoFileId),
@@ -65,10 +69,14 @@ onMounted(load);
 </script>
 <template>
   <div class="page-content profile-page">
-    <h1 class="page-title">个人资料</h1>
+    <h1 class="page-title">个人中心</h1>
     <p class="page-subtitle">
-      一次完善基本信息，报名与个人档案自动关联到你的账号。
+      管理基本资料、报名身份与个人档案，所有记录都关联到你的账号。
     </p>
+    <v-tabs v-model="activeTab" color="primary" class="profile-tabs" show-arrows aria-label="个人中心分类"><v-tab value="profile" prepend-icon="mdi-account-outline">个人资料</v-tab><v-tab value="records" prepend-icon="mdi-card-account-details-outline">个人档案</v-tab><v-tab value="files" prepend-icon="mdi-folder-outline">我的附件</v-tab></v-tabs>
+    <RecordsView v-if="activeTab === 'records'" personal-only embedded />
+    <FilesView v-else-if="activeTab === 'files'" personal-only embedded />
+    <template v-else>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4"
       >{{ error
       }}<v-btn v-if="!profile" variant="text" @click="load"
@@ -101,9 +109,11 @@ onMounted(load);
         </div>
       </form></v-card
     >
+    </template>
   </div>
 </template>
 <style scoped>
+.profile-tabs { margin-bottom:24px; border-bottom:1px solid #e5e7eb; }
 .profile-page {
   max-width: 900px;
 }

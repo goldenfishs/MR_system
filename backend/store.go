@@ -82,6 +82,10 @@ func openStore(databaseURL, dataDir string) (*Store, error) {
 		`CREATE TABLE IF NOT EXISTS judge_runs(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, user_id TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS judge_runs_owner ON judge_runs(user_id,task_id)`,
 		`INSERT INTO schema_migrations(version,applied_at) VALUES (3, CURRENT_TIMESTAMP) ON CONFLICT(version) DO NOTHING`,
+		`CREATE TABLE IF NOT EXISTS knowledge_resources (id TEXT PRIMARY KEY, payload TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS discussions (id TEXT PRIMARY KEY, created_by TEXT NOT NULL REFERENCES users(id), payload TEXT NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS discussions_author ON discussions(created_by)`,
+		`INSERT INTO schema_migrations(version,applied_at) VALUES (4, CURRENT_TIMESTAMP) ON CONFLICT(version) DO NOTHING`,
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -178,7 +182,11 @@ func (s *Store) saveSettings(v Settings) error {
 	return s.exec(`INSERT INTO settings(id,payload) VALUES('default',?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload`, encoded(v))
 }
 func (s *Store) settings() (Settings, error) {
-	return readOne[Settings](s, "SELECT payload FROM settings WHERE id='default'")
+	v, err := readOne[Settings](s, "SELECT payload FROM settings WHERE id='default'")
+	if err == nil && v.BrandName == "" {
+		defaultBrand(&v)
+	}
+	return v, err
 }
 func (s *Store) user(id string) (User, error) {
 	return readOne[User](s, "SELECT payload FROM users WHERE id=?", id)

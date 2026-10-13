@@ -74,9 +74,9 @@ const directionFilter = computed({
 });
 const teamFilter = computed(() =>
   typeof route.query.team === "string" &&
-  ["RoboMaster", "ROBOCON"].includes(route.query.team)
+  ["RoboMaster", "ROBOCON", "RoboCon"].includes(route.query.team)
     ? route.query.team
-    : "全部赛队",
+    : "全部赛事",
 );
 function clearFilters() {
   search.value = "";
@@ -117,7 +117,7 @@ const filtered = computed(() =>
   items.value.filter(
     (a) =>
       (statusFilter.value === "all" || a.status === statusFilter.value) &&
-      (teamFilter.value === "全部赛队" || a.team === teamFilter.value) &&
+      (teamFilter.value === "全部赛事" || (a.team === "ROBOCON" ? "RoboCon" : a.team) === (teamFilter.value === "ROBOCON" ? "RoboCon" : teamFilter.value)) &&
       (directionFilter.value === "全部方向" ||
         a.direction === directionFilter.value) &&
       `${a.name} ${a.email} ${a.university} ${a.major}`
@@ -129,7 +129,7 @@ const filtered = computed(() =>
 // list status and search, so the chart scope stays explicit and consistent.
 const chartItems = computed(() =>
   items.value.filter(
-    (a) => teamFilter.value === "全部赛队" || a.team === teamFilter.value,
+    (a) => teamFilter.value === "全部赛事" || (a.team === "ROBOCON" ? "RoboCon" : a.team) === (teamFilter.value === "ROBOCON" ? "RoboCon" : teamFilter.value),
   ),
 );
 const chartScope = computed(() => `${teamFilter.value} · 全部状态与方向`);
@@ -416,18 +416,25 @@ onMounted(load);
         <p>
           {{
             isStudent
-              ? "填写报名资料，查看面试安排与选拔结果。"
-              : `${settings?.season || "新赛季"} · 候选人资料与面试管理`
+              ? "查看历史报名资料、面试安排与选拔结果。"
+              : `${settings?.season || "新赛季"} · 历史候选人资料与面试管理`
           }}
         </p>
       </div>
       <v-btn
-        v-if="isStudent && canApply"
+        v-if="isStudent && canApply && own"
         color="primary"
         prepend-icon="mdi-pencil-outline"
         size="large"
         @click="openForm"
-        >{{ own ? "编辑报名资料" : "开始报名" }}</v-btn
+        >编辑历史报名资料</v-btn
+      >
+      <v-btn
+        v-else-if="isStudent"
+        color="primary"
+        prepend-icon="mdi-account-multiple-plus-outline"
+        to="/teams"
+        >前往团队报名</v-btn
       >
       <v-btn
         v-else
@@ -477,7 +484,7 @@ onMounted(load);
         <div class="application-banner">
           <div>
             <span class="application-meta"
-              >{{ own.team }} · {{ own.direction }}</span
+              >{{ own.team === "ROBOCON" ? "RoboCon" : own.team }} · {{ own.direction }}</span
             >
             <h2>
               {{ own.name }}，{{
@@ -585,10 +592,9 @@ onMounted(load);
         </div>
         <h2>机器人之旅，从一次报名开始</h2>
         <p>
-          选择喜欢的赛队与方向，介绍你的经历和想做的事情。<br />无需完美的履历，我们也期待认真学习的新伙伴。
+          此处保留原有面试资料。<br />当前招募请前往团队报名并提交 PDF 简历。
         </p>
-        <v-btn v-if="canApply" color="primary" size="large" @click="openForm"
-          >填写报名表</v-btn
+        <v-btn color="primary" size="large" to="/teams">前往团队报名</v-btn
         ><span v-if="settings?.applicationDeadline" class="deadline"
           >报名截止 {{ formatDate(settings.applicationDeadline) }}</span
         ></v-card
@@ -630,17 +636,17 @@ onMounted(load);
             />
           </div>
           <div
-            v-if="statusFilter !== 'all' || teamFilter !== '全部赛队'"
+            v-if="statusFilter !== 'all' || teamFilter !== '全部赛事'"
             class="active-filters"
           >
             <v-chip
-              v-if="teamFilter !== '全部赛队'"
+              v-if="teamFilter !== '全部赛事'"
               size="small"
               closable
               color="primary"
               variant="outlined"
               @click:close="clearQueryFilter('team')"
-              >{{ teamFilter }}</v-chip
+              >{{ teamFilter === "ROBOCON" ? "RoboCon" : teamFilter }}</v-chip
             >
             <v-chip
               v-if="statusFilter !== 'all'"
@@ -673,7 +679,7 @@ onMounted(load);
                     }}</span></span
                   >
                   <span class="candidate-school"
-                    >{{ a.university }} · {{ a.major }} · {{ a.team }}</span
+                    >{{ a.university }} · {{ a.major }} · {{ a.team === "ROBOCON" ? "RoboCon" : a.team }}</span
                   >
                 </span>
               </button>
@@ -900,13 +906,13 @@ onMounted(load);
                   hide-details="auto"
                   aria-required="true" /></v-col
             ></v-row>
-            <h3 class="form-section-title">意向赛队与方向</h3>
+            <h3 class="form-section-title">意向赛事与方向（历史流程）</h3>
             <v-row
               ><v-col cols="12" sm="4"
                 ><v-select
                   v-model="form.team"
-                  :items="['RoboMaster', 'ROBOCON']"
-                  label="意向赛队"
+                  :items="[{ title: 'RoboMaster', value: 'RoboMaster' }, { title: 'RoboCon', value: 'ROBOCON' }]"
+                  label="意向赛事"
                   variant="outlined"
                   hide-details="auto" /></v-col
               ><v-col cols="12" sm="4"
@@ -995,7 +1001,7 @@ onMounted(load);
               >
             </h2>
             <p>
-              {{ selected.team }} · {{ selected.direction }} ·
+              {{ selected.team === "ROBOCON" ? "RoboCon" : selected.team }} · {{ selected.direction }} ·
               {{ selected.university }}
             </p>
           </div>
@@ -1163,7 +1169,7 @@ onMounted(load);
         ><v-card-text
           >{{ selected?.name }} 将看到更新后的选拔结果。{{
             decision === "accepted"
-              ? "录取后即可参与对应赛队和方向的学习任务。"
+              ? "录取后即可参与对应赛事和方向的学习任务。"
               : "请确认已经完成必要的评价与讨论。"
           }}</v-card-text
         ><v-card-actions

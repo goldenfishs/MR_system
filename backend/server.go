@@ -90,7 +90,7 @@ func decode(r *http.Request, v any) error {
 }
 func isStaff(u User) bool     { return u.Role != "student" }
 func canManage(u User) bool   { return u.Role == "admin" || u.Role == "mentor" }
-func validTeam(t string) bool { return t == "RoboMaster" || t == "ROBOCON" }
+func validTeam(t string) bool { return t == "RoboMaster" || t == "ROBOCON" || t == "RoboCon" }
 func validDirection(d string) bool {
 	return d == "机械" || d == "电控" || d == "视觉算法" || d == "硬件" || d == "运营"
 }
@@ -155,7 +155,7 @@ func (a *App) wrapWithMutationLock(auth, mutationLock bool, handler func(http.Re
 			limit := int64(1 << 20)
 			if r.URL.Path == "/api/files" {
 				limit = 26 << 20
-			} else if r.URL.Path == "/api/auth/register" || r.URL.Path == "/api/profile" {
+			} else if r.URL.Path == "/api/auth/register" || r.URL.Path == "/api/profile" || r.URL.Path == "/api/settings/logo" {
 				limit = 4 << 20
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, limit)
@@ -208,6 +208,8 @@ func (a *App) Handler() http.Handler {
 		return nil
 	}))
 	m.HandleFunc("GET /api/public/config", a.wrap(false, a.publicConfig))
+	m.HandleFunc("GET /api/public/logo/{id}", a.wrap(false, a.publicBrandLogo))
+	m.HandleFunc("POST /api/settings/logo", a.wrap(true, a.uploadBrandLogo))
 	m.HandleFunc("POST /api/auth/login", a.wrap(false, a.login))
 	m.HandleFunc("POST /api/auth/register", a.wrap(false, a.register))
 	m.HandleFunc("POST /api/auth/send-verification-code", a.wrapWithMutationLock(false, false, a.sendVerificationCode))
@@ -232,6 +234,7 @@ func (a *App) Handler() http.Handler {
 	m.HandleFunc("PATCH /api/settings", a.wrap(true, a.updateSettings))
 	a.registerPlatformRoutes(m)
 	a.registerTaskPlatformRoutes(m)
+	a.registerLearningRoutes(m)
 	m.HandleFunc("GET /api/workspace-summary", a.wrap(true, a.workspaceSummary))
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, 404, map[string]string{"error": "接口不存在"})
@@ -400,7 +403,7 @@ func (a *App) publicConfig(w http.ResponseWriter, r *http.Request, _ User) error
 	if err != nil {
 		return err
 	}
-	respond(w, 200, map[string]any{"organization": s.Organization, "season": s.Season, "demoMode": a.config.Demo, "applicationOpen": s.ApplicationOpen, "applicationDeadline": s.ApplicationDeadline, "emailVerificationRequired": true, "registrationEnabled": a.config.Mailer != nil})
+	respond(w, 200, map[string]any{"organization": s.Organization, "season": s.Season, "demoMode": a.config.Demo, "applicationOpen": s.ApplicationOpen, "applicationDeadline": s.ApplicationDeadline, "emailVerificationRequired": true, "registrationEnabled": a.config.Mailer != nil, "brandName": s.BrandName, "logoUrl": s.LogoURL, "teamName": s.TeamName, "secondaryTeamName": s.SecondaryTeamName, "competitions": s.Competitions})
 	return nil
 }
 func (a *App) activity(u User, action, target string) {
@@ -631,10 +634,11 @@ func (a *App) members(w http.ResponseWriter, r *http.Request, u User) error {
 		return err
 	}
 	type memberTeam struct {
-		ID          string `json:"id"`
-		Name        string `json:"name"`
-		Competition string `json:"competition"`
-		Direction   string `json:"direction"`
+		ID           string   `json:"id"`
+		Name         string   `json:"name"`
+		Competition  string   `json:"competition"`
+		Competitions []string `json:"competitions"`
+		Direction    string   `json:"direction"`
 	}
 	type memberEntry struct {
 		User
@@ -650,7 +654,8 @@ func (a *App) members(w http.ResponseWriter, r *http.Request, u User) error {
 		for _, membership := range memberships {
 			if membership.UserID == member.ID {
 				team := teamMap[membership.TeamID]
-				entry.Teams = append(entry.Teams, memberTeam{team.ID, team.Name, team.Competition, membership.Direction})
+				normalizeTeam(&team)
+				entry.Teams = append(entry.Teams, memberTeam{team.ID, team.Name, team.Competition, team.Competitions, membership.Direction})
 			}
 		}
 		result = append(result, entry)
@@ -675,12 +680,17 @@ func (a *App) updateSettings(w http.ResponseWriter, r *http.Request, u User) err
 		return err
 	}
 	var in struct {
-		Organization        *string `json:"organization"`
-		Season              *string `json:"season"`
-		ApplicationOpen     *bool   `json:"applicationOpen"`
-		ApplicationDeadline *string `json:"applicationDeadline"`
-		HydroURL            *string `json:"hydroUrl"`
-		Announcement        *string `json:"announcement"`
+		Organization        *string   `json:"organization"`
+		BrandName           *string   `json:"brandName"`
+		LogoURL             *string   `json:"logoUrl"`
+		TeamName            *string   `json:"teamName"`
+		SecondaryTeamName   *string   `json:"secondaryTeamName"`
+		Competitions        *[]string `json:"competitions"`
+		Season              *string   `json:"season"`
+		ApplicationOpen     *bool     `json:"applicationOpen"`
+		ApplicationDeadline *string   `json:"applicationDeadline"`
+		HydroURL            *string   `json:"hydroUrl"`
+		Announcement        *string   `json:"announcement"`
 	}
 	if err = decode(r, &in); err != nil {
 		return err
@@ -703,6 +713,27 @@ func (a *App) updateSettings(w http.ResponseWriter, r *http.Request, u User) err
 	if in.Announcement != nil {
 		s.Announcement = *in.Announcement
 	}
+	if in.BrandName != nil {
+		s.BrandName = strings.TrimSpace(*in.BrandName)
+	}
+	if in.LogoURL != nil {
+		if strings.HasPrefix(strings.TrimSpace(*in.LogoURL), "/api/public/logo/") && strings.TrimSpace(*in.LogoURL) != s.LogoURL {
+			return fail(400, "请通过标志上传入口设置本站品牌图片")
+		}
+		s.LogoURL = strings.TrimSpace(*in.LogoURL)
+	}
+	if in.TeamName != nil {
+		s.TeamName = strings.TrimSpace(*in.TeamName)
+	}
+	if in.SecondaryTeamName != nil {
+		s.SecondaryTeamName = strings.TrimSpace(*in.SecondaryTeamName)
+	}
+	if in.Competitions != nil {
+		s.Competitions = normalizeCompetitions(*in.Competitions)
+	}
+	if err := validateBrand(s); err != nil {
+		return err
+	}
 	if s.Organization == "" || len(s.Organization) > 150 || s.Season == "" || len(s.Season) > 80 || !validDate(s.ApplicationDeadline) || !validURL(s.HydroURL) || len(s.Announcement) > 10000 {
 		return fail(400, "设置内容不合法，请检查名称、日期和链接")
 	}
@@ -717,7 +748,7 @@ func taskVisible(t Task, u User) bool {
 	if isStaff(u) {
 		return true
 	}
-	return (t.Team == "" || u.Team == "" || t.Team == u.Team) && (t.Direction == "" || u.Direction == "" || t.Direction == u.Direction)
+	return (t.Team == "" || u.Team == "" || sameCompetition(t.Team, u.Team)) && (t.Direction == "" || u.Direction == "" || t.Direction == u.Direction)
 }
 func (a *App) tasksFor(u User) ([]Task, error) {
 	tasks, err := readAll[Task](a.store, "SELECT payload FROM tasks")
@@ -728,8 +759,27 @@ func (a *App) tasksFor(u User) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	runs, err := readAll[JudgeRun](a.store, "SELECT payload FROM judge_runs")
+	if err != nil {
+		return nil, err
+	}
 	result := []Task{}
 	for _, t := range tasks {
+		normalizeTask(&t)
+		t.SubmissionCount, t.AttemptCount, t.AcceptedCount = 0, 0, 0
+		t.MySubmission = nil
+		t.MyAccepted = false
+		for _, run := range runs {
+			if run.TaskID == t.ID && run.Status == "completed" {
+				t.AttemptCount++
+				if run.Total > 0 && run.Passed == run.Total {
+					t.AcceptedCount++
+					if run.UserID == u.ID {
+						t.MyAccepted = true
+					}
+				}
+			}
+		}
 		visible, visibilityErr := a.taskVisibleTo(t, u)
 		if visibilityErr != nil {
 			return nil, visibilityErr
@@ -763,7 +813,24 @@ func (a *App) listTasks(w http.ResponseWriter, r *http.Request, u User) error {
 	if err != nil {
 		return err
 	}
-	respond(w, 200, map[string]any{"items": items})
+	filtered := []Task{}
+	query := r.URL.Query()
+	for _, t := range items {
+		if category := query.Get("category"); category != "" && t.Category != category {
+			continue
+		}
+		if direction := query.Get("direction"); direction != "" && t.Direction != "" && t.Direction != direction {
+			continue
+		}
+		if tag := query.Get("tag"); tag != "" && !includesID(t.Tags, tag) {
+			continue
+		}
+		if search := strings.ToLower(strings.TrimSpace(query.Get("search"))); search != "" && !strings.Contains(strings.ToLower(t.Title+" "+t.Description+" "+strings.Join(t.Tags, " ")), search) {
+			continue
+		}
+		filtered = append(filtered, t)
+	}
+	respond(w, 200, map[string]any{"items": filtered})
 	return nil
 }
 func (a *App) createTask(w http.ResponseWriter, r *http.Request, u User) error {
@@ -796,7 +863,8 @@ func (a *App) createTask(w http.ResponseWriter, r *http.Request, u User) error {
 	t.CreatedBy = u.ID
 	t.CreatedAt = now()
 	t.MySubmission = nil
-	t.SubmissionCount = 0
+	t.SubmissionCount, t.AcceptedCount, t.AttemptCount = 0, 0, 0
+	t.Locked, t.MyAccepted = false, false
 	if err := a.store.exec("INSERT INTO tasks(id,payload) VALUES(?,?)", t.ID, encoded(t)); err != nil {
 		return err
 	}

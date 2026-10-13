@@ -40,10 +40,13 @@ func initialize(s *Store, demo bool) error {
 		if demo {
 			deadline = time.Now().UTC().AddDate(0, 0, 30).Format(time.RFC3339)
 		}
-		if err = s.saveSettings(Settings{Organization: "机器人战队协作平台", Season: strconv.Itoa(time.Now().Year()+1) + " 赛季", ApplicationOpen: demo, ApplicationDeadline: deadline, Announcement: "欢迎来到战队工作台。在这里，一起把想法变成会动的机器人。"}); err != nil {
+		if err = s.saveSettings(Settings{BrandName: "QUT机器人战队", LogoURL: "/mark.svg", TeamName: "沧溟", SecondaryTeamName: "MOVE", Competitions: []string{"RoboCon", "RoboMaster"}, Organization: "青岛理工大学机器人战队", Season: strconv.Itoa(time.Now().Year()+1) + " 赛季", ApplicationOpen: demo, ApplicationDeadline: deadline, Announcement: "欢迎来到战队工作台。在这里，一起把想法变成会动的机器人。"}); err != nil {
 			return err
 		}
 	} else if err != nil {
+		return err
+	}
+	if err = migrateBranding(s); err != nil {
 		return err
 	}
 	if demo {
@@ -98,7 +101,7 @@ func seedDemo(s *Store) error {
 	if err != nil {
 		return err
 	}
-	interviewer, err := createUser(s, "周予安", "interviewer@demo.local", "DemoInterview!2026", "interviewer", "ROBOCON", "机械")
+	interviewer, err := createUser(s, "周予安", "interviewer@demo.local", "DemoInterview!2026", "interviewer", "RoboCon", "机械")
 	if err != nil {
 		return err
 	}
@@ -113,7 +116,7 @@ func seedDemo(s *Store) error {
 	for i, name := range names {
 		team := "RoboMaster"
 		if i%3 == 0 {
-			team = "ROBOCON"
+			team = "RoboCon"
 		}
 		dir := ""
 		userTeam := ""
@@ -133,7 +136,7 @@ func seedDemo(s *Store) error {
 			dir = dirs[i-1]
 			state = states[i-1]
 			if (i-1)%3 == 0 {
-				team = "ROBOCON"
+				team = "RoboCon"
 			}
 		}
 		created := time.Now().UTC().AddDate(0, 0, -12+i).Format(time.RFC3339)
@@ -158,7 +161,7 @@ func seedDemo(s *Store) error {
 	}{
 		{"从零驱动第一颗电机", "理解 PWM、编码器反馈与闭环控制。完成电机速度闭环，提交代码仓库、阶跃响应曲线和 2 分钟演示视频。\n\n验收标准：能解释 PID 参数作用；达到目标转速并稳定保持；具备断连保护。", "电控", "RoboMaster", "hardware", "入门", 5, true},
 		{"C / C++ 基础与串口协议解析", "完成环形缓冲区与定长帧解析，实现校验、异常帧丢弃和测试用例。提交仓库链接与思路说明。可在系统设置关联的 Hydro 中完成配套编程练习。", "电控", "", "code", "入门", 9, true},
-		{"抓取机构方案设计", "根据任务约束设计一套稳定抓取机构。提交 CAD 链接、关键零件工程图、驱动选型依据与风险分析。", "机械", "ROBOCON", "document", "进阶", 12, true},
+		{"抓取机构方案设计", "根据任务约束设计一套稳定抓取机构。提交 CAD 链接、关键零件工程图、驱动选型依据与风险分析。", "机械", "RoboCon", "document", "进阶", 12, true},
 		{"相机标定与坐标变换", "拍摄标定板并完成相机内参标定，分析重投影误差，说明相机、机器人与场地坐标系之间的关系。", "视觉算法", "", "code", "进阶", 7, true},
 		{"认识你的赛季：规则阅读笔记", "阅读本队当前赛季的正式规则，记录规则版本、原文出处、关键约束和三个不确定的问题。此任务由导师人工审核，不自动判题。", "", "", "quiz", "入门", 3, true},
 		{"电源保护与线束检查清单", "梳理供电链路、保险与保护方案，制作可复用的上电检查清单。提交原理说明与实际检查记录。", "硬件", "", "hardware", "进阶", 14, false},
@@ -191,7 +194,7 @@ func seedDemo(s *Store) error {
 	activities := []struct {
 		u              User
 		action, target string
-	}{{student, "提交任务成果", "C / C++ 基础与串口协议解析"}, {mentor, "审核任务成果", "从零驱动第一颗电机 · 许星禾"}, {admin, "完成录取确认", "新成员已加入电控方向"}, {interviewer, "安排面试", "ROBOCON · 机械方向"}, {mentor, "发布培养任务", "认识你的赛季：规则阅读笔记"}}
+	}{{student, "提交任务成果", "C / C++ 基础与串口协议解析"}, {mentor, "审核任务成果", "从零驱动第一颗电机 · 许星禾"}, {admin, "完成录取确认", "新成员已加入电控方向"}, {interviewer, "安排面试", "RoboCon · 机械方向"}, {mentor, "发布培养任务", "认识你的赛季：规则阅读笔记"}}
 	for i, x := range activities {
 		v := Activity{ID: randomID(), Actor: x.u.Name, Action: x.action, Target: x.target, CreatedAt: time.Now().UTC().Add(time.Duration(-i-1) * time.Hour).Format(time.RFC3339)}
 		if err = s.exec("INSERT INTO activities(id,user_id,created_at,payload) VALUES(?,?,?,?)", v.ID, x.u.ID, v.CreatedAt, encoded(v)); err != nil {

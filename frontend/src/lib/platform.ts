@@ -32,6 +32,7 @@ export interface TeamSpace {
   name: string;
   description: string;
   competition: string;
+  competitions?: string[];
   directions: string[];
   status: "open" | "closed";
   deadline: string;

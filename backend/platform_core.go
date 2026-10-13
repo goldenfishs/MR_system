@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -70,6 +71,7 @@ type Team struct {
 	Name          string           `json:"name"`
 	Description   string           `json:"description"`
 	Competition   string           `json:"competition"`
+	Competitions  []string         `json:"competitions"`
 	Directions    []string         `json:"directions"`
 	Status        string           `json:"status"`
 	Deadline      string           `json:"deadline"`
@@ -337,7 +339,7 @@ func (a *App) fileAsset(id string) (FileAsset, error) {
 	f.FileAsset.CleanImage = f.CleanImage
 	return f.FileAsset, err
 }
-func (a *App) openAsset(id string) (io.ReadCloser, FileAsset, error) {
+func (a *App) openAsset(id string) (*os.File, FileAsset, error) {
 	f, err := a.fileAsset(id)
 	if err != nil {
 		return nil, f, err
@@ -387,7 +389,11 @@ func (a *App) canDownloadFile(u User, id string) (bool, error) {
 	if grants > 0 {
 		return true, nil
 	}
-	return a.taskFileAccess(u, id)
+	allowed, err := a.taskFileAccess(u, id)
+	if err != nil || allowed {
+		return allowed, err
+	}
+	return a.knowledgeFileAccess(id)
 }
 func validAssetName(name string) bool {
 	if len(name) == 0 || len(name) > 240 || strings.ContainsAny(name, "/\\") {
@@ -402,7 +408,7 @@ func validAssetName(name string) bool {
 }
 func allowedExtension(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
-	return slices.Contains([]string{".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".md", ".zip", ".7z", ".rar", ".c", ".cpp", ".cc", ".cxx", ".cs", ".rb", ".php", ".kt", ".swift", ".lua", ".pas", ".hs", ".scala", ".m", ".ml", ".pl", ".sh", ".h", ".hpp", ".py", ".js", ".ts", ".java", ".go", ".rs", ".json", ".yaml", ".yml", ".png", ".jpg", ".jpeg", ".webp", ".svg", ".pcb", ".kicad_pcb", ".sch", ".kicad_sch", ".gerber", ".gbr", ".dxf", ".step", ".stp", ".sldprt", ".sldasm", ".ino", ".hex", ".bin", ".stl", ".f3d", ".pro", ".ioc", ".ipynb", ".csv", ".toml", ".cmake", ".epro", ".eprj"}, ext)
+	return slices.Contains([]string{".pdf", ".mp4", ".webm", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".md", ".zip", ".7z", ".rar", ".c", ".cpp", ".cc", ".cxx", ".cs", ".rb", ".php", ".kt", ".swift", ".lua", ".pas", ".hs", ".scala", ".m", ".ml", ".pl", ".sh", ".h", ".hpp", ".py", ".js", ".ts", ".java", ".go", ".rs", ".json", ".yaml", ".yml", ".png", ".jpg", ".jpeg", ".webp", ".svg", ".pcb", ".kicad_pcb", ".sch", ".kicad_sch", ".gerber", ".gbr", ".dxf", ".step", ".stp", ".sldprt", ".sldasm", ".ino", ".hex", ".bin", ".stl", ".f3d", ".pro", ".ioc", ".ipynb", ".csv", ".toml", ".cmake", ".epro", ".eprj"}, ext)
 }
 func (a *App) uploadFile(w http.ResponseWriter, r *http.Request, u User) error {
 	if err := r.ParseMultipartForm(1 << 20); err != nil {
@@ -441,6 +447,13 @@ func (a *App) uploadFile(w http.ResponseWriter, r *http.Request, u User) error {
 			return fail(400, "PDF 文件格式无效")
 		}
 		mimeType = "application/pdf"
+	}
+	if ext == ".mp4" || ext == ".webm" {
+		detected := http.DetectContentType(data)
+		if ext == ".mp4" && detected != "video/mp4" || ext == ".webm" && detected != "video/webm" {
+			return fail(400, "视频文件格式无效，请使用 MP4 或 WebM")
+		}
+		mimeType = detected
 	}
 	if ext == ".jpg" || ext == ".jpeg" || ext == ".png" {
 		data, mimeType, err = sanitizeImage(data)
@@ -489,17 +502,25 @@ func (a *App) serveFile(w http.ResponseWriter, r *http.Request, u User, preview 
 	defer file.Close()
 	disposition := "attachment"
 	if preview {
-		if !f.CleanImage || (f.MIME != "image/jpeg" && f.MIME != "image/png") {
+		if !(f.CleanImage && (f.MIME == "image/jpeg" || f.MIME == "image/png")) && f.MIME != "application/pdf" && f.MIME != "video/mp4" && f.MIME != "video/webm" {
 			return fail(400, "该文件不支持在线预览")
 		}
 		disposition = "inline"
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 	}
 	w.Header().Set("Content-Type", f.MIME)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": f.Name}))
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
-	_, err = io.Copy(w, file)
-	return err
+	if preview && f.MIME == "application/pdf" {
+		// Chromium renders PDFs through its built-in viewer, which cannot run under CSP sandbox.
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'self'")
+	} else if preview {
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'self'; sandbox")
+	} else {
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	}
+	http.ServeContent(w, r, f.Name, time.Time{}, file)
+	return nil
 }
 func (a *App) downloadFile(w http.ResponseWriter, r *http.Request, u User) error {
 	return a.serveFile(w, r, u, false)
@@ -509,7 +530,7 @@ func (a *App) previewFile(w http.ResponseWriter, r *http.Request, u User) error 
 }
 
 func validateTeam(t Team) error {
-	if strings.TrimSpace(t.Name) == "" || len(t.Name) > 200 || len(t.Description) > 10000 || !validTeam(t.Competition) || (t.Status != "open" && t.Status != "closed") || !validDate(t.Deadline) || len(t.Directions) == 0 || len(t.Directions) > 5 {
+	if strings.TrimSpace(t.Name) == "" || len(t.Name) > 200 || len(t.Description) > 10000 || !validCompetitions(t.Competitions) || (t.Status != "open" && t.Status != "closed") || !validDate(t.Deadline) || len(t.Directions) == 0 || len(t.Directions) > 5 {
 		return fail(400, "请填写有效团队名称、赛事、开放状态、截止时间与技术方向")
 	}
 	seen := map[string]bool{}
@@ -527,6 +548,7 @@ func (a *App) listTeams(w http.ResponseWriter, r *http.Request, u User) error {
 		return err
 	}
 	for i := range teams {
+		normalizeTeam(&teams[i])
 		if err = a.store.row("SELECT COUNT(*) FROM team_memberships WHERE team_id=?", teams[i].ID).Scan(&teams[i].MemberCount); err != nil {
 			return err
 		}
@@ -542,12 +564,13 @@ func (a *App) listTeams(w http.ResponseWriter, r *http.Request, u User) error {
 }
 
 type teamInput struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Competition string   `json:"competition"`
-	Directions  []string `json:"directions"`
-	Status      string   `json:"status"`
-	Deadline    string   `json:"deadline"`
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Competition  string   `json:"competition"`
+	Competitions []string `json:"competitions"`
+	Directions   []string `json:"directions"`
+	Status       string   `json:"status"`
+	Deadline     string   `json:"deadline"`
 }
 
 func (a *App) createTeam(w http.ResponseWriter, r *http.Request, u User) error {
@@ -561,7 +584,8 @@ func (a *App) createTeam(w http.ResponseWriter, r *http.Request, u User) error {
 	if in.Status == "" {
 		in.Status = "open"
 	}
-	t := Team{ID: randomID(), Name: strings.TrimSpace(in.Name), Description: strings.TrimSpace(in.Description), Competition: in.Competition, Directions: in.Directions, Status: in.Status, Deadline: in.Deadline, CreatedAt: now(), CreatedBy: u.ID}
+	t := Team{ID: randomID(), Name: strings.TrimSpace(in.Name), Description: strings.TrimSpace(in.Description), Competition: in.Competition, Competitions: in.Competitions, Directions: in.Directions, Status: in.Status, Deadline: in.Deadline, CreatedAt: now(), CreatedBy: u.ID}
+	normalizeTeam(&t)
 	if err := validateTeam(t); err != nil {
 		return err
 	}
@@ -580,12 +604,13 @@ func (a *App) updateTeam(w http.ResponseWriter, r *http.Request, u User) error {
 		return err
 	}
 	var in struct {
-		Name        *string   `json:"name"`
-		Description *string   `json:"description"`
-		Competition *string   `json:"competition"`
-		Directions  *[]string `json:"directions"`
-		Status      *string   `json:"status"`
-		Deadline    *string   `json:"deadline"`
+		Name         *string   `json:"name"`
+		Description  *string   `json:"description"`
+		Competition  *string   `json:"competition"`
+		Competitions *[]string `json:"competitions"`
+		Directions   *[]string `json:"directions"`
+		Status       *string   `json:"status"`
+		Deadline     *string   `json:"deadline"`
 	}
 	if err = decode(r, &in); err != nil {
 		return err
@@ -598,7 +623,12 @@ func (a *App) updateTeam(w http.ResponseWriter, r *http.Request, u User) error {
 	}
 	if in.Competition != nil {
 		t.Competition = *in.Competition
+		t.Competitions = []string{*in.Competition}
 	}
+	if in.Competitions != nil {
+		t.Competitions = *in.Competitions
+	}
+	normalizeTeam(&t)
 	if in.Directions != nil {
 		t.Directions = *in.Directions
 	}
