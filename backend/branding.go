@@ -54,7 +54,7 @@ func defaultBrand(s *Settings) {
 		s.BrandName = "QUT机器人战队"
 	}
 	if s.LogoURL == "" {
-		s.LogoURL = "/mark.svg"
+		s.LogoURL = "/mark.png"
 	}
 	if s.TeamName == "" {
 		s.TeamName = "沧溟"
@@ -69,6 +69,17 @@ func defaultBrand(s *Settings) {
 	case "", "机器人战队协作平台", "竞跃", "竞跃机器人实验室", "竞跃 · 战队协作系统", "竞跃 MR System", "竞跃 · 机器人战队协作平台":
 		s.Organization = "青岛理工大学机器人战队"
 	}
+}
+func migrateDefaultLogo(s *Store) error {
+	settings, err := s.settings()
+	if err != nil {
+		return err
+	}
+	if settings.LogoURL != "/mark.svg" {
+		return nil
+	}
+	settings.LogoURL = "/mark.png"
+	return s.saveSettings(settings)
 }
 func migrateBranding(s *Store) error {
 	settings, err := s.settings()

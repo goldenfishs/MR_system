@@ -6,7 +6,7 @@ const form = reactive<Settings>({
   organization: "",
   season: "",
   brandName: "QUT机器人战队",
-  logoUrl: "/mark.svg",
+  logoUrl: "/mark.png",
   teamName: "沧溟",
   secondaryTeamName: "MOVE",
   competitions: ["RoboCon", "RoboMaster"],
@@ -88,7 +88,7 @@ async function load() {
       (await api.get<{ settings: Settings }>("/settings")).settings,
     );
     form.brandName ||= "QUT机器人战队";
-    form.logoUrl ||= "/mark.svg";
+    form.logoUrl ||= "/mark.png";
     form.teamName ||= "沧溟";
     form.secondaryTeamName ||= "MOVE";
     form.competitions ||= ["RoboCon", "RoboMaster"];
@@ -178,11 +178,11 @@ onMounted(() => {
         <v-row><v-col cols="12" sm="6"><v-text-field v-model="form.teamName" label="战队中文名称" maxlength="60" required /></v-col><v-col cols="12" sm="6"><v-text-field v-model="form.secondaryTeamName" label="战队英文名称" maxlength="60" required /></v-col></v-row>
         <v-alert type="info" variant="tonal" density="compact" class="mb-5">中文名称与英文名称属于同一支战队，成员、资料和报名统一管理。</v-alert>
         <v-select v-model="form.competitions" :items="['RoboCon', 'RoboMaster']" label="同时参与的赛事" multiple chips hint="可随战队实际参赛安排调整。" persistent-hint class="mb-5" />
-        <div class="logo-preview"><img :src="logoFailed ? '/mark.svg' : form.logoUrl || '/mark.svg'" alt="当前战队标志" @error="logoFailed = true"/><div><strong>{{ form.brandName || 'QUT机器人战队' }}</strong><span>{{ form.teamName || '沧溟' }} / {{ form.secondaryTeamName || 'MOVE' }}</span></div></div>
+        <div class="logo-preview"><img :src="logoFailed ? '/mark.png' : form.logoUrl || '/mark.png'" alt="当前战队标志" @error="logoFailed = true"/><div><strong>{{ form.brandName || 'QUT机器人战队' }}</strong><span>{{ form.teamName || '沧溟' }} / {{ form.secondaryTeamName || 'MOVE' }}</span></div></div>
         <v-file-input v-model="logoFile" accept="image/png,image/jpeg" label="上传战队标志" prepend-icon="mdi-image-outline" show-size :disabled="uploadingLogo || saving" hint="PNG / JPEG，最多 2 MiB。点击上传后立即替换登录页和侧栏标志。" persistent-hint />
         <v-btn type="button" class="mb-5" color="primary" variant="tonal" prepend-icon="mdi-upload" :loading="uploadingLogo" :disabled="!logoFile || saving" @click="uploadLogo">上传并替换标志</v-btn>
-        <v-text-field v-model="form.logoUrl" label="战队标志地址" placeholder="/mark.svg 或 https://example.com/logo.png" hint="登录页和侧栏使用同一标志。推荐透明背景 PNG 或 SVG。" persistent-hint :disabled="uploadingLogo" @update:model-value="logoFailed = false" />
-        <v-btn type="button" class="mb-5" variant="text" size="small" prepend-icon="mdi-restore" :disabled="uploadingLogo" @click="form.logoUrl = '/mark.svg'; logoFailed = false">恢复默认 M 标志</v-btn>
+        <v-text-field v-model="form.logoUrl" label="战队标志地址" placeholder="/mark.png 或 https://example.com/logo.png" hint="登录页和侧栏使用同一标志。推荐透明背景 PNG 或 SVG。" persistent-hint :disabled="uploadingLogo" @update:model-value="logoFailed = false" />
+        <v-btn type="button" class="mb-5" variant="text" size="small" prepend-icon="mdi-restore" :disabled="uploadingLogo" @click="form.logoUrl = '/mark.png'; logoFailed = false">恢复默认 M 标志</v-btn>
         <v-text-field
           v-model="form.season"
           label="当前赛季"

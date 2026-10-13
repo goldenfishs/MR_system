@@ -174,7 +174,7 @@ function directionLink(direction: string) {
         class="side-panel"
       >
         <router-link to="/" class="brand" :aria-label="`${settings?.brandName || 'QUT机器人战队'} · 工作台`">
-          <img :src="settings?.logoUrl || '/mark.svg'" width="34" height="34" alt="M" @error="($event.target as HTMLImageElement).src = '/mark.svg'" />
+          <img :src="settings?.logoUrl || '/mark.png'" width="34" height="34" alt="M" @error="($event.target as HTMLImageElement).src = '/mark.png'" />
           <div class="brand-copy">
             <span class="brand-title">{{ settings?.brandName || "QUT机器人战队" }}</span>
             <span

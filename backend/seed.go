@@ -40,13 +40,16 @@ func initialize(s *Store, demo bool) error {
 		if demo {
 			deadline = time.Now().UTC().AddDate(0, 0, 30).Format(time.RFC3339)
 		}
-		if err = s.saveSettings(Settings{BrandName: "QUT机器人战队", LogoURL: "/mark.svg", TeamName: "沧溟", SecondaryTeamName: "MOVE", Competitions: []string{"RoboCon", "RoboMaster"}, Organization: "青岛理工大学机器人战队", Season: strconv.Itoa(time.Now().Year()+1) + " 赛季", ApplicationOpen: demo, ApplicationDeadline: deadline, Announcement: "欢迎来到战队工作台。在这里，一起把想法变成会动的机器人。"}); err != nil {
+		if err = s.saveSettings(Settings{BrandName: "QUT机器人战队", LogoURL: "/mark.png", TeamName: "沧溟", SecondaryTeamName: "MOVE", Competitions: []string{"RoboCon", "RoboMaster"}, Organization: "青岛理工大学机器人战队", Season: strconv.Itoa(time.Now().Year()+1) + " 赛季", ApplicationOpen: demo, ApplicationDeadline: deadline, Announcement: "欢迎来到战队工作台。在这里，一起把想法变成会动的机器人。"}); err != nil {
 			return err
 		}
 	} else if err != nil {
 		return err
 	}
 	if err = migrateBranding(s); err != nil {
+		return err
+	}
+	if err = migrateDefaultLogo(s); err != nil {
 		return err
 	}
 	if demo {

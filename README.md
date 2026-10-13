@@ -2,7 +2,7 @@
 
 **MR System** 是青岛理工大学机器人战队的招新与培养平台。沧溟 / MOVE 是同一支战队的中文与英文名称，同时参与 RoboCon 和 RoboMaster。平台打通「邮箱验证与个人资料 → 团队报名与 PDF 简历 → 审核入队 → 知识库／作业／考试／题库 → 评分与荣誉归档」，并提供讨论区和管理员批量邮件通知。
 
-界面参考[华南虎面试系统演示](https://www.bilibili.com/video/BV1DC4y1f7Fh/)的 Material 布局：青蓝紫渐变顶栏、黄色标签指示线、技术分组侧栏、紧凑人物名单和彩色统计卡。代码与素材独立实现，项目不隶属于上述赛事或华南虎战队。
+界面参考[华南虎面试系统演示](https://www.bilibili.com/video/BV1DC4y1f7Fh/)的 Material 布局：青蓝紫渐变顶栏、黄色标签指示线、技术分组侧栏、紧凑人物名单和彩色统计卡。M 标志采用用户提供的原图，界面代码独立实现；项目不隶属于上述赛事或华南虎战队。
 
 [![CI](https://github.com/goldenfishs/MR_system/actions/workflows/ci.yml/badge.svg)](https://github.com/goldenfishs/MR_system/actions/workflows/ci.yml)
 

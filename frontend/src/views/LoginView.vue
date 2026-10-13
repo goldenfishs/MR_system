@@ -199,7 +199,7 @@ async function submit() {
   <div class="login-page">
     <header class="login-topbar">
       <a href="/" class="login-brand"
-        ><img :src="config?.logoUrl || '/mark.svg'" width="34" height="34" alt="M" @error="($event.target as HTMLImageElement).src = '/mark.svg'" /><span
+        ><img :src="config?.logoUrl || '/mark.png'" width="34" height="34" alt="M" @error="($event.target as HTMLImageElement).src = '/mark.png'" /><span
           >{{ config?.brandName || "QUT机器人战队" }}</span
         ></a
       ><span class="login-season">{{ config?.season || "机器人战队" }}</span>
@@ -207,7 +207,7 @@ async function submit() {
     <main :class="['login-main', { 'register-main': register }]">
       <div class="login-heading">
         <div class="team-avatar">
-          <img :src="config?.logoUrl || '/mark.svg'" width="52" height="52" alt="M" @error="($event.target as HTMLImageElement).src = '/mark.svg'" />
+          <img :src="config?.logoUrl || '/mark.png'" width="52" height="52" alt="M" @error="($event.target as HTMLImageElement).src = '/mark.png'" />
         </div>
         <h1>{{ config?.organization || "青岛理工大学机器人战队" }}</h1>
         <p class="team-name">{{ config?.teamName || "沧溟" }} <span>/</span> {{ config?.secondaryTeamName || "MOVE" }}</p>

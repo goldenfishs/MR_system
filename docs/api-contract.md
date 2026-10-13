@@ -229,4 +229,4 @@ interface Discussion {
 
 ## 品牌配置
 
-默认 brandName=QUT机器人战队、organization=青岛理工大学机器人战队、teamName=沧溟、secondaryTeamName=MOVE、competitions=[RoboCon,RoboMaster]、logoUrl=/mark.svg。队名为同一战队的名称。管理员可通过设置更新这些字段；标志支持 HTTP(S) URL、本站静态资源路径及专用 /api/public/logo/:id 地址，不能使用私有附件 API 地址。公开配置不包含 SMTP/Judge 密钥或成员资料。首次 v4 迁移仅替换已知旧默认名称，保留自定义品牌与既有业务记录。
+默认 brandName=QUT机器人战队、organization=青岛理工大学机器人战队、teamName=沧溟、secondaryTeamName=MOVE、competitions=[RoboCon,RoboMaster]、logoUrl=/mark.png。队名为同一战队的名称。管理员可通过设置更新这些字段；标志支持 HTTP(S) URL、本站静态资源路径及专用 /api/public/logo/:id 地址，不能使用私有附件 API 地址。公开配置不包含 SMTP/Judge 密钥或成员资料。旧默认 `/mark.svg` 会迁移到用户提供的 M 标志，自定义标志地址保留。
