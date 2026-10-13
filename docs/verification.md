@@ -32,6 +32,14 @@
 
 - `scripts/dev.sh` 的 Bash 语法检查通过。
 - `compose.yaml` 与 `.github/workflows/ci.yml` 的 YAML 解析通过。
-- 当前环境无可用 Docker daemon，未执行镜像构建或 Compose 启动，也未完成 PostgreSQL 集成验收。YAML 解析通过不等于容器部署通过。
+- 本地环境无可用 Docker daemon，未在本机执行镜像构建、Compose 启动或 PostgreSQL 集成验收；镜像构建和 PostgreSQL 测试随后在 GitHub Actions 完成。尚未对实际 HTTPS 反向代理与完整 Compose 部署进行运行验收。
 - GitHub Actions 已配置前端依赖安装、类型检查和构建，以及后端静态检查、SQLite／PostgreSQL 测试和构建。PostgreSQL 17 服务使用仅供 CI 的虚构账户，通过 `TEST_DATABASE_URL` 接入；单独的容器任务执行镜像构建，不推送镜像。远端运行结果以对应提交的 Actions 页面为准。
 - 本记录不代表所有页面和异常场景的完整端到端覆盖、压力测试或生产安全审计。
+
+## GitHub Actions 结果
+
+代码提交 `c06e1fe` 的 [CI 运行](https://github.com/goldenfishs/MR_system/actions/runs/38340242088) 三项任务全部通过：
+
+- 前端：依赖安装、TypeScript 检查、Vite 生产构建。
+- 后端：`go vet`、SQLite 与 PostgreSQL 17 集成测试、禁用 CGO 的构建。
+- 容器：完整多阶段 Docker 镜像构建；未发布镜像或部署在线服务。
