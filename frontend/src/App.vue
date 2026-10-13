@@ -145,19 +145,20 @@ function directionLink(direction: string) {
         width="276"
         class="side-panel"
       >
-        <router-link to="/" class="brand">
-          <img src="/mark.svg" width="36" height="36" alt="竞跃" />
-          <div>
-            <strong>竞跃协作系统</strong><small>RoboMaster · ROBOCON</small>
+        <router-link to="/" class="brand" aria-label="竞跃协作系统 · 工作台">
+          <img src="/mark.svg" width="28" height="28" alt="" />
+          <div class="brand-copy">
+            <span class="brand-title">竞跃协作系统</span>
+            <span
+              class="brand-organization"
+              :title="settings?.organization || '机器人实验室'"
+              >{{ settings?.organization || "机器人实验室" }}</span
+            >
           </div>
         </router-link>
-        <div class="space-label">
-          <v-icon size="18" color="primary">mdi-school-outline</v-icon
-          ><span>{{ settings?.organization || "机器人实验室" }}</span>
-        </div>
         <v-divider />
         <div class="nav-caption">工作空间</div>
-        <v-list nav class="nav-list">
+        <v-list nav :prepend-gap="18" class="nav-list">
           <v-list-item
             v-for="item in navigation"
             :key="item.path"
@@ -171,7 +172,12 @@ function directionLink(direction: string) {
         </v-list>
         <v-divider class="mx-4 my-2" />
         <div class="nav-caption">技术分组</div>
-        <v-list nav density="compact" class="nav-list direction-list">
+        <v-list
+          nav
+          density="compact"
+          :prepend-gap="18"
+          class="nav-list direction-list"
+        >
           <v-list-item
             v-for="item in directions"
             :key="item.title"
@@ -294,37 +300,36 @@ function directionLink(direction: string) {
   border-right: 1px solid #e4e6e9 !important;
 }
 .brand {
-  height: 76px;
+  height: 64px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   padding: 0 22px;
   color: #30343b;
   text-decoration: none;
 }
-.brand strong {
+.brand img {
+  flex-shrink: 0;
+}
+.brand-copy {
+  min-width: 0;
+}
+.brand-title,
+.brand-organization {
   display: block;
-  font-size: 19px;
-  font-weight: 500;
-}
-.brand small {
-  display: block;
-  margin-top: 3px;
-  color: #777;
-  font-size: 11px;
-}
-.space-label {
-  padding: 5px 22px 21px;
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  color: #687079;
-  font-size: 13px;
-}
-.space-label span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.brand-title {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 22px;
+}
+.brand-organization {
+  color: #757575;
+  font-size: 12px;
+  line-height: 18px;
 }
 .nav-caption {
   font-size: 12px;
@@ -344,8 +349,9 @@ function directionLink(direction: string) {
   font-weight: 400;
 }
 .nav-list :deep(.v-list-item__prepend > .v-icon) {
+  font-size: 22px;
   opacity: 0.7;
-  margin-inline-end: 23px;
+  margin-inline-end: 0;
 }
 .nav-list :deep(.v-list-item--active .v-list-item-title) {
   font-weight: 500;
@@ -355,18 +361,25 @@ function directionLink(direction: string) {
 }
 .sidebar-bottom {
   border-top: 1px solid #eee;
-  padding: 10px 16px 14px;
+  padding: 10px 10px 14px;
   background: white;
 }
 .settings-link {
   justify-content: flex-start;
   height: 40px;
+  padding-inline: 14px;
+}
+.settings-link :deep(.v-btn__prepend) {
+  margin-inline: 0 18px;
+}
+.settings-link :deep(.v-icon) {
+  font-size: 22px;
 }
 .sidebar-meta {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 6px 0;
+  padding: 10px 14px 0;
   font-size: 11px;
   color: #8b8b8b;
 }
