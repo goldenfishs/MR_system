@@ -7,12 +7,14 @@ import { canAccessLearning, canOpenLearning, canAccessDirection, canAccessLearni
 import { api } from "./lib/api";
 import { groupLabel, hasPermission } from "./lib/permissions";
 import type { Permission, Settings } from "./lib/types";
+import type { Profile } from "./lib/platform";
 import ProfileCompletionReminder from "./components/ProfileCompletionReminder.vue";
 const route = useRoute(),
   router = useRouter();
 const { mobile } = useDisplay();
 const drawer = ref(!mobile.value),
   settings = ref<Settings | null>(null),
+  avatarFileId = ref(""),
   logoutError = ref(""),
   loggingOut = ref(false),
   redirectingToLogin = ref(false);
@@ -74,6 +76,21 @@ async function loadSettings() {
   }
 }
 watch(() => auth.user?.id, loadSettings, { immediate: true });
+let avatarRequestId = 0;
+async function loadAvatar() {
+  const requestId = ++avatarRequestId;
+  avatarFileId.value = "";
+  if (!auth.user) return;
+  try {
+    const result = await api.get<{ profile: Profile }>("/profile");
+    if (requestId === avatarRequestId && auth.user) {
+      avatarFileId.value = result.profile.avatarFileId || "";
+    }
+  } catch {
+    // The initials fallback keeps the account menu usable if profile loading fails.
+  }
+}
+watch(() => auth.user?.id, loadAvatar, { immediate: true });
 watch([settings, () => route.fullPath], () => {
   document.title = `${route.meta.title || "工作台"} · ${settings.value?.brandName || "QUT机器人战队"}`;
 });
@@ -132,12 +149,14 @@ function refreshVisibleAccess() {
 onMounted(() => {
   window.addEventListener("session-expired", expired);
   window.addEventListener("settings-updated", loadSettings);
+  window.addEventListener("profile-updated", loadAvatar);
   window.addEventListener("focus", refreshAccess);
   document.addEventListener("visibilitychange", refreshVisibleAccess);
 });
 onUnmounted(() => {
   window.removeEventListener("session-expired", expired);
   window.removeEventListener("settings-updated", loadSettings);
+  window.removeEventListener("profile-updated", loadAvatar);
   window.removeEventListener("focus", refreshAccess);
   document.removeEventListener("visibilitychange", refreshVisibleAccess);
 });
@@ -317,7 +336,7 @@ function directionLink(direction: string) {
               class="profile-button"
               aria-label="个人账户"
             >
-              <span class="profile-avatar">{{ auth.user.name.slice(-2) }}</span
+              <span class="profile-avatar"><img v-if="avatarFileId" :src="`/api/files/${encodeURIComponent(avatarFileId)}/preview`" alt="" /><template v-else>{{ auth.user.name.slice(-2) }}</template></span
               ><span class="profile-text"
                 >{{ auth.user.name
                 }}<small>{{ roleNames[auth.user.role] }}</small></span
@@ -509,6 +528,12 @@ function directionLink(direction: string) {
   display: grid;
   place-items: center;
   font-size: 12px;
+  overflow: hidden;
+}
+.profile-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .profile-text {
   text-align: left;

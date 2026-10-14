@@ -69,7 +69,7 @@ onUnmounted(() => {
         </v-avatar>
         <h2 id="profile-reminder-title" class="text-h6 mb-2">完善个人资料</h2>
         <p id="profile-reminder-description" class="text-body-2 text-medium-emphasis">
-          你的个人资料还未填写完整。请前往个人中心补全姓名、性别、学校、专业、班级、学号、联系电话和本人照片，之后即可报名团队。
+          你的个人资料还未填写完整。请前往个人中心补全姓名、性别、学校、专业、班级、学号、联系电话和本人证件照，之后即可报名团队。
         </p>
         <p class="text-caption text-medium-emphasis mt-3">兴趣爱好选填，资料可在个人中心随时更新。</p>
       </v-card-text>

@@ -119,6 +119,116 @@ func TestRegistrationDefersProfileUntilAfterLogin(t *testing.T) {
 		t.Fatal("sanitized avatar preview missing")
 	}
 }
+
+func TestAvatarIsIndependentFromRequiredIdentityPhoto(t *testing.T) {
+	a, owner := setup(t)
+	registered := owner.register("avatar-owner@example.com", "StrongPassword!2026")
+	user := unmarshal[User](t, registered["user"])
+
+	// Users can set an avatar before completing any required profile fields.
+	updated := unmarshal[Profile](t, owner.request("PATCH", "/api/profile", map[string]any{"avatar": testPhoto()}, 200)["profile"])
+	if updated.AvatarFileID == "" || updated.PhotoFileID != "" || updated.Complete {
+		t.Fatalf("avatar should not satisfy or overwrite required identity photo: %+v", updated)
+	}
+	avatar := downloadForTest(t, owner, updated.AvatarFileID, "preview", 200)
+	if avatar.Header().Get("Content-Type") != "image/png" {
+		t.Fatal("avatar preview did not return sanitized image")
+	}
+
+	other := &testClient{t: owner.t, handler: owner.handler, mailer: owner.mailer}
+	other.register("avatar-other@example.com", "StrongPassword!2026")
+	downloadForTest(t, other, updated.AvatarFileID, "preview", 403)
+	owner.login("admin")
+	downloadForTest(t, owner, updated.AvatarFileID, "preview", 200)
+	owner.request("POST", "/api/auth/login", map[string]string{"email": "avatar-owner@example.com", "password": "StrongPassword!2026"}, 200)
+
+	// The dedicated endpoint accepts a full-size base64 photo under its 4 MiB
+	// request limit and still leaves identity completeness unchanged.
+	largeAvatar := testPhoto()
+	largeBytes, err := base64.StdEncoding.DecodeString(largeAvatar.ContentBase64)
+	if err != nil {
+		owner.t.Fatal(err)
+	}
+	largeBytes = append(largeBytes, bytes.Repeat([]byte{'x'}, (1<<20)+64-len(largeBytes))...)
+	largeAvatar.ContentBase64 = base64.StdEncoding.EncodeToString(largeBytes)
+	updated = unmarshal[Profile](t, owner.request("PATCH", "/api/profile/avatar", largeAvatar, 200)["profile"])
+	if updated.Complete || updated.PhotoFileID != "" || updated.AvatarFileID == "" {
+		owner.t.Fatalf("standalone avatar update altered identity completion: %+v", updated)
+	}
+
+	complete := completeProfile(t, owner)
+
+	// Existing rows without avatarFileId retain their old completion state.
+	legacy := complete
+	legacyPayload := map[string]any{"userId": legacy.UserID, "name": legacy.Name, "gender": legacy.Gender, "university": legacy.University, "major": legacy.Major, "className": legacy.ClassName, "studentNumber": legacy.StudentNumber, "phone": legacy.Phone, "photoFileId": legacy.PhotoFileID}
+	raw, err := json.Marshal(legacyPayload)
+	if err != nil {
+		owner.t.Fatal(err)
+	}
+	if err = a.store.exec("INSERT INTO profiles(user_id,payload) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET payload=excluded.payload", user.ID, string(raw)); err != nil {
+		owner.t.Fatal(err)
+	}
+	compat, err := a.store.profile(user)
+	if err != nil || !compat.Complete || compat.AvatarFileID != "" || compat.PhotoFileID != legacy.PhotoFileID {
+		owner.t.Fatalf("legacy identity-photo profile lost compatibility: %+v, %v", compat, err)
+	}
+}
+
+func TestProfileCanSubmitAvatarAndIdentityPhotoTogether(t *testing.T) {
+	a, c := setup(t)
+	c.login("admin")
+	team := unmarshal[Team](t, c.request("POST", "/api/teams", map[string]any{"name": "头像与报名照片验证", "competitions": []string{"RoboMaster"}, "directions": []string{"机械"}, "status": "open"}, 201)["item"])
+	c.login("student")
+
+	fields := testProfileFields()
+	profileData := map[string]any{"name": "双图测试", "gender": fields.Gender, "university": fields.University, "major": fields.Major, "className": fields.ClassName, "studentNumber": fields.StudentNumber, "phone": fields.Phone}
+	// Base64-encoded images push the request well beyond the ordinary 4 MiB
+	// decoder limit while each decoded image remains within its 2 MiB cap.
+	paddedPhoto := func() PhotoInput {
+		photo := testPhoto()
+		data, err := base64.StdEncoding.DecodeString(photo.ContentBase64)
+		if err != nil {
+			c.t.Fatal(err)
+		}
+		target := maxPhotoSize - 1024
+		data = append(data, bytes.Repeat([]byte{'x'}, target-len(data))...)
+		photo.ContentBase64 = base64.StdEncoding.EncodeToString(data)
+		return photo
+	}
+	profileData["photo"] = paddedPhoto()
+	profileData["avatar"] = paddedPhoto()
+	profile := unmarshal[Profile](t, c.request("PATCH", "/api/profile", profileData, 200)["profile"])
+	if !profile.Complete || profile.PhotoFileID == "" || profile.AvatarFileID == "" || profile.PhotoFileID == profile.AvatarFileID {
+		c.t.Fatalf("identity photo and avatar were not kept separate: %+v", profile)
+	}
+	if asset, err := a.fileAsset(profile.PhotoFileID); err != nil || asset.Name != "个人照片.png" {
+		c.t.Fatalf("identity-review photo asset changed: %+v, %v", asset, err)
+	}
+	if asset, err := a.fileAsset(profile.AvatarFileID); err != nil || asset.Name != "头像.png" {
+		c.t.Fatalf("avatar asset missing: %+v, %v", asset, err)
+	}
+	photoPreview := downloadForTest(t, c, profile.PhotoFileID, "preview", 200)
+	avatarPreview := downloadForTest(t, c, profile.AvatarFileID, "preview", 200)
+	if photoPreview.Header().Get("Content-Type") != "image/png" || avatarPreview.Header().Get("Content-Type") != "image/png" {
+		c.t.Fatal("profile images were not previewable")
+	}
+	resume := uploadForTest(t, c, "resume.pdf", []byte("%PDF-1.7\nresume"), 201)
+	application := unmarshal[TeamApplication](t, c.request("POST", "/api/teams/"+team.ID+"/applications", map[string]any{"direction": "机械", "resumeFileId": resume.ID}, 201)["item"])
+	if application.UserID == "" {
+		c.t.Fatal("profile owner could not submit application")
+	}
+	c.login("admin")
+	applications := unmarshal[[]TeamApplication](t, c.request("GET", "/api/teams/"+team.ID+"/applications", nil, 200)["items"])
+	if len(applications) != 1 || applications[0].Profile == nil || applications[0].Profile.PhotoFileID != profile.PhotoFileID || applications[0].Profile.AvatarFileID != profile.AvatarFileID {
+		c.t.Fatalf("application review did not retain separate photo and avatar IDs: %+v", applications)
+	}
+	grantForTest(t, c, "demo-mentor", []GroupGrant{{Direction: "机械", Permissions: []string{"members", "recruitment"}}})
+	reviewer := &testClient{t: c.t, handler: c.handler}
+	reviewer.login("mentor")
+	downloadForTest(t, reviewer, profile.PhotoFileID, "preview", 200)
+	downloadForTest(t, reviewer, profile.AvatarFileID, "preview", 403)
+}
+
 func TestFilesValidateSizeTypeAndOwnership(t *testing.T) {
 	a, c := setup(t)
 	uploadForTest(t, c, "unauth.pdf", []byte("%PDF-1.7\nexample"), 401)

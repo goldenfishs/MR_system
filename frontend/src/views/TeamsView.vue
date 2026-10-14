@@ -264,7 +264,7 @@ onMounted(load);
       type="info"
       variant="tonal"
       class="mb-4"
-      >报名需要完整个人资料和本人照片。<v-btn to="/profile" variant="text"
+      >报名需要完整个人资料和本人证件照。<v-btn to="/profile" variant="text"
         >完善资料</v-btn
       ></v-alert
     ><v-text-field
@@ -375,7 +375,7 @@ onMounted(load);
                   ><v-img
                     v-if="item.profile?.photoFileId"
                     :src="previewUrl(item.profile.photoFileId)"
-                    alt="报名者照片"
+                    alt="报名者本人证件照"
                   /><v-icon v-else>mdi-account</v-icon></v-avatar
                 >
                 <div>
@@ -492,7 +492,7 @@ onMounted(load);
                 v-else-if="!profile?.complete"
                 type="info"
                 variant="tonal"
-                >请先完善必需个人资料和照片。<v-btn to="/profile" variant="text"
+                >请先完善必需个人资料和本人证件照。<v-btn to="/profile" variant="text"
                   >完善资料</v-btn
                 ></v-alert
               >

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"errors"
@@ -33,6 +34,7 @@ type Profile struct {
 	StudentNumber string `json:"studentNumber"`
 	Phone         string `json:"phone"`
 	Hobbies       string `json:"hobbies"`
+	AvatarFileID  string `json:"avatarFileId"`
 	PhotoFileID   string `json:"photoFileId"`
 	UpdatedAt     string `json:"updatedAt"`
 	Complete      bool   `json:"complete"`
@@ -119,6 +121,7 @@ type Record struct {
 func (a *App) registerPlatformRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/profile", a.wrap(true, a.getProfile))
 	m.HandleFunc("PATCH /api/profile", a.wrap(true, a.updateProfile))
+	m.HandleFunc("PATCH /api/profile/avatar", a.wrap(true, a.updateProfileAvatar))
 	m.HandleFunc("GET /api/files", a.wrap(true, a.listFiles))
 	m.HandleFunc("GET /api/files/{id}", a.wrap(true, a.getFileAsset))
 	m.HandleFunc("POST /api/files", a.wrap(true, a.uploadFile))
@@ -200,10 +203,22 @@ func (a *App) updateProfile(w http.ResponseWriter, r *http.Request, u User) erro
 	var in struct {
 		Name string `json:"name"`
 		ProfileFields
-		Photo *PhotoInput `json:"photo"`
+		Photo  *PhotoInput `json:"photo"`
+		Avatar *PhotoInput `json:"avatar"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
+	}
+	// Avatars are optional and independent of the mandatory identity/profile
+	// fields. This lets an account choose an avatar before completing signup
+	// information while keeping the full update contract backward compatible.
+	if in.Avatar != nil && in.Name == "" && in.ProfileFields == (ProfileFields{}) && in.Photo == nil {
+		p, err := a.updateAvatar(r.Context(), u, *in.Avatar)
+		if err != nil {
+			return err
+		}
+		respond(w, 200, map[string]any{"profile": p})
+		return nil
 	}
 	p := profileFromFields(in.Name, in.ProfileFields)
 	if err := validateProfile(p); err != nil {
@@ -214,19 +229,29 @@ func (a *App) updateProfile(w http.ResponseWriter, r *http.Request, u User) erro
 		return err
 	}
 	p.UserID = u.ID
+	p.AvatarFileID = old.AvatarFileID
 	p.PhotoFileID = old.PhotoFileID
 	p.UpdatedAt = now()
 	var photo FileAsset
-	var data []byte
+	var photoData []byte
 	if in.Photo != nil {
-		photo, data, err = preparePhoto(*in.Photo, u.ID)
+		photo, photoData, err = preparePhoto(*in.Photo, u.ID)
 		if err != nil {
 			return err
 		}
 		p.PhotoFileID = photo.ID
 	}
+	var avatar FileAsset
+	var avatarData []byte
+	if in.Avatar != nil {
+		avatar, avatarData, err = prepareAvatar(*in.Avatar, u.ID)
+		if err != nil {
+			return err
+		}
+		p.AvatarFileID = avatar.ID
+	}
 	if p.PhotoFileID == "" {
-		return fail(400, "请上传本人照片（JPEG 或 PNG，最大 2 MiB）")
+		return fail(400, "请上传本人证件照（JPEG 或 PNG，最大 2 MiB）")
 	}
 	p.Complete = true
 	tx, err := a.store.db.BeginTx(r.Context(), nil)
@@ -235,18 +260,30 @@ func (a *App) updateProfile(w http.ResponseWriter, r *http.Request, u User) erro
 	}
 	defer tx.Rollback()
 	s := &Store{db: a.store.db, postgres: a.store.postgres, tx: tx}
-	savedPath := ""
 	committed := false
+	savedPaths := []string{}
 	defer func() {
-		if !committed && savedPath != "" {
-			os.Remove(savedPath)
+		if !committed {
+			for _, path := range savedPaths {
+				_ = os.Remove(path)
+			}
 		}
 	}()
 	if in.Photo != nil {
-		savedPath, err = a.persistAsset(s, photo, data)
+		savedPath, persistErr := a.persistAsset(s, photo, photoData)
+		err = persistErr
 		if err != nil {
 			return err
 		}
+		savedPaths = append(savedPaths, savedPath)
+	}
+	if in.Avatar != nil {
+		savedPath, persistErr := a.persistAsset(s, avatar, avatarData)
+		err = persistErr
+		if err != nil {
+			return err
+		}
+		savedPaths = append(savedPaths, savedPath)
 	}
 	if err = s.saveProfile(p); err != nil {
 		return err
@@ -261,6 +298,71 @@ func (a *App) updateProfile(w http.ResponseWriter, r *http.Request, u User) erro
 	committed = true
 	respond(w, 200, map[string]any{"profile": p, "user": u})
 	return nil
+}
+
+// PATCH /api/profile/avatar accepts a PhotoInput directly and is useful for a
+// profile form that edits the avatar separately from identity information.
+func (a *App) updateProfileAvatar(w http.ResponseWriter, r *http.Request, u User) error {
+	var in PhotoInput
+	if err := decode(r, &in); err != nil {
+		return err
+	}
+	p, err := a.updateAvatar(r.Context(), u, in)
+	if err != nil {
+		return err
+	}
+	respond(w, 200, map[string]any{"profile": p})
+	return nil
+}
+
+func (a *App) updateAvatar(ctx context.Context, u User, in PhotoInput) (Profile, error) {
+	avatar, data, err := prepareAvatar(in, u.ID)
+	if err != nil {
+		return Profile{}, err
+	}
+	tx, err := a.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Profile{}, err
+	}
+	defer tx.Rollback()
+	s := &Store{db: a.store.db, postgres: a.store.postgres, tx: tx}
+	path, err := a.persistAsset(s, avatar, data)
+	if err != nil {
+		return Profile{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(path)
+		}
+	}()
+	p, err := s.profile(u)
+	if err != nil {
+		return Profile{}, err
+	}
+	p.AvatarFileID = avatar.ID
+	p.UpdatedAt = now()
+	if err = s.saveProfile(p); err != nil {
+		return Profile{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return Profile{}, err
+	}
+	committed = true
+	return p, nil
+}
+
+func prepareAvatar(in PhotoInput, owner string) (FileAsset, []byte, error) {
+	asset, data, err := preparePhoto(in, owner)
+	if err != nil {
+		return FileAsset{}, nil, err
+	}
+	if asset.MIME == "image/png" {
+		asset.Name = "头像.png"
+	} else {
+		asset.Name = "头像.jpg"
+	}
+	return asset, data, nil
 }
 func preparePhoto(in PhotoInput, owner string) (FileAsset, []byte, error) {
 	if len(in.ContentBase64) > base64.StdEncoding.EncodedLen(maxPhotoSize) {

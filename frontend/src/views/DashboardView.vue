@@ -111,7 +111,7 @@ onMounted(load);
       variant="tonal"
       class="profile-alert mb-5"
     >
-      完成个人资料后即可申请加入团队。姓名、学校、专业、班级、学号、联系电话和照片为必填。
+      完成个人资料后即可申请加入团队。姓名、学校、专业、班级、学号、联系电话和本人证件照为必填。
       <v-btn to="/profile" color="primary" variant="text">补全资料</v-btn>
     </v-alert>
 

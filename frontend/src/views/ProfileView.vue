@@ -20,6 +20,7 @@ const trainingError = ref("");
 const latestTraining = computed(() => [...training.value].sort((a, b) => b.cycle - a.cycle)[0]);
 const trainingStage = computed(() => latestTraining.value ? currentTrainingStage(latestTraining.value) : undefined);
 const form = ref(blankProfile()),
+  avatar = ref<PhotoInput | null>(null),
   photo = ref<PhotoInput | null>(null),
   profile = ref<Profile | null>(null),
   loading = ref(true),
@@ -68,13 +69,31 @@ async function save() {
     profile.value = (
       await api.patch<{ profile: Profile }>("/profile", {
         ...form.value,
+        ...(avatar.value ? { avatar: avatar.value } : {}),
         ...(photo.value ? { photo: photo.value } : {}),
       })
     ).profile;
     photo.value = null;
+    avatar.value = null;
     if (auth.user) auth.user.name = profile.value.name;
     window.dispatchEvent(new Event("profile-updated"));
     notice.value = "个人资料已保存，后续报名会使用这些资料。";
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    saving.value = false;
+  }
+}
+async function saveAvatar() {
+  if (saving.value || loading.value || !profile.value || !avatar.value) return;
+  saving.value = true;
+  error.value = "";
+  notice.value = "";
+  try {
+    profile.value = (await api.patch<{ profile: Profile }>("/profile/avatar", avatar.value)).profile;
+    avatar.value = null;
+    window.dispatchEvent(new Event("profile-updated"));
+    notice.value = profile.value.complete ? "头像已保存。" : "头像已保存；报名仍需填写资料并上传本人证件照。";
   } catch (e) {
     error.value = (e as Error).message;
   } finally {
@@ -125,14 +144,17 @@ onMounted(load);
         type="info"
         variant="tonal"
         class="mb-5"
-        >报名团队前，请补全带 * 的资料和本人照片。</v-alert
+        >报名团队前，请补全带 * 的资料和本人证件照。</v-alert
       >
       <form @submit.prevent="save">
         <ProfileFields
           v-model="form"
+          v-model:avatar="avatar"
           v-model:photo="photo"
+          :avatar-file-id="profile.avatarFileId"
           :photo-file-id="profile.photoFileId"
           :disabled="saving"
+          @save-avatar="saveAvatar"
         />
         <div class="d-flex justify-end">
           <v-btn color="primary" type="submit" :loading="saving"

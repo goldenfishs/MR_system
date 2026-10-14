@@ -34,6 +34,14 @@ async function request<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   const requestSession = sessionGeneration;
+  // Profile images are sent as base64 JSON. Allow the server enough time to
+  // decode/store a 2 MiB image without changing the normal request timeout.
+  const timeoutMs = method === "PATCH" && (path === "/profile" || path === "/profile/avatar")
+    ? 120000
+    : body instanceof FormData
+      ? 120000
+      : 20000;
+  const timeout = AbortSignal.timeout(timeoutMs);
   let response: Response;
   try {
     response = await fetch(`/api${path}`, {
@@ -50,16 +58,13 @@ async function request<T>(
           : body instanceof FormData
             ? body
             : JSON.stringify(body),
-      signal: signal
-        ? AbortSignal.any([
-            signal,
-            AbortSignal.timeout(body instanceof FormData ? 120000 : 20000),
-          ])
-        : AbortSignal.timeout(body instanceof FormData ? 120000 : 20000),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     });
   } catch {
     throw new ApiError(
-      "连接失败，请检查网络后重试。你的输入仍保留在页面中。",
+      timeout.aborted
+        ? "请求等待超时，请检查网络后重试。你的输入仍保留在页面中。"
+        : "连接失败，请检查网络后重试。你的输入仍保留在页面中。",
       0,
     );
   }

@@ -22,7 +22,7 @@ interface ProfileFields {
   className: string; studentNumber: string; phone: string; hobbies: string;
 }
 interface Profile extends ProfileFields {
-  userId: string; name: string; photoFileId: string; updatedAt: string; complete: boolean;
+  userId: string; name: string; avatarFileId?: string; photoFileId: string; updatedAt: string; complete: boolean;
 }
 interface PhotoInput { name: string; contentBase64: string }
 ```
@@ -32,7 +32,8 @@ interface PhotoInput { name: string; contentBase64: string }
 - `POST /auth/login`：`{email,password}` → `{user:User}`。`POST /auth/logout` → `{ok:true}`。
 - `GET /auth/me` → `{user:User,demoMode:boolean}`；匿名访问返回 401。
 - `GET /profile` → `{profile:Profile}`。仅当前用户；新注册账号的姓名及资料字段为空，`complete:false`。旧账号没有资料时返回原有姓名和 `complete:false`，不补造学校、学号或照片等资料。
-- `PATCH /profile`：`{name,...ProfileFields,photo?:PhotoInput}` → `{profile:Profile,user:User}`。完整提交资料字段；已有照片可省略 `photo` 保留原照片，首次补全必须附照片。
+- `PATCH /profile`：`{name,...ProfileFields,avatar?:PhotoInput,photo?:PhotoInput}` → `{profile:Profile,user:User}`。头像选填、用于账号展示；`photo` 是本人证件照，用于报名审核且仍为必填。已有图片可省略对应字段以保留；两张图片可以一起提交。也可用 `PATCH /profile/avatar` 单独保存头像。
+- `PATCH /profile/avatar`：`PhotoInput` → `{profile:Profile}`。可在资料尚未补全时单独更新头像，不改变本人证件照或资料完整度。`PATCH /profile` 仅提交 `{avatar:PhotoInput}` 也返回 `{profile:Profile}`。头像预览仅本人及系统管理员可访问，组内报名审核继续读取 `photoFileId`。
 - `GET /users?permission=members|recruitment|records|mail` → `{items:(User & {profile:Profile})[]}`，默认用途 members，供审核、档案分配和邮件选人。管理员全部；组管理员必须有所选模块权限，并按接收人当前成员方向筛选。recruitment 也匹配报名方向和有同组报名权限的审核人员；mail 对尚无成员方向者匹配待审核的新报名或未拒绝的历史报名，用于招新联系。普通用户不能读取其他人员资料；不支持其他用途值。
 
 mail／records 选人不会自动授予完整资料访问权：只有该用途权限时，返回姓名、邮箱和所属组，records 另保留学号；照片、电话、专业、班级、兴趣和考核确认字段清空。管理员、本人，或另有目标人员所在组 members／recruitment 权限者保留完整资料。响应仍采用相同 User／Profile 结构，受限字段为空。
@@ -40,7 +41,7 @@ mail／records 选人不会自动授予完整资料访问权：只有该用途�
 
 新注册记录 `emailVerifiedAt`。已有、引导和管理员创建的账号不会被追溯标记为已验证。密码最少 10 字节、最多 72 字节；工作人员初始密码最少 12 字节。
 
-注册后在「个人中心 → 个人资料」填写姓名、性别、学校、专业、班级、学号、联系电话及本人照片；这些项目仍为报名必填，兴趣爱好选填。照片为不带 data URL 前缀的 base64 JPEG/PNG，原文件不超过 2 MiB。登录后的资料提醒以 `Profile.complete` 为准，不以显示姓名或前端本地记录代替服务端校验；资料未完整仍可进入系统，提交团队报名须先补全。
+注册后在「个人中心 → 个人资料」填写姓名、性别、学校、专业、班级、学号、联系电话及本人证件照；这些项目仍为报名必填，兴趣爱好和个人头像选填。头像与证件照使用不带 data URL 前缀的 base64 JPEG/PNG，单张原文件不超过 2 MiB。登录后的资料提醒以 `Profile.complete` 为准，不以显示姓名或前端本地记录代替服务端校验；资料未完整仍可进入系统，提交团队报名须先补全。
 
 管理员拥有全部权限；group_admin 可兼任多个组，以 groupGrants 的每条 direction/permissions 独立授权。`recruitment` 为报名与历史面试审核，`assessment` 为新生培养阶段与最终考核确认，`tasks` 为作业／题库／考试发布、编辑与评分，`knowledge` 为知识库管理，`discussions` 为私问答疑与精选公开，`members` 为组内成员查看，`records` 为组内荣誉／档案发放，`mail` 为组内批量邮件。空组别的全队管理内容仅管理员可维护。组权限不允许转授权限或修改平台设置；考核权限仅能按完整培养流程晋升新生，不能分配管理员身份。
 

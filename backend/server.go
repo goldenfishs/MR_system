@@ -79,7 +79,13 @@ func respond(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 func decode(r *http.Request, v any) error {
-	d := json.NewDecoder(io.LimitReader(r.Body, 4<<20))
+	limit := int64(4 << 20)
+	if r.Method == http.MethodPatch && r.URL.Path == "/api/profile" {
+		// A profile update may contain both independent 2 MiB images encoded as
+		// base64. Keep this larger limit scoped to that endpoint.
+		limit = 6 << 20
+	}
+	d := json.NewDecoder(io.LimitReader(r.Body, limit))
 	d.DisallowUnknownFields()
 	if err := d.Decode(v); err != nil {
 		return fail(400, "请求数据格式不正确")
@@ -158,6 +164,10 @@ func (a *App) wrapWithMutationLock(auth, mutationLock bool, handler func(http.Re
 			limit := int64(1 << 20)
 			if r.URL.Path == "/api/files" {
 				limit = 26 << 20
+			} else if r.Method == http.MethodPatch && r.URL.Path == "/api/profile" {
+				limit = 6 << 20
+			} else if r.Method == http.MethodPatch && r.URL.Path == "/api/profile/avatar" {
+				limit = 4 << 20
 			} else if r.URL.Path == "/api/profile" || r.URL.Path == "/api/settings/logo" {
 				limit = 4 << 20
 			}

@@ -15,6 +15,9 @@ export interface ProfileInput {
 }
 export interface Profile extends ProfileInput {
   userId: string;
+  /** 个人头像，用于账号展示；旧账号可能没有该字段。 */
+  avatarFileId?: string;
+  /** 本人证件照，用于资料完整性和报名审核。 */
   photoFileId: string;
   updatedAt: string;
   complete: boolean;
@@ -161,7 +164,7 @@ export function profileError(profile: ProfileInput, hasPhoto: boolean): string {
     ].some((key) => !String(profile[key as keyof ProfileInput]).trim())
   )
     return "请填写姓名、性别、学校、专业、班级、学号和联系电话。";
-  if (!hasPhoto) return "请上传本人照片（JPEG 或 PNG，最多 2 MB）。";
+  if (!hasPhoto) return "请上传本人证件照（JPEG 或 PNG，最多 2 MB）。";
   return "";
 }
 export const fileSize = (bytes: number) =>
