@@ -71,7 +71,12 @@ func TestPostgreSQLPersistence(t *testing.T) {
 
 	email := "pg-" + randomID() + "@example.test"
 	password := "PostgresTestPassword!2026"
-	registered := unmarshal[User](t, client.register("数据库验证学员", email, password)["user"])
+	registered := unmarshal[User](t, client.register(email, password)["user"])
+	initialProfile := unmarshal[Profile](t, client.request("GET", "/api/profile", nil, 200)["profile"])
+	if initialProfile.Complete || initialProfile.Name != "" || initialProfile.PhotoFileID != "" {
+		t.Fatal("PostgreSQL registration unexpectedly completed personal profile")
+	}
+	completeProfile(t, client)
 	application := unmarshal[Applicant](t, client.request("POST", "/api/applicants", map[string]any{
 		"name": "数据库验证学员", "phone": "13800008888", "university": "虚构测试大学",
 		"major": "自动化", "year": "大一", "team": "RoboMaster", "direction": "电控",
@@ -210,7 +215,7 @@ func TestPostgreSQLPersistence(t *testing.T) {
 	}
 	profile := unmarshal[Profile](t, client.request("GET", "/api/profile", nil, 200)["profile"])
 	if !profile.Complete || profile.StudentNumber == "" {
-		t.Fatal("PostgreSQL registration profile not persisted")
+		t.Fatal("PostgreSQL completed profile not persisted")
 	}
 	downloadForTest(t, client, profile.PhotoFileID, "preview", 200)
 	if err = reopened.row("SELECT COUNT(*) FROM applicants").Scan(&count); err != nil || count != 11 {

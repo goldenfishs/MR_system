@@ -57,11 +57,10 @@ func (c *testClient) verification(email string) string {
 	}
 	return sent.code
 }
-func (c *testClient) register(name, email, password string) map[string]json.RawMessage {
+func (c *testClient) register(email, password string) map[string]json.RawMessage {
 	c.t.Helper()
 	code := c.verification(email)
 	body := registrationBody(email, code)
-	body["name"] = name
 	body["password"] = password
 	return c.request("POST", "/api/auth/register", body, 201)
 }
@@ -90,7 +89,7 @@ func testProfileFields() ProfileFields {
 	return ProfileFields{Gender: "其他", University: "测试大学", Major: "自动化", ClassName: "自动化 1 班", StudentNumber: "20260001", Phone: "13800000000"}
 }
 func registrationBody(email, code string) map[string]any {
-	return map[string]any{"name": "验证学员", "email": email, "password": "StrongPassword!2026", "verificationCode": code, "profile": testProfileFields(), "photo": testPhoto()}
+	return map[string]any{"email": email, "password": "StrongPassword!2026", "verificationCode": code}
 }
 func requireRetry(t *testing.T, c *testClient, result map[string]json.RawMessage) {
 	t.Helper()

@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
-	"os"
-	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -17,6 +15,7 @@ import (
 
 const verificationLifetime = 10 * time.Minute
 const verificationCooldown = time.Minute
+const unfilledProfileName = "未填写姓名"
 
 // VerificationMailer is also injectable in tests. Production only wires SMTP;
 // neither demo mode nor an HTTP response exposes a verification code.
@@ -191,20 +190,16 @@ func (a *App) reserveVerificationSend(ctx context.Context, email, ipHash string,
 
 func (a *App) register(w http.ResponseWriter, r *http.Request, _ User) error {
 	var in struct {
-		Name             string        `json:"name"`
-		Email            string        `json:"email"`
-		Password         string        `json:"password"`
-		VerificationCode string        `json:"verificationCode"`
-		Profile          ProfileFields `json:"profile"`
-		Photo            PhotoInput    `json:"photo"`
+		Email            string `json:"email"`
+		Password         string `json:"password"`
+		VerificationCode string `json:"verificationCode"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
 	email, valid := normalizedEmail(in.Email)
-	in.Name = strings.TrimSpace(in.Name)
-	if !valid || in.Name == "" || len(in.Name) > 100 || len(in.Password) < 10 || len(in.Password) > 72 {
-		return fail(400, "请填写有效姓名、邮箱和 10–72 字节密码")
+	if !valid || len(in.Password) < 10 || len(in.Password) > 72 {
+		return fail(400, "请填写有效邮箱和 10–72 字节密码")
 	}
 	if a.config.Mailer == nil {
 		return registrationUnavailable()
@@ -212,16 +207,8 @@ func (a *App) register(w http.ResponseWriter, r *http.Request, _ User) error {
 	if !validVerificationCode(in.VerificationCode) {
 		return fail(400, "请填写 6 位邮箱验证码")
 	}
-	profile := profileFromFields(in.Name, in.Profile)
-	if err := validateProfile(profile); err != nil {
-		return err
-	}
 	if !a.rateAllowed(r, email) {
 		return rateLimit("尝试次数过多，请 15 分钟后重试", 900)
-	}
-	photo, photoData, err := preparePhoto(in.Photo, "")
-	if err != nil {
-		return err
 	}
 	tx, err := a.store.db.BeginTx(r.Context(), nil)
 	if err != nil {
@@ -269,25 +256,11 @@ func (a *App) register(w http.ResponseWriter, r *http.Request, _ User) error {
 		return err
 	}
 	verifiedAt := now()
-	u := User{ID: randomID(), Name: in.Name, Email: email, Role: "freshman", MemberType: "freshman", GroupGrants: []GroupGrant{}, JoinedAt: verifiedAt, EmailVerifiedAt: verifiedAt}
+	u := User{ID: randomID(), Name: unfilledProfileName, Email: email, Role: "freshman", MemberType: "freshman", GroupGrants: []GroupGrant{}, JoinedAt: verifiedAt, EmailVerifiedAt: verifiedAt}
 	if err = s.exec("INSERT INTO users(id,email,password_hash,payload) VALUES(?,?,?,?)", u.ID, email, string(passwordHash), encoded(u)); err != nil {
 		return err
 	}
-	photo.OwnerID = u.ID
-	photoPath, err := a.persistAsset(s, photo, photoData)
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			os.Remove(photoPath)
-		}
-	}()
-	profile.UserID = u.ID
-	profile.PhotoFileID = photo.ID
-	profile.UpdatedAt = verifiedAt
-	profile.Complete = true
+	profile := Profile{UserID: u.ID, UpdatedAt: verifiedAt}
 	if err = s.saveProfile(profile); err != nil {
 		return err
 	}
@@ -301,7 +274,6 @@ func (a *App) register(w http.ResponseWriter, r *http.Request, _ User) error {
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	committed = true
 	http.SetCookie(w, cookie)
 	a.clearRate(r, email)
 	a.activity(u, "验证邮箱并注册账号", u.Name)

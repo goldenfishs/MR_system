@@ -4,14 +4,9 @@ import { useRoute, useRouter } from "vue-router";
 import { api, ApiError } from "../lib/api";
 import { auth } from "../lib/auth";
 import type { PublicConfig, User } from "../lib/types";
-import ProfileFields from "../components/ProfileFields.vue";
-import { blankProfile, profileError, type PhotoInput } from "../lib/platform";
-const profile = ref(blankProfile());
-const photo = ref<PhotoInput | null>(null);
 const route = useRoute(),
   router = useRouter();
 const register = ref(false),
-  name = ref(""),
   email = ref(""),
   password = ref(""),
   confirmPassword = ref(""),
@@ -118,21 +113,11 @@ async function submit() {
     error.value = "当前暂不能注册，请稍后重试或联系战队管理员。";
     return;
   }
-  if (
-    !email.value.trim() ||
-    !password.value ||
-    (register.value && !name.value.trim())
-  ) {
+  if (!email.value.trim() || !password.value) {
     error.value = "请完整填写账号信息。";
     return;
   }
   if (register.value) {
-    profile.value.name = name.value.trim();
-    const missing = profileError(profile.value, Boolean(photo.value));
-    if (missing) {
-      error.value = missing;
-      return;
-    }
     if (!/^\d{6}$/.test(verificationCode.value.trim())) {
       error.value = "请输入邮件中的 6 位验证码。";
       return;
@@ -161,17 +146,6 @@ async function submit() {
         password: password.value,
         ...(register.value
           ? {
-              name: name.value.trim(),
-              profile: {
-                gender: profile.value.gender,
-                university: profile.value.university,
-                major: profile.value.major,
-                className: profile.value.className,
-                studentNumber: profile.value.studentNumber,
-                phone: profile.value.phone,
-                hobbies: profile.value.hobbies,
-              },
-              photo: photo.value,
               verificationCode: verificationCode.value.trim(),
             }
           : {}),
@@ -204,7 +178,7 @@ async function submit() {
         ></a
       ><span class="login-season">{{ config?.season || "机器人战队" }}</span>
     </header>
-    <main :class="['login-main', { 'register-main': register }]">
+    <main class="login-main">
       <div class="login-heading">
         <div class="team-avatar">
           <img :src="config?.logoUrl || '/mark.png'" width="52" height="52" alt="M" @error="($event.target as HTMLImageElement).src = '/mark.png'" />
@@ -233,15 +207,15 @@ async function submit() {
             :disabled="busy"
             @click="selectMode(true)"
           >
-            <v-icon size="19">mdi-account-plus-outline</v-icon>注册报名
+            <v-icon size="19">mdi-account-plus-outline</v-icon>注册账号
           </button>
         </div>
         <div class="login-form">
-          <h2>{{ register ? "创建你的报名账号" : "登录协作台" }}</h2>
+          <h2>{{ register ? "创建你的账号" : "登录协作台" }}</h2>
           <p class="form-description">
             {{
               register
-                ? "填写必需资料并验证邮箱，注册后即可选择团队报名。"
+                ? "使用邮箱与密码注册，验证邮箱后即可登录。在个人中心补全资料后即可报名。"
                 : "使用邮箱与密码登录，继续处理战队事务。"
             }}
           </p>
@@ -349,24 +323,6 @@ async function submit() {
               <p class="verification-hint">
                 验证码 10 分钟内有效，请留意垃圾邮件箱。
               </p>
-              <label for="login-name">姓名</label>
-              <v-text-field
-                id="login-name"
-                v-model="name"
-                placeholder="请输入你的姓名"
-                autocomplete="name"
-                maxlength="60"
-                :disabled="busy"
-                hide-details
-                class="mb-5"
-                required
-              />
-              <ProfileFields
-                v-model="profile"
-                v-model:photo="photo"
-                hide-name
-                :disabled="busy"
-              />
             </template>
             <label for="login-password">密码</label
             ><v-text-field
@@ -492,9 +448,6 @@ async function submit() {
   max-width: 510px;
   margin: 0 auto;
   padding: 32px 16px 22px;
-}
-.register-main {
-  max-width: 730px;
 }
 .login-heading {
   text-align: center;

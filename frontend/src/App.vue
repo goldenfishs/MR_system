@@ -7,6 +7,7 @@ import { canAccessLearning, canOpenLearning, canAccessDirection, canAccessLearni
 import { api } from "./lib/api";
 import { groupLabel, hasPermission } from "./lib/permissions";
 import type { Permission, Settings } from "./lib/types";
+import ProfileCompletionReminder from "./components/ProfileCompletionReminder.vue";
 const route = useRoute(),
   router = useRouter();
 const { mobile } = useDisplay();
@@ -361,6 +362,7 @@ function directionLink(direction: string) {
       </v-app-bar>
     </template>
     <v-main><router-view :key="accessIdentity" /></v-main>
+    <ProfileCompletionReminder />
     <v-snackbar
       :model-value="!!logoutError"
       color="error"

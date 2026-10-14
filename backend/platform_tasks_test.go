@@ -367,7 +367,7 @@ func TestJudgeSandboxProjectionAndSubmissionAuthenticity(t *testing.T) {
 		t.Fatal("admin cannot inspect hidden result")
 	}
 	c.login("student")
-	c.register("另一个成员", "judge.other@example.com", "LongPassword!123")
+	c.register("judge.other@example.com", "LongPassword!123")
 	c.request("GET", "/api/judge-runs/"+run.ID, nil, 403)
 }
 func TestJudgeExamWindowOwnershipAndCapacity(t *testing.T) {

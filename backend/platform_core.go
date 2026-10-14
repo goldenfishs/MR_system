@@ -166,14 +166,22 @@ func profileFromFields(name string, in ProfileFields) Profile {
 	return p
 }
 func (s *Store) profile(u User) (Profile, error) {
+	name := u.Name
+	if name == unfilledProfileName {
+		name = ""
+	}
 	p, err := readOne[Profile](s, "SELECT payload FROM profiles WHERE user_id=?", u.ID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Profile{UserID: u.ID, Name: u.Name}, nil
+		return Profile{UserID: u.ID, Name: name}, nil
 	}
 	if err != nil {
 		return p, err
 	}
-	p.Name = u.Name
+	if p.Name == "" {
+		p.Name = name
+	} else {
+		p.Name = u.Name
+	}
 	p.Complete = validateProfile(p) == nil && p.PhotoFileID != ""
 	return p, nil
 }

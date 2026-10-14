@@ -1,6 +1,6 @@
 # API 契约
 
-所有接口位于 `/api`。除文件下载和预览外，成功响应为 JSON；失败响应为 `{error:string}`，限流时增加 `retryAfterSeconds` 和 `Retry-After`。认证使用 HttpOnly、SameSite=Lax 会话 Cookie；修改请求在包含 `Origin` 时校验来源。日期使用带时区的 RFC 3339，ID 为字符串。通用 JSON 请求上限 1 MiB，注册及资料更新上限 4 MiB；上传请求上限 26 MiB，单个文件上限 25 MiB。
+所有接口位于 `/api`。除文件下载和预览外，成功响应为 JSON；失败响应为 `{error:string}`，限流时增加 `retryAfterSeconds` 和 `Retry-After`。认证使用 HttpOnly、SameSite=Lax 会话 Cookie；修改请求在包含 `Origin` 时校验来源。日期使用带时区的 RFC 3339，ID 为字符串。通用 JSON 请求（含注册）上限 1 MiB，资料和标志更新上限 4 MiB；上传请求上限 26 MiB，单个文件上限 25 MiB。
 
 ## 身份与资料
 
@@ -28,10 +28,10 @@ interface PhotoInput { name: string; contentBase64: string }
 ```
 
 - `POST /auth/send-verification-code`：`{email}` → `{message,cooldownSeconds:60,expiresInSeconds:600}`。验证码为 6 位数字，10 分钟有效，60 秒内不能重发；每邮箱每小时最多 5 次、每来源 IP 每 15 分钟最多 10 次，错误校验最多 5 次。新验证码使旧码失效。接口不返回验证码，也不披露邮箱是否已注册。
-- `POST /auth/register`：`{name,email,password,verificationCode,profile:ProfileFields,photo:PhotoInput}` → `{user:User}`。姓名、邮箱、密码、验证码、性别、学校、专业、班级、学号、电话、照片必填，兴趣爱好可以为空。照片为不带 data URL 前缀的 base64 JPEG/PNG，原文件不超过 2 MiB。仅创建 freshman 身份，memberType=freshman、groupGrants=[]，并自动登录。身份、Profile、照片元数据、验证码消费和会话同一事务提交；失败时删除新照片文件。
+- `POST /auth/register`：`{email,password,verificationCode}` → `{user:User}`。仅填写邮箱、密码及邮箱验证码；确认密码只在前端比较，不发送至 API。不接受 `name`、`profile`、`photo` 或身份／权限字段，额外字段返回 400。仅创建 freshman 身份，memberType=freshman、groupGrants=[]，并自动登录。`User.name` 初始显示为「未填写姓名」，空 Profile、用户、验证码消费和会话同一事务提交，注册不上传照片。
 - `POST /auth/login`：`{email,password}` → `{user:User}`。`POST /auth/logout` → `{ok:true}`。
 - `GET /auth/me` → `{user:User,demoMode:boolean}`；匿名访问返回 401。
-- `GET /profile` → `{profile:Profile}`。仅当前用户；旧账号没有资料时返回姓名和 `complete:false`，不创建虚假资料。
+- `GET /profile` → `{profile:Profile}`。仅当前用户；新注册账号的姓名及资料字段为空，`complete:false`。旧账号没有资料时返回原有姓名和 `complete:false`，不补造学校、学号或照片等资料。
 - `PATCH /profile`：`{name,...ProfileFields,photo?:PhotoInput}` → `{profile:Profile,user:User}`。完整提交资料字段；已有照片可省略 `photo` 保留原照片，首次补全必须附照片。
 - `GET /users?permission=members|recruitment|records|mail` → `{items:(User & {profile:Profile})[]}`，默认用途 members，供审核、档案分配和邮件选人。管理员全部；组管理员必须有所选模块权限，并按接收人当前成员方向筛选。recruitment 也匹配报名方向和有同组报名权限的审核人员；mail 对尚无成员方向者匹配待审核的新报名或未拒绝的历史报名，用于招新联系。普通用户不能读取其他人员资料；不支持其他用途值。
 
@@ -39,6 +39,8 @@ mail／records 选人不会自动授予完整资料访问权：只有该用途�
 - `GET /public/config` → `{organization,season,demoMode,applicationOpen,applicationDeadline,emailVerificationRequired:true,registrationEnabled:boolean,brandName,logoUrl,teamName,secondaryTeamName,competitions:Competition[]}`，无需登录。`registrationEnabled` 表示已配置 SMTP，不保证外部邮件服务可用。
 
 新注册记录 `emailVerifiedAt`。已有、引导和管理员创建的账号不会被追溯标记为已验证。密码最少 10 字节、最多 72 字节；工作人员初始密码最少 12 字节。
+
+注册后在「个人中心 → 个人资料」填写姓名、性别、学校、专业、班级、学号、联系电话及本人照片；这些项目仍为报名必填，兴趣爱好选填。照片为不带 data URL 前缀的 base64 JPEG/PNG，原文件不超过 2 MiB。登录后的资料提醒以 `Profile.complete` 为准，不以显示姓名或前端本地记录代替服务端校验；资料未完整仍可进入系统，提交团队报名须先补全。
 
 管理员拥有全部权限；group_admin 可兼任多个组，以 groupGrants 的每条 direction/permissions 独立授权。`recruitment` 为报名与历史面试审核，`assessment` 为新生培养阶段与最终考核确认，`tasks` 为作业／题库／考试发布、编辑与评分，`knowledge` 为知识库管理，`discussions` 为私问答疑与精选公开，`members` 为组内成员查看，`records` 为组内荣誉／档案发放，`mail` 为组内批量邮件。空组别的全队管理内容仅管理员可维护。组权限不允许转授权限或修改平台设置；考核权限仅能按完整培养流程晋升新生，不能分配管理员身份。
 

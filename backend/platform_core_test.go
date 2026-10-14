@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"mime/multipart"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 )
@@ -62,43 +61,58 @@ func completeProfile(t *testing.T, c *testClient) Profile {
 	p := testProfileFields()
 	return unmarshal[Profile](t, c.request("PATCH", "/api/profile", map[string]any{"name": "完整资料学员", "gender": p.Gender, "university": p.University, "major": p.Major, "className": p.ClassName, "studentNumber": p.StudentNumber, "phone": p.Phone, "hobbies": "机器人", "photo": testPhoto()}, 200)["profile"])
 }
-func TestRegistrationRequiresProfileAndPhotoAtomically(t *testing.T) {
+func TestRegistrationDefersProfileUntilAfterLogin(t *testing.T) {
 	a, c := emailSetup(t)
 	email := "profile@example.com"
 	code := c.verification(email)
 	body := registrationBody(email, code)
-	delete(body, "profile")
+	// Personal information belongs to the authenticated profile endpoint.
+	for key, value := range map[string]any{"name": "注册时姓名", "profile": testProfileFields(), "photo": testPhoto(), "role": "admin"} {
+		body[key] = value
+		c.request("POST", "/api/auth/register", body, 400)
+		delete(body, key)
+	}
+	body["password"] = "short"
 	c.request("POST", "/api/auth/register", body, 400)
-	body["profile"] = testProfileFields()
-	delete(body, "photo")
-	c.request("POST", "/api/auth/register", body, 400)
-	body["photo"] = PhotoInput{Name: "fake.png", ContentBase64: base64.StdEncoding.EncodeToString([]byte("not an image"))}
-	c.request("POST", "/api/auth/register", body, 400)
-	body["photo"] = testPhoto()
+	body["password"] = "StrongPassword!2026"
 	if err := a.store.exec(`CREATE TRIGGER fail_profile BEFORE INSERT ON profiles BEGIN SELECT RAISE(ABORT, 'test failure'); END`); err != nil {
 		t.Fatal(err)
 	}
 	c.request("POST", "/api/auth/register", body, 500)
-	for _, table := range []string{"users", "files", "profiles"} {
+	for _, table := range []string{"users", "files", "profiles", "sessions"} {
 		var count int
 		if err := a.store.row("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("failed registration leaked %s", table)
 		}
 	}
-	files, err := os.ReadDir(a.uploadRoot())
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatal(err)
-	}
-	if len(files) != 0 {
-		t.Fatal("failed registration leaked photo bytes")
-	}
-	if err = a.store.exec("DROP TRIGGER fail_profile"); err != nil {
+	if err := a.store.exec("DROP TRIGGER fail_profile"); err != nil {
 		t.Fatal(err)
 	}
 	user := unmarshal[User](t, c.request("POST", "/api/auth/register", body, 201)["user"])
 	p := unmarshal[Profile](t, c.request("GET", "/api/profile", nil, 200)["profile"])
-	if !p.Complete || p.UserID != user.ID || p.StudentNumber == "" || p.PhotoFileID == "" {
-		t.Fatalf("registration did not persist complete profile: %+v", p)
+	if user.Name != unfilledProfileName || p.Complete || p.UserID != user.ID || p.Name != "" || p.StudentNumber != "" || p.PhotoFileID != "" {
+		t.Fatalf("registration should leave personal information unfilled: user=%+v, profile=%+v", user, p)
+	}
+	var assets int
+	if err := a.store.row("SELECT COUNT(*) FROM files").Scan(&assets); err != nil || assets != 0 {
+		t.Fatal("account registration should not create a photo asset")
+	}
+	// All mandatory profile fields and a valid photo remain required to complete it.
+	fields := testProfileFields()
+	update := map[string]any{"name": "真实姓名", "gender": fields.Gender, "university": fields.University, "major": fields.Major, "className": fields.ClassName, "studentNumber": fields.StudentNumber, "phone": fields.Phone}
+	c.request("PATCH", "/api/profile", update, 400)
+	update["photo"] = PhotoInput{Name: "fake.png", ContentBase64: base64.StdEncoding.EncodeToString([]byte("not an image"))}
+	c.request("PATCH", "/api/profile", update, 400)
+	if current := unmarshal[Profile](t, c.request("GET", "/api/profile", nil, 200)["profile"]); current.Complete || current.Name != "" {
+		t.Fatal("invalid profile updates changed an incomplete account")
+	}
+	p = completeProfile(t, c)
+	if !p.Complete || p.StudentNumber == "" || p.PhotoFileID == "" {
+		t.Fatalf("authenticated user could not complete profile: %+v", p)
+	}
+	me := unmarshal[User](t, c.request("GET", "/api/auth/me", nil, 200)["user"])
+	if me.Name != p.Name || me.Name == unfilledProfileName {
+		t.Fatal("profile completion did not update account identity")
 	}
 	response := downloadForTest(t, c, p.PhotoFileID, "preview", 200)
 	if response.Header().Get("Content-Type") != "image/png" || !strings.HasPrefix(response.Header().Get("Content-Disposition"), "inline") {
@@ -151,7 +165,7 @@ func TestTeamAdmissionAndRecordPrivacy(t *testing.T) {
 	application := unmarshal[TeamApplication](t, c.request("POST", "/api/teams/"+team.ID+"/applications", payload, 201)["item"])
 	c.request("PATCH", "/api/team-applications/"+application.ID, map[string]string{"status": "accepted"}, 403)
 	// A distinct student cannot read another student's application or files.
-	other := unmarshal[User](t, c.register("另一学员", "other-team@example.com", "StrongPassword!2026")["user"])
+	other := unmarshal[User](t, c.register("other-team@example.com", "StrongPassword!2026")["user"])
 	visible := unmarshal[[]TeamApplication](t, c.request("GET", "/api/teams/"+team.ID+"/applications", nil, 200)["items"])
 	if len(visible) != 0 {
 		t.Fatal("team applications leaked")

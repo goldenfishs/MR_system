@@ -158,7 +158,7 @@ func (a *App) wrapWithMutationLock(auth, mutationLock bool, handler func(http.Re
 			limit := int64(1 << 20)
 			if r.URL.Path == "/api/files" {
 				limit = 26 << 20
-			} else if r.URL.Path == "/api/auth/register" || r.URL.Path == "/api/profile" || r.URL.Path == "/api/settings/logo" {
+			} else if r.URL.Path == "/api/profile" || r.URL.Path == "/api/settings/logo" {
 				limit = 4 << 20
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, limit)
@@ -455,6 +455,13 @@ func (a *App) saveApplication(w http.ResponseWriter, r *http.Request, u User) er
 	}
 	if !s.ApplicationOpen || expired(s.ApplicationDeadline) {
 		return fail(409, "本轮报名已关闭")
+	}
+	profile, err := a.store.profile(u)
+	if err != nil {
+		return err
+	}
+	if !profile.Complete {
+		return fail(400, "请先补全个人资料和照片")
 	}
 	var in Applicant
 	if err = decode(r, &in); err != nil {

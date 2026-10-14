@@ -4,11 +4,16 @@ import "testing"
 
 func TestWorkspaceScopeAndNewMembershipList(t *testing.T) {
 	_, c := setup(t)
-	user := unmarshal[User](t, c.register("新团队成员", "new-membership@example.com", "StrongPassword!2026")["user"])
+	user := unmarshal[User](t, c.register("new-membership@example.com", "StrongPassword!2026")["user"])
 	resume := uploadForTest(t, c, "resume.pdf", []byte("%PDF-1.7\nresume"), 201)
 	c.login("admin")
 	team := unmarshal[Team](t, c.request("POST", "/api/teams", map[string]any{"name": "校队", "competition": "ROBOCON", "directions": []string{"机械"}}, 201)["item"])
 	c.request("POST", "/api/auth/login", map[string]string{"email": user.Email, "password": "StrongPassword!2026"}, 200)
+	c.request("POST", "/api/teams/"+team.ID+"/applications", map[string]string{"direction": "机械", "resumeFileId": resume.ID}, 400)
+	if unmarshal[bool](t, c.request("GET", "/api/workspace-summary", nil, 200)["profileComplete"]) {
+		t.Fatal("new account unexpectedly has a complete profile")
+	}
+	completeProfile(t, c)
 	application := unmarshal[TeamApplication](t, c.request("POST", "/api/teams/"+team.ID+"/applications", map[string]string{"direction": "机械", "resumeFileId": resume.ID}, 201)["item"])
 	c.login("admin")
 	c.request("PATCH", "/api/team-applications/"+application.ID, map[string]string{"status": "accepted"}, 200)

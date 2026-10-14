@@ -40,7 +40,7 @@ async function load() {
     if (trainingResult.status === "fulfilled") training.value = trainingResult.value.items.filter(item => item.userId === auth.user?.id);
     else trainingError.value = (trainingResult.reason as Error).message;
     form.value = {
-      name: profile.value.name || auth.user?.name || "",
+      name: profile.value.name || "",
       gender: profile.value.gender,
       university: profile.value.university,
       major: profile.value.major,
@@ -73,6 +73,7 @@ async function save() {
     ).profile;
     photo.value = null;
     if (auth.user) auth.user.name = profile.value.name;
+    window.dispatchEvent(new Event("profile-updated"));
     notice.value = "个人资料已保存，后续报名会使用这些资料。";
   } catch (e) {
     error.value = (e as Error).message;
