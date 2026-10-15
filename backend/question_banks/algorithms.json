@@ -1,0 +1,1010 @@
+[
+  {
+    "id": "algo-001",
+    "direction": "视觉算法",
+    "title": "C++：整数除法",
+    "description": "在 C++17 中，表达式 7 / 2 的值是多少？两个字面量的类型都是 int。",
+    "type": "single_choice",
+    "options": [
+      "编译错误",
+      "4",
+      "3.5",
+      "3"
+    ],
+    "answers": [
+      "3"
+    ],
+    "explanation": "两个操作数均为整数，整数除法截去小数部分，结果为 3。",
+    "tags": [
+      "C++",
+      "数据类型"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/cpp/language/operator_arithmetic.html"
+    ]
+  },
+  {
+    "id": "algo-002",
+    "direction": "视觉算法",
+    "title": "C++：引用修改原变量",
+    "description": "执行下面代码后，a 的值是多少？\nint a = 3;\nint& ref = a;\nref += 2;",
+    "type": "single_choice",
+    "options": [
+      "5",
+      "2",
+      "3",
+      "未定义行为"
+    ],
+    "answers": [
+      "0"
+    ],
+    "explanation": "ref 是 a 的引用，对 ref 的修改作用于 a，因此 a 为 5。",
+    "tags": [
+      "C++",
+      "引用"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/cpp/language/reference.html"
+    ]
+  },
+  {
+    "id": "algo-003",
+    "direction": "视觉算法",
+    "title": "C++：vector 的尾部操作",
+    "description": "已有 std::vector<int> v{1, 2}; 随后执行 v.push_back(3); v.pop_back(); 最终 v.size() 是多少？",
+    "type": "single_choice",
+    "options": [
+      "1",
+      "0",
+      "2",
+      "3"
+    ],
+    "answers": [
+      "2"
+    ],
+    "explanation": "push_back 添加末尾元素，pop_back 删除末尾元素；元素数量先从 2 变 3，再回到 2。",
+    "tags": [
+      "C++",
+      "容器"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/cpp/container/vector.html"
+    ]
+  },
+  {
+    "id": "algo-004",
+    "direction": "视觉算法",
+    "title": "C++：数组合法下标",
+    "description": "声明 int a[4] = {}; 下列哪些访问的下标合法？（多选）",
+    "type": "multiple_choice",
+    "options": [
+      "a[4]",
+      "a[-1]",
+      "a[0]",
+      "a[3]"
+    ],
+    "answers": [
+      "2",
+      "3"
+    ],
+    "explanation": "长度为 4 的数组合法下标为 0、1、2、3；越界访问不能用于正常读取元素。",
+    "tags": [
+      "C++",
+      "数组"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/cpp/language/array.html"
+    ]
+  },
+  {
+    "id": "algo-005",
+    "direction": "视觉算法",
+    "title": "C++：逻辑与和按位与",
+    "description": "设 int a=2, b=1; 表达式 (a && b) 和 (a & b) 的值依次是？",
+    "type": "single_choice",
+    "options": [
+      "0 和 0",
+      "0 和 1",
+      "1 和 0",
+      "1 和 1"
+    ],
+    "answers": [
+      "2"
+    ],
+    "explanation": "逻辑与检查两值是否非零，得到 true（转换为整数是1）；按位与计算二进制 10 & 01，得到0。",
+    "tags": [
+      "C++",
+      "运算符"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/cpp/language/operator_logical.html"
+    ]
+  },
+  {
+    "id": "algo-006",
+    "direction": "视觉算法",
+    "title": "C++：传值参数",
+    "description": "下面函数被调用后，主函数变量 a 的值是多少？\nvoid change(int x) { x = 9; }\n// 主函数中：\nint a = 2;\nchange(a);",
+    "type": "single_choice",
+    "options": [
+      "9",
+      "不能编译",
+      "2",
+      "0"
+    ],
+    "answers": [
+      "2"
+    ],
+    "explanation": "int 参数按值传递，x 是副本。修改 x 不会修改实参 a。",
+    "tags": [
+      "C++",
+      "函数"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/cpp/language/function.html"
+    ]
+  },
+  {
+    "id": "algo-007",
+    "direction": "视觉算法",
+    "title": "C++：计数循环",
+    "description": "执行后 s 等于多少？只填写十进制整数。\nint s = 0;\nfor (int i = 1; i <= 4; ++i) s += i;",
+    "type": "fill_blank",
+    "options": [],
+    "answers": [
+      "10"
+    ],
+    "explanation": "s = 1 + 2 + 3 + 4 = 10。",
+    "tags": [
+      "C++",
+      "循环"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/cpp/language/for.html"
+    ]
+  },
+  {
+    "id": "algo-008",
+    "direction": "视觉算法",
+    "title": "C++：二分查找的前提",
+    "description": "准备使用 std::lower_bound 在 std::vector<int> 中查找第一个不小于 x 的元素。为使任意 x 都能正确查询，通常应先保证数组满足什么条件？",
+    "type": "single_choice",
+    "options": [
+      "所有元素互不相同",
+      "数组长度是2的整数次幂",
+      "按升序排序",
+      "按随机顺序存放"
+    ],
+    "answers": [
+      "2"
+    ],
+    "explanation": "按相同比较规则升序排序可以保证相对于查询值的分区条件；重复元素是允许的。",
+    "tags": [
+      "C++",
+      "二分查找"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/cpp/algorithm/lower_bound.html"
+    ]
+  },
+  {
+    "id": "algo-009",
+    "direction": "视觉算法",
+    "title": "Python：range 的右边界",
+    "description": "Python 3 中 list(range(2, 8, 2)) 的结果是？",
+    "type": "single_choice",
+    "options": [
+      "[2, 4, 6]",
+      "[2, 3, 4, 5, 6, 7]",
+      "[0, 2, 4, 6]",
+      "[2, 4, 6, 8]"
+    ],
+    "answers": [
+      "0"
+    ],
+    "explanation": "range 包含起点、不包含终点，步长为2，因此是2、4、6。",
+    "tags": [
+      "Python",
+      "循环"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://docs.python.org/3/tutorial/controlflow.html"
+    ]
+  },
+  {
+    "id": "algo-010",
+    "direction": "视觉算法",
+    "title": "Python：列表切片",
+    "description": "Python 3 中 [10, 20, 30, 40, 50][1:4:2] 的结果是？",
+    "type": "single_choice",
+    "options": [
+      "[10, 30]",
+      "[20, 40]",
+      "[20, 30, 40]",
+      "[20, 40, 50]"
+    ],
+    "answers": [
+      "1"
+    ],
+    "explanation": "切片取下标1到4之前、步长为2，即下标1和3。",
+    "tags": [
+      "Python",
+      "列表"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://docs.python.org/3/tutorial/introduction.html#lists"
+    ]
+  },
+  {
+    "id": "algo-011",
+    "direction": "视觉算法",
+    "title": "Python：列表别名",
+    "description": "执行后 a 的值是？\na = [1, 2]\nb = a\nb.append(3)",
+    "type": "single_choice",
+    "options": [
+      "[1, 2, 3]",
+      "[1, 2]",
+      "程序报错",
+      "[3]"
+    ],
+    "answers": [
+      "0"
+    ],
+    "explanation": "b=a 不复制列表，两变量引用同一对象；append 会修改这个对象。",
+    "tags": [
+      "Python",
+      "可变对象"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://docs.python.org/3/tutorial/classes.html#a-word-about-names-and-objects"
+    ]
+  },
+  {
+    "id": "algo-012",
+    "direction": "视觉算法",
+    "title": "Python：浅拷贝独立追加",
+    "description": "执行后 a 的值是？\na = [1, 2]\nb = a.copy()\nb.append(3)",
+    "type": "single_choice",
+    "options": [
+      "程序报错",
+      "[3]",
+      "[1, 2, 3]",
+      "[1, 2]"
+    ],
+    "answers": [
+      "3"
+    ],
+    "explanation": "copy 创建新的外层列表；向 b 追加元素不会改变 a。若内部含可变对象，浅拷贝仍可能共享内部对象。",
+    "tags": [
+      "Python",
+      "列表"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://docs.python.org/3/tutorial/datastructures.html"
+    ]
+  },
+  {
+    "id": "algo-013",
+    "direction": "视觉算法",
+    "title": "Python：字典缺省值",
+    "description": "Python 3 执行 d = {\"x\": 2} 后，d.get(\"y\", 0) 返回什么？",
+    "type": "single_choice",
+    "options": [
+      "抛出 KeyError",
+      "0",
+      "2",
+      "None"
+    ],
+    "answers": [
+      "1"
+    ],
+    "explanation": "get 在键不存在时返回提供的默认值0，并不会自动插入该键。",
+    "tags": [
+      "Python",
+      "字典"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://docs.python.org/3/tutorial/datastructures.html#dictionaries"
+    ]
+  },
+  {
+    "id": "algo-014",
+    "direction": "视觉算法",
+    "title": "Python：整除和余数",
+    "description": "Python 3 中 17 // 5 和 17 % 5 的结果依次是？",
+    "type": "single_choice",
+    "options": [
+      "3 和 2",
+      "4 和 -3",
+      "3.4 和 2",
+      "2 和 3"
+    ],
+    "answers": [
+      "0"
+    ],
+    "explanation": "17 = 3×5 + 2，整数商为3，余数为2。",
+    "tags": [
+      "Python",
+      "运算符"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://docs.python.org/3/tutorial/introduction.html#numbers"
+    ]
+  },
+  {
+    "id": "algo-015",
+    "direction": "视觉算法",
+    "title": "Python：列表推导式",
+    "description": "表达式 [x*x for x in range(4) if x % 2 == 0] 的结果是？",
+    "type": "single_choice",
+    "options": [
+      "[0, 1, 4, 9]",
+      "[4, 16]",
+      "[1, 9]",
+      "[0, 4]"
+    ],
+    "answers": [
+      "3"
+    ],
+    "explanation": "range(4)给出0到3，筛出偶数0和2，再取平方得到0和4。",
+    "tags": [
+      "Python",
+      "列表推导式"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://docs.python.org/3/tutorial/datastructures.html#list-comprehensions"
+    ]
+  },
+  {
+    "id": "algo-016",
+    "direction": "视觉算法",
+    "title": "Python：集合的去重",
+    "description": "Python 3 中 len(set([2, 2, 3, 3, 3, 5])) 的值是多少？只填写十进制整数。",
+    "type": "fill_blank",
+    "options": [],
+    "answers": [
+      "3"
+    ],
+    "explanation": "集合只保留不同元素：2、3、5，共3个。",
+    "tags": [
+      "Python",
+      "集合"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://docs.python.org/3/tutorial/datastructures.html#sets"
+    ]
+  },
+  {
+    "id": "algo-017",
+    "direction": "视觉算法",
+    "title": "算法：二分查找复杂度",
+    "description": "在有 n 个元素的有序随机访问数组上，二分查找最坏情况下需要的比较次数数量级是？",
+    "type": "single_choice",
+    "options": [
+      "O(n²)",
+      "O(log n)",
+      "O(n log n)",
+      "O(n)"
+    ],
+    "answers": [
+      "1"
+    ],
+    "explanation": "每轮排除约一半候选区间，至多进行对数级轮数。",
+    "tags": [
+      "算法",
+      "二分查找"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://github.com/TheAlgorithms/C-Plus-Plus/blob/master/search/binary_search.cpp"
+    ]
+  },
+  {
+    "id": "algo-018",
+    "direction": "视觉算法",
+    "title": "算法：双重循环复杂度",
+    "description": "以下代码中，计数语句执行多少次？\nfor i in range(n):\n    for j in range(n):\n        count += 1",
+    "type": "single_choice",
+    "options": [
+      "n² 次",
+      "n 次",
+      "2n 次",
+      "log₂(n) 次"
+    ],
+    "answers": [
+      "0"
+    ],
+    "explanation": "每次外层循环执行n次内层循环，总共n×n次。",
+    "tags": [
+      "算法",
+      "复杂度"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://docs.python.org/3/tutorial/controlflow.html"
+    ]
+  },
+  {
+    "id": "algo-019",
+    "direction": "视觉算法",
+    "title": "算法：先进先出的结构",
+    "description": "按到达顺序处理机器人消息，先收到的消息先处理，应选择哪种基本数据结构？",
+    "type": "single_choice",
+    "options": [
+      "二叉搜索树",
+      "队列",
+      "无序集合",
+      "栈"
+    ],
+    "answers": [
+      "1"
+    ],
+    "explanation": "队列遵循先进先出（FIFO）；栈遵循后进先出。",
+    "tags": [
+      "算法",
+      "队列"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://docs.python.org/3/tutorial/datastructures.html#using-lists-as-queues"
+    ]
+  },
+  {
+    "id": "algo-020",
+    "direction": "视觉算法",
+    "title": "算法：括号匹配的数据结构",
+    "description": "检查字符串中的 () [] {} 是否正确嵌套，哪种数据结构最直接？",
+    "type": "single_choice",
+    "options": [
+      "哈希集合",
+      "优先队列",
+      "栈",
+      "并查集"
+    ],
+    "answers": [
+      "2"
+    ],
+    "explanation": "用栈保存尚未匹配的左括号；遇到右括号需匹配最近一个左括号。",
+    "tags": [
+      "算法",
+      "栈"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://docs.python.org/3/tutorial/datastructures.html#using-lists-as-stacks"
+    ]
+  },
+  {
+    "id": "algo-021",
+    "direction": "视觉算法",
+    "title": "算法：BFS 的适用场景",
+    "description": "在每条边权值均为1的图中，求起点到各点的最少边数，通常使用？",
+    "type": "single_choice",
+    "options": [
+      "只进行一次深度优先遍历",
+      "广度优先搜索（BFS）",
+      "任意顺序扫描顶点一次",
+      "二分查找"
+    ],
+    "answers": [
+      "1"
+    ],
+    "explanation": "BFS逐层扩展，首次访问某顶点时的层数就是起点到它的最少边数。",
+    "tags": [
+      "算法",
+      "图搜索"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://github.com/TheAlgorithms/Python/blob/master/graphs/breadth_first_search.py"
+    ]
+  },
+  {
+    "id": "algo-022",
+    "direction": "视觉算法",
+    "title": "算法：前缀和区间计算",
+    "description": "数组 a=[3,1,4,2]，定义 prefix[0]=0、prefix[i+1]=prefix[i]+a[i]。闭区间下标[1,3]的元素和应使用哪一个表达式？",
+    "type": "single_choice",
+    "options": [
+      "prefix[4] + prefix[1]",
+      "prefix[3] - prefix[0]",
+      "prefix[3] - prefix[1]",
+      "prefix[4] - prefix[1]"
+    ],
+    "answers": [
+      "3"
+    ],
+    "explanation": "prefix[4]包含a[0]至a[3]，减去prefix[1]中的a[0]，结果为1+4+2=7。",
+    "tags": [
+      "算法",
+      "前缀和"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://github.com/TheAlgorithms/Python/blob/master/data_structures/arrays/prefix_sum.py"
+    ]
+  },
+  {
+    "id": "algo-023",
+    "direction": "视觉算法",
+    "title": "算法：最大公约数",
+    "description": "使用欧几里得算法，gcd(48,18) 等于多少？只填写十进制整数。",
+    "type": "fill_blank",
+    "options": [],
+    "answers": [
+      "6"
+    ],
+    "explanation": "48 mod 18=12，18 mod 12=6，12 mod 6=0，所以最大公约数为6。",
+    "tags": [
+      "算法",
+      "数论"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://github.com/TheAlgorithms/Python/blob/master/maths/greatest_common_divisor.py"
+    ]
+  },
+  {
+    "id": "algo-024",
+    "direction": "视觉算法",
+    "title": "算法：动态规划基本要素",
+    "description": "设计动态规划解法时，下列哪些通常需要明确？（多选）",
+    "type": "multiple_choice",
+    "options": [
+      "初始状态与计算顺序",
+      "状态转移关系",
+      "所有题目都必须采用贪心选择",
+      "状态含义"
+    ],
+    "answers": [
+      "0",
+      "1",
+      "3"
+    ],
+    "explanation": "动态规划需定义状态、转移和边界，并确保依赖状态已得到；贪心选择不是动态规划的通用前提。",
+    "tags": [
+      "算法",
+      "动态规划"
+    ],
+    "difficulty": "进阶",
+    "sourceUrls": [
+      "https://github.com/TheAlgorithms/Python/tree/master/dynamic_programming"
+    ]
+  },
+  {
+    "id": "algo-025",
+    "direction": "视觉算法",
+    "title": "编程：传感器采样求和",
+    "description": "输入：第一行整数 n（1≤n≤100000）；第二行 n 个整数 ai（-10⁹≤ai≤10⁹）。输出所有采样值的和。C++ 请注意结果范围。\n示例输入：\n5\n3 -1 4 0 2\n示例输出：\n8\n\n支持使用 C++17 或 Python 3 编写程序，采用标准输入输出。不要输出额外提示文字。",
+    "type": "code",
+    "options": [],
+    "answers": [],
+    "explanation": "",
+    "tags": [
+      "C++",
+      "Python",
+      "数组",
+      "基础输入输出"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://docs.python.org/3/tutorial/datastructures.html"
+    ],
+    "judge": {
+      "enabled": true,
+      "languageIds": [
+        54,
+        71
+      ],
+      "timeLimitSeconds": 2,
+      "testCases": [
+        {
+          "input": "5\n3 -1 4 0 2\n",
+          "expectedOutput": "8\n",
+          "hidden": false
+        },
+        {
+          "input": "1\n-7\n",
+          "expectedOutput": "-7\n",
+          "hidden": true
+        },
+        {
+          "input": "4\n1000000000 1000000000 1000000000 1000000000\n",
+          "expectedOutput": "4000000000\n",
+          "hidden": true
+        },
+        {
+          "input": "3\n0 0 0\n",
+          "expectedOutput": "0\n",
+          "hidden": true
+        }
+      ]
+    }
+  },
+  {
+    "id": "algo-026",
+    "direction": "视觉算法",
+    "title": "编程：最大公约数",
+    "description": "输入一行两个整数 a,b（0≤a,b≤10⁹，且不同时为0），输出它们的最大公约数。\n示例输入：\n48 18\n示例输出：\n6\n\n支持使用 C++17 或 Python 3 编写程序，采用标准输入输出。不要输出额外提示文字。",
+    "type": "code",
+    "options": [],
+    "answers": [],
+    "explanation": "",
+    "tags": [
+      "C++",
+      "Python",
+      "数论",
+      "循环"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://github.com/TheAlgorithms/Python/blob/master/maths/greatest_common_divisor.py"
+    ],
+    "judge": {
+      "enabled": true,
+      "languageIds": [
+        54,
+        71
+      ],
+      "timeLimitSeconds": 2,
+      "testCases": [
+        {
+          "input": "48 18\n",
+          "expectedOutput": "6\n",
+          "hidden": false
+        },
+        {
+          "input": "0 25\n",
+          "expectedOutput": "25\n",
+          "hidden": true
+        },
+        {
+          "input": "17 13\n",
+          "expectedOutput": "1\n",
+          "hidden": true
+        },
+        {
+          "input": "1000000000 250000000\n",
+          "expectedOutput": "250000000\n",
+          "hidden": true
+        },
+        {
+          "input": "9 0\n",
+          "expectedOutput": "9\n",
+          "hidden": true
+        }
+      ]
+    }
+  },
+  {
+    "id": "algo-027",
+    "direction": "视觉算法",
+    "title": "编程：第一个不小于目标的位置",
+    "description": "输入：第一行 n 和 x（1≤n≤100000，-10⁹≤x≤10⁹），第二行 n 个按非降序排列的整数（范围同x）。输出第一个不小于 x 的元素下标（从0开始）；如果不存在，输出 n。要求时间复杂度 O(log n)。\n示例输入：\n5 4\n1 4 4 7 9\n示例输出：\n1\n\n支持使用 C++17 或 Python 3 编写程序，采用标准输入输出。不要输出额外提示文字。",
+    "type": "code",
+    "options": [],
+    "answers": [],
+    "explanation": "",
+    "tags": [
+      "C++",
+      "Python",
+      "二分查找",
+      "边界"
+    ],
+    "difficulty": "进阶",
+    "sourceUrls": [
+      "https://github.com/TheAlgorithms/C-Plus-Plus/blob/master/search/binary_search.cpp"
+    ],
+    "judge": {
+      "enabled": true,
+      "languageIds": [
+        54,
+        71
+      ],
+      "timeLimitSeconds": 2,
+      "testCases": [
+        {
+          "input": "5 4\n1 4 4 7 9\n",
+          "expectedOutput": "1\n",
+          "hidden": false
+        },
+        {
+          "input": "3 8\n1 2 3\n",
+          "expectedOutput": "3\n",
+          "hidden": true
+        },
+        {
+          "input": "1 -5\n0\n",
+          "expectedOutput": "0\n",
+          "hidden": true
+        },
+        {
+          "input": "4 2\n2 2 2 2\n",
+          "expectedOutput": "0\n",
+          "hidden": true
+        },
+        {
+          "input": "4 3\n1 2 4 6\n",
+          "expectedOutput": "2\n",
+          "hidden": true
+        }
+      ]
+    }
+  },
+  {
+    "id": "algo-028",
+    "direction": "视觉算法",
+    "title": "编程：括号序列检查",
+    "description": "输入一行仅包含 ()[]{} 的非空字符串，长度不超过100000。若每个右括号都与最近的未匹配左括号类型相同，且最终全部匹配，输出 YES，否则输出 NO。\n示例输入：\n{[()]}\n示例输出：\nYES\n\n支持使用 C++17 或 Python 3 编写程序，采用标准输入输出。不要输出额外提示文字。",
+    "type": "code",
+    "options": [],
+    "answers": [],
+    "explanation": "",
+    "tags": [
+      "C++",
+      "Python",
+      "栈",
+      "字符串"
+    ],
+    "difficulty": "进阶",
+    "sourceUrls": [
+      "https://docs.python.org/3/tutorial/datastructures.html#using-lists-as-stacks"
+    ],
+    "judge": {
+      "enabled": true,
+      "languageIds": [
+        54,
+        71
+      ],
+      "timeLimitSeconds": 2,
+      "testCases": [
+        {
+          "input": "{[()]}\n",
+          "expectedOutput": "YES\n",
+          "hidden": false
+        },
+        {
+          "input": "([)]\n",
+          "expectedOutput": "NO\n",
+          "hidden": true
+        },
+        {
+          "input": ")\n",
+          "expectedOutput": "NO\n",
+          "hidden": true
+        },
+        {
+          "input": "((\n",
+          "expectedOutput": "NO\n",
+          "hidden": true
+        },
+        {
+          "input": "()[]{}\n",
+          "expectedOutput": "YES\n",
+          "hidden": true
+        }
+      ]
+    }
+  },
+  {
+    "id": "algo-029",
+    "direction": "视觉算法",
+    "title": "编程：采样区间和",
+    "description": "输入：第一行 n,q（1≤n,q≤100000）；第二行 n 个整数（-10⁹≤ai≤10⁹）；之后q行每行两个下标 l,r（0≤l≤r<n）。对每次查询单独输出 a[l]+…+a[r]。要求预处理O(n)，每次查询O(1)。\n示例输入：\n4 2\n3 1 4 2\n1 3\n0 0\n示例输出：\n7\n3\n\n支持使用 C++17 或 Python 3 编写程序，采用标准输入输出。不要输出额外提示文字。",
+    "type": "code",
+    "options": [],
+    "answers": [],
+    "explanation": "",
+    "tags": [
+      "C++",
+      "Python",
+      "前缀和",
+      "数组"
+    ],
+    "difficulty": "进阶",
+    "sourceUrls": [
+      "https://github.com/TheAlgorithms/Python/blob/master/data_structures/arrays/prefix_sum.py"
+    ],
+    "judge": {
+      "enabled": true,
+      "languageIds": [
+        54,
+        71
+      ],
+      "timeLimitSeconds": 2,
+      "testCases": [
+        {
+          "input": "4 2\n3 1 4 2\n1 3\n0 0\n",
+          "expectedOutput": "7\n3\n",
+          "hidden": false
+        },
+        {
+          "input": "1 1\n-8\n0 0\n",
+          "expectedOutput": "-8\n",
+          "hidden": true
+        },
+        {
+          "input": "3 3\n1000000000 1000000000 1000000000\n0 2\n1 1\n1 2\n",
+          "expectedOutput": "3000000000\n1000000000\n2000000000\n",
+          "hidden": true
+        }
+      ]
+    }
+  },
+  {
+    "id": "algo-030",
+    "direction": "视觉算法",
+    "title": "编程：连续区间的最大和",
+    "description": "输入：第一行 n（1≤n≤100000）；第二行n个整数（-10⁹≤ai≤10⁹）。选择一个非空连续区间，使其元素之和最大，输出最大和。要求O(n)时间。\n示例输入：\n5\n-2 3 -1 4 -5\n示例输出：\n6\n\n支持使用 C++17 或 Python 3 编写程序，采用标准输入输出。不要输出额外提示文字。",
+    "type": "code",
+    "options": [],
+    "answers": [],
+    "explanation": "",
+    "tags": [
+      "C++",
+      "Python",
+      "动态规划",
+      "数组"
+    ],
+    "difficulty": "进阶",
+    "sourceUrls": [
+      "https://github.com/TheAlgorithms/Python/tree/master/dynamic_programming"
+    ],
+    "judge": {
+      "enabled": true,
+      "languageIds": [
+        54,
+        71
+      ],
+      "timeLimitSeconds": 2,
+      "testCases": [
+        {
+          "input": "5\n-2 3 -1 4 -5\n",
+          "expectedOutput": "6\n",
+          "hidden": false
+        },
+        {
+          "input": "3\n-5 -2 -9\n",
+          "expectedOutput": "-2\n",
+          "hidden": true
+        },
+        {
+          "input": "1\n0\n",
+          "expectedOutput": "0\n",
+          "hidden": true
+        },
+        {
+          "input": "4\n1000000000 1000000000 1000000000 1000000000\n",
+          "expectedOutput": "4000000000\n",
+          "hidden": true
+        },
+        {
+          "input": "4\n2 -1 2 -1\n",
+          "expectedOutput": "3\n",
+          "hidden": true
+        }
+      ]
+    }
+  },
+  {
+    "id": "algo-031",
+    "direction": "视觉算法",
+    "title": "编程：栅格地图的最短路",
+    "description": "输入：第一行 h,w（1≤h,w≤100），之后h行每行w个字符，.为可通行，#为障碍。机器人从左上角(0,0)走到右下角(h-1,w-1)，只能上下左右移动，每步代价1。输出最少步数；任一端点为障碍或无法到达时输出-1。\n示例输入：\n3 3\n...\n.#.\n...\n示例输出：\n4\n\n支持使用 C++17 或 Python 3 编写程序，采用标准输入输出。不要输出额外提示文字。",
+    "type": "code",
+    "options": [],
+    "answers": [],
+    "explanation": "",
+    "tags": [
+      "C++",
+      "Python",
+      "BFS",
+      "机器人导航"
+    ],
+    "difficulty": "进阶",
+    "sourceUrls": [
+      "https://github.com/TheAlgorithms/Python/blob/master/graphs/breadth_first_search.py"
+    ],
+    "judge": {
+      "enabled": true,
+      "languageIds": [
+        54,
+        71
+      ],
+      "timeLimitSeconds": 2,
+      "testCases": [
+        {
+          "input": "3 3\n...\n.#.\n...\n",
+          "expectedOutput": "4\n",
+          "hidden": false
+        },
+        {
+          "input": "1 1\n.\n",
+          "expectedOutput": "0\n",
+          "hidden": true
+        },
+        {
+          "input": "2 2\n.#\n#.\n",
+          "expectedOutput": "-1\n",
+          "hidden": true
+        },
+        {
+          "input": "1 1\n#\n",
+          "expectedOutput": "-1\n",
+          "hidden": true
+        },
+        {
+          "input": "2 3\n...\n##.\n",
+          "expectedOutput": "3\n",
+          "hidden": true
+        }
+      ]
+    }
+  },
+  {
+    "id": "algo-032",
+    "direction": "视觉算法",
+    "title": "编程：去重并排序",
+    "description": "输入：第一行 n（1≤n≤100000），第二行n个整数（-10⁹≤ai≤10⁹）。输出去重后按升序排列的元素，元素间用一个空格分隔。\n示例输入：\n6\n3 1 3 2 1 2\n示例输出：\n1 2 3\n\n支持使用 C++17 或 Python 3 编写程序，采用标准输入输出。不要输出额外提示文字。",
+    "type": "code",
+    "options": [],
+    "answers": [],
+    "explanation": "",
+    "tags": [
+      "C++",
+      "Python",
+      "排序",
+      "集合"
+    ],
+    "difficulty": "入门",
+    "sourceUrls": [
+      "https://docs.python.org/3/tutorial/datastructures.html#sets"
+    ],
+    "judge": {
+      "enabled": true,
+      "languageIds": [
+        54,
+        71
+      ],
+      "timeLimitSeconds": 2,
+      "testCases": [
+        {
+          "input": "6\n3 1 3 2 1 2\n",
+          "expectedOutput": "1 2 3\n",
+          "hidden": false
+        },
+        {
+          "input": "1\n-5\n",
+          "expectedOutput": "-5\n",
+          "hidden": true
+        },
+        {
+          "input": "4\n7 7 7 7\n",
+          "expectedOutput": "7\n",
+          "hidden": true
+        },
+        {
+          "input": "5\n0 -2 9 -2 0\n",
+          "expectedOutput": "-2 0 9\n",
+          "hidden": true
+        }
+      ]
+    }
+  }
+]

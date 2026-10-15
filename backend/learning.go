@@ -442,6 +442,8 @@ func (a *App) updateTask(w http.ResponseWriter, r *http.Request, u User) error {
 	var in struct {
 		Title             *string         `json:"title"`
 		Description       *string         `json:"description"`
+		IllustrationURL   *string         `json:"illustrationUrl"`
+		IllustrationAlt   *string         `json:"illustrationAlt"`
 		Direction         *string         `json:"direction"`
 		Team              *string         `json:"team"`
 		TeamID            *string         `json:"teamId"`
@@ -474,6 +476,12 @@ func (a *App) updateTask(w http.ResponseWriter, r *http.Request, u User) error {
 	}
 	if in.Description != nil {
 		task.Description = strings.TrimSpace(*in.Description)
+	}
+	if in.IllustrationURL != nil {
+		task.IllustrationURL = *in.IllustrationURL
+	}
+	if in.IllustrationAlt != nil {
+		task.IllustrationAlt = *in.IllustrationAlt
 	}
 	if in.Direction != nil {
 		task.Direction = *in.Direction
@@ -538,21 +546,12 @@ func (a *App) updateTask(w http.ResponseWriter, r *http.Request, u User) error {
 			decoder := json.NewDecoder(strings.NewReader(string(in.MechanicalProblem)))
 			decoder.DisallowUnknownFields()
 			if err := decoder.Decode(&problem); err != nil {
-				return fail(400, "机械题目配置格式不正确")
+				return fail(400, "客观题配置格式不正确")
 			}
 			task.MechanicalProblem = &problem
 		}
 	}
-	if task.Title == "" || len(task.Title) > 250 || task.Description == "" || len(task.Description) > 30000 || task.Direction != "" && !validDirection(task.Direction) || task.Team != "" && !validTeam(task.Team) || !validDate(task.DueAt) || !validURL(task.ResourcesURL) || !finite(task.MaxScore) || task.MaxScore <= 0 || task.MaxScore > 1000 {
-		return fail(400, "任务内容无效")
-	}
-	if task.Kind != "code" && task.Kind != "document" && task.Kind != "hardware" && task.Kind != "quiz" {
-		return fail(400, "无效的任务类型")
-	}
-	if task.Difficulty != "入门" && task.Difficulty != "进阶" && task.Difficulty != "挑战" {
-		return fail(400, "无效的任务难度")
-	}
-	if err = a.validateTaskPlatform(&task, u, previousFiles); err != nil {
+	if err = a.validateTaskContent(&task, u, previousFiles); err != nil {
 		return err
 	}
 	if err = a.store.exec("UPDATE tasks SET payload=? WHERE id=?", encoded(task), task.ID); err != nil {

@@ -202,6 +202,9 @@ function selectTab(value: unknown) {
   else query[tabKey.value] = String(value);
   router.push({ path: route.path, query });
 }
+function groupMembershipLabel(direction: string) {
+  return learningAccess.enrolledDirections.includes(direction) ? "已加入" : "报名待审核";
+}
 function directionLink(direction: string) {
   if (!canAccessDirection(direction)) return { path: "/teams", query: { admissionRequired: "1", direction } };
   return {
@@ -246,7 +249,7 @@ function directionLink(direction: string) {
           />
         </v-list>
         <v-divider class="mx-4 my-2" />
-        <div class="nav-caption">技术分组 <span class="group-legend">🌟 已报名</span></div>
+        <div class="nav-caption">技术分组</div>
         <v-list
           nav
           density="compact"
@@ -268,11 +271,11 @@ function directionLink(direction: string) {
           >
             <template #append
               ><span
-                v-if="learningAccess.appliedDirections.includes(item.value)"
+                v-if="learningAccess.enrolledDirections.includes(item.value) || learningAccess.appliedDirections.includes(item.value)"
                 class="applied-star"
                 role="img"
-                :aria-label="`已报名${item.title}`"
-                title="已报名"
+                :aria-label="`${groupMembershipLabel(item.value)}${item.title}`"
+                :title="groupMembershipLabel(item.value)"
                 >🌟</span
               ></template
             >
@@ -434,10 +437,6 @@ function directionLink(direction: string) {
   font-size: 12px;
   color: #858585;
   padding: 20px 23px 5px;
-}
-.group-legend {
-  float: right;
-  font-size: 11px;
 }
 .applied-star {
   font-size: 17px;

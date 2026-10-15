@@ -39,6 +39,8 @@ type Applicant struct {
 	UpdatedAt       string   `json:"updatedAt"`
 }
 type Task struct {
+	IllustrationURL   string             `json:"illustrationUrl,omitempty"`
+	IllustrationAlt   string             `json:"illustrationAlt,omitempty"`
 	MechanicalProblem *MechanicalProblem `json:"mechanicalProblem,omitempty"`
 	Assigned          bool               `json:"assigned"`
 	CanSubmit         bool               `json:"canSubmit"`

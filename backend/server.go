@@ -252,6 +252,7 @@ func (a *App) Handler() http.Handler {
 	a.registerPlatformRoutes(m)
 	a.registerTaskPlatformRoutes(m)
 	a.registerLearningRoutes(m)
+	a.registerQuestionBankRoutes(m)
 	a.registerCertificateRoutes(m)
 	a.registerAdminSettingsRoutes(m)
 	m.HandleFunc("GET /api/workspace-summary", a.wrap(true, a.workspaceSummary))
@@ -911,25 +912,7 @@ func (a *App) createTask(w http.ResponseWriter, r *http.Request, u User) error {
 	if err := decode(r, &t); err != nil {
 		return err
 	}
-	t.Title = strings.TrimSpace(t.Title)
-	t.Description = strings.TrimSpace(t.Description)
-	if t.Title == "" || len(t.Title) > 250 || t.Description == "" || len(t.Description) > 30000 || (t.Team != "" && !validTeam(t.Team)) || (t.Direction != "" && !validDirection(t.Direction)) || !validDate(t.DueAt) || !validURL(t.ResourcesURL) || !finite(t.MaxScore) || t.MaxScore <= 0 || t.MaxScore > 1000 {
-		return fail(400, "请填写有效的任务内容、截止日期、分值和适用范围")
-	}
-	switch t.Kind {
-	case "code", "document", "hardware", "quiz":
-	default:
-		return fail(400, "无效的任务类型")
-	}
-	switch t.Difficulty {
-	case "入门", "进阶", "挑战":
-	default:
-		return fail(400, "无效的任务难度")
-	}
-	if err := requirePermission(u, t.Direction, "tasks"); err != nil {
-		return err
-	}
-	if err := a.validateTaskPlatform(&t, u); err != nil {
+	if err := a.validateTaskContent(&t, u); err != nil {
 		return err
 	}
 	t.ID = randomID()
@@ -979,7 +962,7 @@ func (a *App) submitTask(w http.ResponseWriter, r *http.Request, u User) error {
 		return err
 	}
 	if t.MechanicalProblem != nil {
-		return fail(400, "机械选择或填空题请直接作答；图纸题供自由练习，无需提交")
+		return fail(400, "选择或填空题请直接作答；图纸题供自由练习，无需提交")
 	}
 	if err = a.requireTaskSubmission(t, u); err != nil {
 		return err
@@ -1032,7 +1015,7 @@ func (a *App) reviewSubmission(w http.ResponseWriter, r *http.Request, u User) e
 		return err
 	}
 	if t.MechanicalProblem != nil {
-		return fail(400, "机械客观题由系统自动判定，不支持人工修改成绩")
+		return fail(400, "客观题由系统自动判定，不支持人工修改成绩")
 	}
 	if u.Role != "admin" && s.UserID == u.ID {
 		return fail(403, "不能评阅本人提交的成果")

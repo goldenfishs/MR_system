@@ -115,6 +115,44 @@ func (a *App) requireTaskSubmission(t Task, u User) error {
 	}
 	return nil
 }
+
+// Shared by interactive publishing, editing and built-in question bank import.
+// All entry points must apply the same content, scope and grading validation.
+func (a *App) validateTaskContent(t *Task, u User, previousFiles ...[]string) error {
+	t.Title = strings.TrimSpace(t.Title)
+	t.Description = strings.TrimSpace(t.Description)
+	if t.Title == "" || len(t.Title) > 250 || t.Description == "" || len(t.Description) > 30000 || (t.Team != "" && !validTeam(t.Team)) || (t.Direction != "" && !validDirection(t.Direction)) || !validDate(t.DueAt) || !validURL(t.ResourcesURL) || !finite(t.MaxScore) || t.MaxScore <= 0 || t.MaxScore > 1000 {
+		return fail(400, "请填写有效的任务内容、截止日期、分值和适用范围")
+	}
+	switch t.Kind {
+	case "code", "document", "hardware", "quiz":
+	default:
+		return fail(400, "无效的任务类型")
+	}
+	switch t.Difficulty {
+	case "入门", "进阶", "挑战":
+	default:
+		return fail(400, "无效的任务难度")
+	}
+	if t.IllustrationURL != "" {
+		name := strings.TrimPrefix(t.IllustrationURL, "/question-bank/")
+		if name == t.IllustrationURL || !strings.HasSuffix(name, ".svg") || len(name) > 100 {
+			return fail(400, "题目示意图须使用内置题库图片")
+		}
+		for _, ch := range strings.TrimSuffix(name, ".svg") {
+			if !(ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '-') {
+				return fail(400, "题目示意图路径不合法")
+			}
+		}
+		if name == ".svg" || strings.TrimSpace(t.IllustrationAlt) == "" || len(t.IllustrationAlt) > 1000 {
+			return fail(400, "请填写有效的题目示意图说明")
+		}
+	} else if t.IllustrationAlt != "" {
+		return fail(400, "题目示意图说明需要对应的图片")
+	}
+	return a.validateTaskPlatform(t, u, previousFiles...)
+}
+
 func (a *App) validateTaskPlatform(t *Task, u User, existing ...[]string) error {
 	if err := requirePermission(u, t.Direction, "tasks"); err != nil {
 		return err
@@ -129,8 +167,13 @@ func (a *App) validateTaskPlatform(t *Task, u User, existing ...[]string) error 
 	if t.Category == "exam" && (t.StartsAt == "" || t.DueAt == "") {
 		return fail(400, "考试必须设置发布开始时间和截止时间")
 	}
-	if t.Category == "problem" && t.Direction != "机械" && (t.Direction != "电控" && t.Direction != "视觉算法" && t.Direction != "硬件" || t.Kind != "code" || t.Judge == nil) {
-		return fail(400, "机械题库使用选择、填空或图纸题；电控、视觉算法和硬件题库须配置在线编程测试用例")
+	if t.Category == "problem" {
+		if !supportsProblemBank(t.Direction) {
+			return fail(400, "题库仅支持机械、电控、算法和硬件组")
+		}
+		if t.Direction != "机械" && t.MechanicalProblem == nil && (t.Kind != "code" || t.Judge == nil) {
+			return fail(400, "请选择客观题并配置答案，或为编程题配置在线测试用例")
+		}
 	}
 	if len(t.Tags) > 10 {
 		return fail(400, "最多设置 10 个题目标签")

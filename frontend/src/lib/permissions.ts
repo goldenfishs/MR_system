@@ -3,7 +3,7 @@ import type { Direction, Permission, User } from "./types";
 
 export const groupOptions: { value: Direction; title: string; icon: string }[] = [
   { value: "机械", title: "机械组", icon: "mdi-cog-outline" },
-  { value: "电控", title: "控制组", icon: "mdi-chip" },
+  { value: "电控", title: "电控组", icon: "mdi-chip" },
   { value: "硬件", title: "硬件组", icon: "mdi-memory" },
   { value: "视觉算法", title: "算法组", icon: "mdi-eye-outline" },
   { value: "运营", title: "运营组", icon: "mdi-bullhorn-outline" },

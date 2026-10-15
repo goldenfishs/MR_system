@@ -6,6 +6,7 @@ import FileUpload from "./FileUpload.vue";
 const props = defineProps<{
   modelValue: MechanicalProblem;
   disabled?: boolean;
+  allowDrawing?: boolean;
 }>();
 const emit = defineEmits<{
   "update:modelValue": [MechanicalProblem];
@@ -16,12 +17,12 @@ const locked = computed(() => props.disabled || uploading.value);
 const choices = computed(() =>
   ["single_choice", "multiple_choice"].includes(props.modelValue.type),
 );
-const types = [
+const types = computed(() => [
   { title: "单选题 · 自动判定", value: "single_choice" },
   { title: "多选题 · 自动判定", value: "multiple_choice" },
   { title: "填空题 · 自动判定", value: "fill_blank" },
-  { title: "图纸练习 · 无需提交", value: "drawing" },
-];
+  ...(props.allowDrawing !== false ? [{ title: "图纸练习 · 无需提交", value: "drawing" }] : []),
+]);
 const optionLabel = (index: number) => String.fromCharCode(65 + index);
 
 function update<K extends keyof MechanicalProblem>(
@@ -94,8 +95,8 @@ onBeforeUnmount(() => {
 <template>
   <section class="mechanical-fields">
     <div class="fields-heading">
-      <v-icon color="primary" size="21">mdi-ruler-square</v-icon>
-      <h3>机械题库设置</h3>
+      <v-icon color="primary" size="21">mdi-clipboard-check-outline</v-icon>
+      <h3>题型与标准答案</h3>
     </div>
     <v-select
       :model-value="modelValue.type"

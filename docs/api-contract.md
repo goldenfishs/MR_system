@@ -194,6 +194,7 @@ interface Task {
   startsAt?: string; dueAt: string; resourcesUrl: string; fileIds: string[];
   submissionType?: 'files' | 'project' | 'code'; judge?: JudgeConfig;
   mechanicalProblem?: MechanicalProblem;
+  illustrationUrl?: string; illustrationAlt?: string;
   maxScore: number; required: boolean; createdBy: string; createdAt: string;
   submissionCount: number; mySubmission: Submission | null;
 }
@@ -206,12 +207,12 @@ interface Submission {
 ```
 
 - `GET /tasks` → `{items:Task[]}`。未取得学习访问权限的用户只返回其 tasks 管理授权范围内的任务，无管理授权则为空列表；已取得学习资格的人员可查看各组学习任务。`assigned` 表示任务属于本人的有效录取团队／方向，与开考和截止时间无关；作业／考试据此区分本组必做、选做和跨组参考。`canSubmit` 进一步校验时间窗口，表示当前是否可提交；录取、淘汰、团队和方向条件均由服务端判断。submissionCount 仅为有该任务管理权限者计算，其他人员返回 0，并仅获得自己的 mySubmission。题库 acceptedCount／attemptCount 为公开汇总，myAccepted 为本人是否通过；没有该任务管理权限的响应隐藏 `hidden:true` 的输入和预期输出，保留 `totalCases`。
-- `POST /tasks`：Task 的非服务器管理字段 → 201 `{item:Task}`，管理员或对应组有 tasks 权限的组管理员。`fileIds` 为教材或题目附件；`submissionType` 区分一般文件、工程项目和单文件代码；机械题库通过 `mechanicalProblem` 设置选择／填空题或图纸练习。`teamId` 指定发布团队，`team` 为兼容旧数据的赛事字段。
+- `POST /tasks`：Task 的非服务器管理字段 → 201 `{item:Task}`，管理员或对应组有 tasks 权限的组管理员。`fileIds` 为教材或题目附件；`submissionType` 区分一般文件、工程项目和单文件代码；四个技术组题库均通过兼容字段 `mechanicalProblem` 设置选择／填空题；机械组还支持图纸练习。`teamId` 指定发布团队，`team` 为兼容旧数据的赛事字段。
 - `GET /tasks/:id/submissions` → `{items:Submission[]}`，普通人员必须仍有该任务的访问权限，且仅返回本人记录；管理员或对应组有 tasks 权限的组管理员可评阅。入队资格撤销后，不再凭历史提交获得任务记录访问权。
-- `POST /tasks/:id/submissions`：`{content,repoUrl?,artifactUrl?,fileIds?,judgeRunId?}` → 201 `{item:Submission}`。必须符合下述成员方向与团队规则，在开始与截止时间内；每次创建新版本。声明提交形式的任务必须上传文件，启用判题时必须引用本任务、本人、完成状态的判题记录以及对应代码文件；源代码哈希须一致。机械题库不使用此接口：选择／填空题通过 `/tasks/:id/practice` 作答，图纸题无需提交。
-- `PATCH /submissions/:id`：`{status:'approved'|'changes_requested',score,feedback}` → `{item:Submission}`，管理员或对应组有 tasks 权限的组管理员，只可审核最新版本，分值范围为 0 至 task.maxScore。机械题库的自动答题成绩不允许通过此接口人工改分。
+- `POST /tasks/:id/submissions`：`{content,repoUrl?,artifactUrl?,fileIds?,judgeRunId?}` → 201 `{item:Submission}`。必须符合下述成员方向与团队规则，在开始与截止时间内；每次创建新版本。声明提交形式的任务必须上传文件，启用判题时必须引用本任务、本人、完成状态的判题记录以及对应代码文件；源代码哈希须一致。配置了 `mechanicalProblem` 的题库题目不使用此接口：选择／填空题通过 `/tasks/:id/practice` 作答，图纸题无需提交。
+- `PATCH /submissions/:id`：`{status:'approved'|'changes_requested',score,feedback}` → `{item:Submission}`，管理员或对应组有 tasks 权限的组管理员，只可审核最新版本，分值范围为 0 至 task.maxScore。题库的自动答题成绩不允许通过此接口人工改分。
 
-任务浏览跨组开放；带 teamId 的任务须有该团队／方向有效成员关系才会分配并允许提交，人员身份或另一组的录取不能绕过本组要求。本组最新周期淘汰后不再分配该任务，其他组任务不受影响。新任务应指定 teamId；不含 teamId 的历史任务按有效成员方向兼容校验。机械说明书、工程 ZIP、PCB、运营图片统一使用附件；这些文件由人工评分，工程 ZIP 不自动编译。
+任务浏览跨组开放；带 teamId 的任务须有该团队／方向有效成员关系才会分配并允许提交，人员身份或另一组的录取不能绕过本组要求。本组最新周期淘汰后不再分配该任务，其他组任务不受影响。新作业／考试应指定 teamId；题库可留空表示本组共享练习，按有效成员方向校验，不限制到某个报名团队。不含 teamId 的历史任务也按有效成员方向兼容校验。机械说明书、工程 ZIP、PCB、运营图片统一使用附件；这些文件由人工评分，工程 ZIP 不自动编译。
 
 ## 在线编译测试
 
@@ -282,13 +283,15 @@ interface MailCampaign {
 
 `GET /tasks` 支持 `category`、`direction`、`tag`、`search` 参数。未分类历史任务归入 assignment。题库 `category=problem` 支持机械、电控、视觉算法和硬件；运营不提供题库。题库沿用任务的团队、方向、学习访问和提交资格规则，其他组可浏览不代表可以提交。
 
-机械题库必须设置 `mechanicalProblem`，并将 `submissionType` 留空。`single_choice`／`multiple_choice` 设置 2–20 个非空且不重复的 `options`，`answers` 为从 0 开始的选项索引字符串；单选仅一项，多选至少一项、不重复。`fill_blank` 设置 1–10 个按空位顺序排列的标准答案，不设置选项，服务端将 `blankCount` 设为答案个数。每个答案去除首尾空白后不得为空或超过 1000 字节，`explanation` 最多 20000 字节。题目列表对无本题 `tasks` 管理权限者返回 `answers=[]`、`explanation=''` 和 `answerFileIds=[]`，保留作答所需的 `options`、`blankCount`。
+机械、电控、视觉算法与硬件均支持客观题；为兼容已有接口，统一沿用 `mechanicalProblem` 字段名。机械题库必须设置该字段；其他三组可在客观题和编程题之间选择。客观题将 `submissionType` 留空，`kind` 使用 `document` 或 `quiz`，不能同时配置 `judge` 或代码提交。`single_choice`／`multiple_choice` 设置 2–20 个非空且不重复的 `options`，`answers` 为从 0 开始的选项索引字符串；单选仅一项，多选至少一项、不重复。`fill_blank` 设置 1–10 个按空位顺序排列的标准答案，不设置选项，服务端将 `blankCount` 设为答案个数。每个答案去除首尾空白后不得为空或超过 1000 字节，`explanation` 最多 20000 字节。题目列表对无本题 `tasks` 管理权限者返回 `answers=[]`、`explanation=''` 和 `answerFileIds=[]`，保留作答所需的 `options`、`blankCount`。
 
-- `POST /tasks/:id/practice`：`{answers:string[]}` → 201 `{item:Submission,result:{correct:boolean,score:number,maxScore:number,answers:string[],explanation:string}}`。仅用于机械选择／填空题，要求本题所属团队／方向的有效录取资格，并遵守开始与截止时间。选择题按索引作答，多选答案顺序不限；填空按空位顺序作答，去除首尾空白后区分大小写、精确匹配。全部正确获得满分，否则为 0 分；响应的 `result.answers` 和 `explanation` 返回标准答案及解析。每次作答生成独立版本的 `Submission`，`reviewedBy='system'`，正确为 `approved`，错误为 `changes_requested`。`attemptCount` 统计已自动评阅的答题记录，`acceptedCount` 统计其中正确记录，本人曾答对则 `myAccepted=true`。
+- `POST /tasks/:id/practice`：`{answers:string[]}` → 201 `{item:Submission,result:{correct:boolean,score:number,maxScore:number,answers:string[],explanation:string}}`。用于四个技术组的选择／填空题，要求本题所属团队／方向的有效录取资格，并遵守开始与截止时间。选择题按索引作答，多选答案顺序不限；填空按空位顺序作答，去除首尾空白后区分大小写、精确匹配。全部正确获得满分，否则为 0 分；响应的 `result.answers` 和 `explanation` 返回标准答案及解析。每次作答生成独立版本的 `Submission`，`reviewedBy='system'`，正确为 `approved`，错误为 `changes_requested`。`attemptCount` 统计已自动评阅的答题记录，`acceptedCount` 统计其中正确记录，本人曾答对则 `myAccepted=true`。
 
-`drawing` 图纸题必须通过 `Task.fileIds` 提供至少一份题目图纸，可选 `explanation` 参考说明及 `answerFileIds` 参考答案文件，`options`、`answers` 为空。仅图纸题允许设置参考答案文件。可访问该题的学员可下载图纸和参考答案并自主练习；设置 `startsAt` 时，开始前对无本题管理权限者隐藏题面、机械题型配置和文件引用，文件下载同样受限。`canSubmit=false`，不提交作品、不产生评分或答题次数。机械题库不接受代码提交，不依赖 Judge0 配置。
+`drawing` 图纸题仅供机械组使用，必须通过 `Task.fileIds` 提供至少一份题目图纸，可选 `explanation` 参考说明及 `answerFileIds` 参考答案文件，`options`、`answers` 为空。仅图纸题允许设置参考答案文件。可访问该题的学员可下载图纸和参考答案并自主练习；设置 `startsAt` 时，开始前对无本题管理权限者隐藏题面、题型配置、示意图和文件引用，文件下载同样受限。`canSubmit=false`，不提交作品、不产生评分或答题次数。机械题库不接受代码提交，不依赖 Judge0 配置。
 
-电控、视觉算法与硬件的题库必须配置代码测试用例，AC／尝试统计来自实际完成的 `JudgeRun`，不含排队、运行中或服务错误记录。运营仍不接受代码提交或自动判题。
+电控、视觉算法与硬件选择编程题时，`mechanicalProblem` 留空，`kind=code`、`submissionType=code`，并配置 `judge` 的代码测试用例。AC／尝试统计来自实际完成的 `JudgeRun`，不含排队、运行中或服务错误记录；客观题统计来自自动评阅的答题记录。运营仍不提供题库，不接受代码提交或自动判题。
+
+题目可包含 `illustrationUrl` 和 `illustrationAlt` 展示内置示意图；地址仅接受 `/question-bank/[a-z0-9-]+.svg`，非空图片必须有文字说明。定时发布前对无该题管理权限者隐藏这两个字段。
 
 考试 category=exam 必须同时提供 startsAt / dueAt，开始时间早于截止时间。开考前普通用户可见标题和时间，但 locked=true、description/resourcesUrl 为空、fileIds 为空、judge 被移除；文件详情、下载和预览同样校验开考时间。开考前和截止后不可提交或发起判题。管理员及对应组有 tasks 权限者可提前管理题目；其他组管理员不能提前查看。
 
@@ -330,3 +333,10 @@ interface Discussion {
 ## 品牌配置
 
 默认 brandName=QUT机器人战队、organization=青岛理工大学机器人战队、teamName=沧溟、secondaryTeamName=MOVE、competitions=[RoboCon,RoboMaster]、logoUrl=/mark.png。队名为同一战队的名称。管理员可通过系统管理中的网站设置更新这些字段及 `description` 简介（最多 1500 字节，登录页展示，留空使用默认介绍）；标志支持 HTTP(S) URL、本站静态资源路径及专用 /api/public/logo/:id 地址，不能使用私有附件 API 地址。公开配置不包含 SMTP/Judge 密钥或成员资料。旧默认 `/mark.svg` 会迁移到用户提供的 M 标志，自定义标志地址保留。
+
+## 内置基础题库
+
+- `GET /question-banks`：需要 `tasks` 管理权限，仅返回授权组的 `{items:[{id,name,direction,count,topics}]}`。不返回答案或隐藏测试用例。
+- `POST /question-banks/:id/import`：需要对应组 `tasks` 权限，无请求字段；返回 `{imported,skipped,total}`。全量校验后事务导入，稳定题目 ID 使重试幂等；已有题目只跳过，不覆盖管理员修改或作答记录。
+- 当前目录：`algorithm-basics-v1`（算法 32 题）、`mcu-basics-v1`（电控 24 题）、`hardware-basics-v1`（硬件 24 题）。题目均为 `category=problem, required=false`，不影响阶段考核。
+- 资料、来源和编程样例复核方式见 [题库来源说明](question-bank-sources.md)。

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 400" role="img" aria-labelledby="title desc">
+  <title id="title">空载电阻分压电路</title>
+  <desc id="desc">5 V 经 R1 2 kΩ 和 R2 3 kΩ 串联到地，Vout 在两电阻中点且输出空载。原创示意图。</desc>
+  <rect width="760" height="400" rx="16" fill="#f4f7fb"/>
+  <g fill="none" stroke="#334155" stroke-width="3.5" stroke-linejoin="round">
+    <path d="M310 58V85M310 145V218M310 278V337"/>
+    <rect x="293" y="85" width="34" height="60" rx="2"/>
+    <rect x="293" y="218" width="34" height="60" rx="2"/>
+    <path d="M310 181H515M284 337H336M292 347H328M300 357H320"/>
+  </g>
+  <circle cx="310" cy="58" r="5" fill="#334155"/><circle cx="310" cy="181" r="5" fill="#334155"/><circle cx="515" cy="181" r="5" fill="#334155"/>
+  <g fill="#263746" font-family="sans-serif" font-size="21"><text x="286" y="39">5 V</text><text x="350" y="121">R1 = 2 kΩ</text><text x="350" y="253">R2 = 3 kΩ</text><text x="535" y="188">Vout</text><text x="348" y="350">GND</text></g>
+  <text x="465" y="224" fill="#64748b" font-family="sans-serif" font-size="16">No load / 输出空载</text>
+</svg>

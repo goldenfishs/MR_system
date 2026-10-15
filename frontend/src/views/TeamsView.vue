@@ -268,7 +268,7 @@ onMounted(load);
       >{{ error }}<v-btn variant="text" @click="load">重试</v-btn></v-alert
     >
     <v-alert v-if="canApply && !canAccessLearning" :type="learningAccess.error || trainingEliminated ? 'warning' : 'info'" variant="tonal" class="mb-4">
-      {{ learningAccess.error || (trainingEliminated ? "当前没有可用的成员学习资格。已淘汰组别的考核记录仍保留，可申请其它组，或由管理员重新录取。" : "侧栏展示全部五组，🌟 表示已报名。任一组审核通过后可浏览各组学习内容，作业提交与考试参加按各组录取结果开放。") }}
+      {{ learningAccess.error || (trainingEliminated ? "当前没有可用的成员学习资格。已淘汰组别的考核记录仍保留，可申请其它组，或由管理员重新录取。" : "侧栏展示全部五组。任一组审核通过后可浏览各组学习内容，作业提交与考试参加按各组录取结果开放。") }}
       <v-btn variant="text" :loading="loading" @click="load">刷新审核状态</v-btn>
     </v-alert>
     <v-alert v-if="requestedDirection && route.query.admissionRequired" type="info" variant="tonal" class="mb-4">{{ groupLabel(requestedDirection) }}的学习内容需取得成员学习资格后查看。请在下方选择组别报名并等待审核。</v-alert>

@@ -354,7 +354,7 @@ func (a *App) updateCertificateTemplate(w http.ResponseWriter, r *http.Request, 
 func certificateDirectionLabel(direction string) string {
 	switch direction {
 	case "电控":
-		return "控制组"
+		return "电控组"
 	case "视觉算法":
 		return "算法组"
 	default:

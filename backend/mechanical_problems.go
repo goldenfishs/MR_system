@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+// MechanicalProblem keeps its original JSON name for compatibility. Objective
+// questions are also available in the electrical, algorithm and hardware banks.
 type MechanicalProblem struct {
 	Type          string   `json:"type"`
 	Options       []string `json:"options"`
@@ -24,20 +26,26 @@ type MechanicalPracticeResult struct {
 	Explanation string   `json:"explanation"`
 }
 
+func supportsProblemBank(direction string) bool {
+	return direction == "机械" || direction == "电控" || direction == "视觉算法" || direction == "硬件"
+}
+
 func (a *App) validateMechanicalProblem(t *Task, u User, previousFiles []string) error {
-	mechanical := t.Category == "problem" && t.Direction == "机械"
-	if !mechanical {
+	if t.Category != "problem" || !supportsProblemBank(t.Direction) {
 		if t.MechanicalProblem != nil {
-			return fail(400, "机械题目配置仅适用于机械组题库")
+			return fail(400, "客观题配置仅适用于机械、电控、算法和硬件组题库")
 		}
 		return nil
 	}
 	p := t.MechanicalProblem
 	if p == nil {
-		return fail(400, "请选择机械题型并配置题目答案")
+		if t.Direction == "机械" {
+			return fail(400, "请选择机械题型并配置题目答案")
+		}
+		return nil // The other banks may use the existing programming judge.
 	}
-	if t.SubmissionType != "" {
-		return fail(400, "机械题库直接答题或下载图纸，不接收成果文件提交")
+	if t.SubmissionType != "" || t.Kind == "code" || t.Judge != nil {
+		return fail(400, "客观题直接在线作答，图纸题下载练习，不能同时配置文件提交或编程判题")
 	}
 	if p.Options == nil {
 		p.Options = []string{}
@@ -81,6 +89,9 @@ func (a *App) validateMechanicalProblem(t *Task, u User, previousFiles []string)
 		}
 		p.BlankCount = len(p.Answers)
 	case "drawing":
+		if t.Direction != "机械" {
+			return fail(400, "图纸自由练习仅适用于机械组题库")
+		}
 		if len(t.FileIDs) == 0 {
 			return fail(400, "图纸题须上传至少一个题目图纸文件")
 		}
@@ -89,7 +100,7 @@ func (a *App) validateMechanicalProblem(t *Task, u User, previousFiles []string)
 		}
 		p.BlankCount = 0
 	default:
-		return fail(400, "机械题型须为单选、多选、填空或图纸练习")
+		return fail(400, "请选择单选、多选或填空；机械组还支持图纸练习")
 	}
 	if p.Type != "drawing" && len(p.AnswerFileIDs) != 0 {
 		return fail(400, "只有图纸题可以附带可下载的参考答案文件")
@@ -148,8 +159,8 @@ func (a *App) practiceMechanicalProblem(w http.ResponseWriter, r *http.Request, 
 		return err
 	}
 	p := t.MechanicalProblem
-	if t.Category != "problem" || t.Direction != "机械" || p == nil || p.Type == "drawing" {
-		return fail(400, "此题无需在线答题，图纸题可下载资料自由练习")
+	if t.Category != "problem" || !supportsProblemBank(t.Direction) || p == nil || (p.Type != "single_choice" && p.Type != "multiple_choice" && p.Type != "fill_blank") {
+		return fail(400, "此接口仅用于选择或填空题；编程题请提交代码，图纸题可下载资料自由练习")
 	}
 	if err := a.requireTaskSubmission(t, u); err != nil {
 		return err

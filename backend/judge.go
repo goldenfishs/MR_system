@@ -103,6 +103,7 @@ func publicTask(t Task, u User) Task {
 	if taskLocked(t, u) {
 		t.Locked = true
 		t.Description, t.ResourcesURL = "", ""
+		t.IllustrationURL, t.IllustrationAlt = "", ""
 		t.FileIDs = []string{}
 		t.Judge = nil
 		t.MechanicalProblem = nil

@@ -81,6 +81,8 @@ export interface Task {
   startsAt?: string;
   judge?: JudgeConfig;
   mechanicalProblem?: MechanicalProblem;
+  illustrationUrl?: string;
+  illustrationAlt?: string;
   id: string;
   title: string;
   description: string;

@@ -36,7 +36,7 @@ const learningTarget = computed(() => ({
 const showAdmissionNotice = computed(() => !canAccessLearning.value && (isParticipant() || auth.user?.role === "group_admin"));
 const admissionNotice = computed(() => canOpenLearning.value
   ? "授权组别的管理权限已可使用。你的个人学习资格仍需报名审核通过后开通，当前不能以学员身份提交作业或参加考试。"
-  : "侧栏展示全部五组，🌟 表示已报名。审核通过后可浏览各组学习内容，并完成已录取组的作业和考试。"
+  : "侧栏展示全部五组。审核通过后可浏览各组学习内容，并完成已录取组的作业和考试。"
 );
 const canRecruit = computed(() => hasPermission("recruitment"));
 const canIssueRecords = computed(() => hasPermission("records"));
