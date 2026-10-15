@@ -105,7 +105,17 @@ func publicTask(t Task, u User) Task {
 		t.Description, t.ResourcesURL = "", ""
 		t.FileIDs = []string{}
 		t.Judge = nil
+		t.MechanicalProblem = nil
 		return t
+	}
+	if t.MechanicalProblem != nil && !hasPermission(u, t.Direction, "tasks") {
+		problem := *t.MechanicalProblem
+		if problem.Type != "drawing" {
+			problem.Answers = []string{}
+			problem.Explanation = ""
+			problem.AnswerFileIDs = []string{}
+		}
+		t.MechanicalProblem = &problem
 	}
 	if t.Judge == nil || hasPermission(u, t.Direction, "tasks") {
 		return t

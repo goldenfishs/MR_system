@@ -13,6 +13,9 @@ import AttachmentList from "../components/AttachmentList.vue";
 import JudgePanel from "../components/JudgePanel.vue";
 import JudgeFields from "../components/JudgeFields.vue";
 import KnowledgeLibrary from "../components/KnowledgeLibrary.vue";
+import MechanicalProblemFields from "../components/MechanicalProblemFields.vue";
+import MechanicalPractice from "../components/MechanicalPractice.vue";
+import type { MechanicalProblem } from "../lib/learning";
 
 const { smAndDown } = useDisplay();
 const route = useRoute();
@@ -50,6 +53,8 @@ const sourceOnly = computed(
     selected.value?.submissionType === "code" && selected.value.judge?.enabled,
 );
 const taskFiles = ref<string[]>([]);
+const mechanicalDraft = ref<MechanicalProblem>({ type: "single_choice", options: ["", ""], answers: [], explanation: "", answerFileIds: [], blankCount: 0 });
+const mechanicalUploadBusy = ref(false);
 const teamsForTasks = ref<TeamSpace[]>([]);
 const memberships = ref<Membership[]>([]);
 
@@ -72,7 +77,7 @@ const taskForm = reactive({
   maxScore: 100,
   required: true,
   teamId: "",
-  submissionType: "files" as "files" | "code" | "project",
+  submissionType: "files" as "" | "files" | "code" | "project",
   startsAt: "",
   judge: {
     enabled: false,
@@ -90,6 +95,22 @@ watch(
   },
 );
 const directions = ["机械", "电控", "视觉算法", "硬件", "运营"];
+const codeBankDirections = ["电控", "视觉算法", "硬件"];
+const bankDirections = ["机械", ...codeBankDirections];
+const mechanicalProblem = (task?: Task | null) => task?.category === "problem" && task.direction === "机械";
+const mechanicalTypeLabel = (task: Task) => ({ single_choice: "单选题", multiple_choice: "多选题", fill_blank: "填空题", drawing: "图纸练习" })[task.mechanicalProblem?.type || "drawing"];
+const mechanicalProblemForm = computed(() => taskForm.category === "problem" && taskForm.direction === "机械");
+function submissionContent(submission: Submission) {
+  const problem = selected.value?.mechanicalProblem;
+  if (!problem) return submission.content || "已提交附件或评测结果。";
+  try {
+    const answers: unknown = JSON.parse(submission.content);
+    if (!Array.isArray(answers)) return submission.content;
+    return answers.map((answer, index) => problem.type === "fill_blank"
+      ? `第 ${index + 1} 空：${answer}`
+      : `${String.fromCharCode(65 + Number(answer))}. ${problem.options[Number(answer)] || ""}`).join("\n");
+  } catch { return submission.content; }
+}
 const sections = ["home", "knowledge", "tasks", "exam", "bank"] as const;
 const section = computed(() => {
   const value = String(route.query.section || "");
@@ -111,7 +132,7 @@ const categoryFilter = computed(() =>
 const taskDirections = computed(
   () => {
     const available = (teamsForTasks.value.find((t) => t.id === taskForm.teamId)?.directions || directions).filter(direction => hasPermission("tasks", direction));
-    return taskForm.category === "problem" ? available.filter(direction => ["电控", "视觉算法", "硬件"].includes(direction)) : available;
+    return taskForm.category === "problem" ? available.filter(direction => bankDirections.includes(direction)) : available;
   },
 );
 watch(
@@ -145,19 +166,18 @@ const availableSubmissionTypes = computed(() => ["机械", "运营"].includes(ta
   { title: "单文件代码评测", value: "code" },
   { title: "完整工程 / 项目", value: "project" },
 ]);
-watch(() => taskForm.category, value => {
-  if (value === "problem") {
+watch([() => taskForm.category, () => taskForm.direction], ([category, value]) => {
+  if (["机械", "运营"].includes(value)) {
+    if (taskForm.kind === "code" || value === "运营" && taskForm.kind === "quiz") taskForm.kind = "document";
+    if (mechanicalProblemForm.value) taskForm.submissionType = "";
+    else if (taskForm.submissionType === "code" || taskForm.submissionType === "") taskForm.submissionType = "files";
+    taskForm.judge.enabled = false;
+  } else if (category === "problem") {
     taskForm.kind = "code";
     taskForm.submissionType = "code";
     taskForm.judge.enabled = true;
-    if (!["电控", "视觉算法", "硬件"].includes(taskForm.direction)) taskForm.direction = "";
-  }
-});
-watch(() => taskForm.direction, value => {
-  if (["机械", "运营"].includes(value)) {
-    if (taskForm.kind === "code" || value === "运营" && taskForm.kind === "quiz") taskForm.kind = "document";
-    if (taskForm.submissionType === "code") taskForm.submissionType = "files";
-    taskForm.judge.enabled = false;
+  } else if (taskForm.submissionType === "") {
+    taskForm.submissionType = "files";
   }
 });
 const kindFilter = computed(() =>
@@ -191,7 +211,8 @@ const listedTasks = computed(() => scopedTasks.value.filter(task => !categoryFil
 const selectedDirection = computed(() => directionFilter.value === "全部方向" ? "" : directionFilter.value);
 const canViewTasks = computed(() => canAccessLearningModule("tasks", selectedDirection.value || undefined));
 const canViewKnowledge = computed(() => canAccessLearningModule("knowledge", selectedDirection.value || undefined));
-const supportsBank = computed(() => !selectedDirection.value || ["电控", "视觉算法", "硬件"].includes(selectedDirection.value));
+const supportsBank = computed(() => !selectedDirection.value || bankDirections.includes(selectedDirection.value));
+const mechanicalBank = computed(() => selectedDirection.value === "机械");
 const groupName = computed(() => selectedDirection.value ? groupLabel(selectedDirection.value) : "技术组");
 const groupIntro = computed(() => ({
   机械: "从机构方案到加工装配，在实践中完成一台可靠的机器人。",
@@ -430,13 +451,23 @@ async function loadSubmissions(taskId: string) {
 async function onJudgeRun(run: JudgeRun) {
   submissionForm.fileIds = [...new Set([...submissionForm.fileIds, run.sourceFileId])];
   if (run.status !== "completed" || section.value !== "bank") return;
+  await refreshProblemList();
+}
+async function refreshProblemList() {
+  if (section.value !== "bank") return;
   const version = loadVersion;
   try {
     const result = await api.get<{ items: Task[] }>("/tasks?category=problem");
     if (version !== loadVersion || section.value !== "bank") return;
     tasks.value = result.items;
     if (selected.value) selected.value = tasks.value.find(task => task.id === selected.value?.id) || selected.value;
-  } catch { /* Judge results remain available even if the list refresh fails. */ }
+  } catch { /* Saved results remain available even if the list refresh fails. */ }
+}
+async function onMechanicalPractice(item: Submission) {
+  if (!selected.value || item.taskId !== selected.value.id) return;
+  submissions.value = [item, ...submissions.value.filter(existing => existing.id !== item.id)];
+  selected.value = { ...selected.value, mySubmission: item };
+  await refreshProblemList();
 }
 function openTask(task: Task) {
   if (saving.value || uploadBusy.value || judgeBusy.value) return;
@@ -574,7 +605,7 @@ async function submitWork() {
   }
 }
 function startCreate() {
-  if (saving.value || uploadBusy.value || judgeBusy.value) return;
+  if (saving.value || uploadBusy.value || mechanicalUploadBusy.value || judgeBusy.value) return;
   editingTaskId.value = "";
   Object.assign(taskForm, {
     title: "",
@@ -601,10 +632,11 @@ function startCreate() {
     },
   });
   taskFiles.value = [];
+  mechanicalDraft.value = { type: "single_choice", options: ["", ""], answers: [], explanation: "", answerFileIds: [], blankCount: 0 };
   if (taskForm.category === "problem") {
-    taskForm.kind = "code";
-    taskForm.submissionType = "code";
-    taskForm.judge.enabled = true;
+    taskForm.kind = mechanicalProblemForm.value ? "quiz" : "code";
+    taskForm.submissionType = mechanicalProblemForm.value ? "" : "code";
+    taskForm.judge.enabled = !mechanicalProblemForm.value;
   }
   if (teamsForTasks.value.length === 1) taskForm.teamId = teamsForTasks.value[0]!.id;
   createOpen.value = true;
@@ -624,11 +656,14 @@ function startEdit(task: Task, asNew = false) {
     direction: task.direction, team: task.team, kind: task.kind,
     category: categoryOf(task), tags: [...(task.tags || [])], difficulty: task.difficulty,
     dueAt: localDate(task.dueAt), resourcesUrl: task.resourcesUrl, maxScore: task.maxScore,
-    required: task.required, teamId: task.teamId || "", submissionType: task.submissionType || "files",
+    required: task.required, teamId: task.teamId || "", submissionType: task.submissionType ?? (mechanicalProblem(task) ? "" : "files"),
     startsAt: localDate(task.startsAt),
     judge: task.judge ? { ...task.judge, testCases: task.judge.testCases.map(test => ({ ...test })), languageIds: [...task.judge.languageIds] } : { enabled: false, testCases: [], languageIds: [], timeLimitSeconds: 2, totalCases: 0 },
   });
   taskFiles.value = [...(task.fileIds || [])];
+  mechanicalDraft.value = task.mechanicalProblem
+    ? { ...task.mechanicalProblem, options: [...(task.mechanicalProblem.options || [])], answers: [...(task.mechanicalProblem.answers || [])], answerFileIds: [...(task.mechanicalProblem.answerFileIds || [])] }
+    : { type: "single_choice", options: ["", ""], answers: [], explanation: "", answerFileIds: [], blankCount: 0 };
   createOpen.value = true;
 }
 async function removeTask() {
@@ -645,7 +680,7 @@ async function removeTask() {
   finally { saving.value = false; }
 }
 async function createTask() {
-  if (saving.value || uploadBusy.value) return;
+  if (saving.value || uploadBusy.value || mechanicalUploadBusy.value) return;
   if (!hasPermission("tasks", taskForm.direction)) { notice.value = "没有该组作业与考试的管理权限"; return; }
   if (!taskForm.title.trim() || !taskForm.description.trim()) {
     notice.value = "请填写任务名称和完整要求";
@@ -679,8 +714,12 @@ async function createTask() {
     notice.value = "考试必须设置发布开始时间和截止时间";
     return;
   }
-  if (taskForm.category === "problem" && (!["电控", "视觉算法", "硬件"].includes(taskForm.direction) || !taskForm.judge.enabled)) {
-    notice.value = "题库题目请选择电控、视觉算法或硬件组，并启用自动评测";
+  if (taskForm.category === "problem" && (!bankDirections.includes(taskForm.direction) || !mechanicalProblemForm.value && !taskForm.judge.enabled)) {
+    notice.value = "请选择题库所属组；机械题设置题型与答案，电控、算法和硬件代码题需启用自动评测";
+    return;
+  }
+  if (mechanicalProblemForm.value && mechanicalDraft.value.type === "drawing" && !taskFiles.value.length) {
+    notice.value = "请上传用于自主练习的图纸；参考答案可以不提供。";
     return;
   }
   if (["机械", "运营"].includes(taskForm.direction) && (taskForm.submissionType === "code" || taskForm.judge.enabled)) {
@@ -699,6 +738,8 @@ async function createTask() {
   try {
     const body = {
       ...taskForm,
+      ...(mechanicalProblemForm.value ? { kind: mechanicalDraft.value.type === "drawing" ? "hardware" : "quiz", submissionType: "", required: false } : {}),
+      mechanicalProblem: mechanicalProblemForm.value ? mechanicalDraft.value : null,
       fileIds: taskFiles.value,
       judge:
         taskForm.submissionType === "code" && taskForm.judge.enabled
@@ -792,7 +833,7 @@ onUnmounted(() => clearInterval(timeTicker));
               section === 'knowledge'
                 ? '下载文件、阅读 PDF，观看技术组学习资料'
                 : section === 'bank'
-                  ? '按题目练习代码，查看通过率并运行自动评测'
+                  ? mechanicalBank ? '选择、填空自动判分；下载图纸自主练习，可查看参考答案' : '按题目分类练习，查看作答记录与通过情况'
                   : section === 'exam'
                     ? '管理员定时发布考核内容，按开始和截止时间参加考试'
                     : section === 'home'
@@ -849,7 +890,7 @@ onUnmounted(() => clearInterval(timeTicker));
             <v-card v-if="canViewKnowledge" elevation="1" @click="goSection('knowledge')"><v-icon color="teal">mdi-bookshelf</v-icon><div><h3>知识库</h3><p>讲义、PDF、视频与资料下载</p></div><v-icon color="grey">mdi-chevron-right</v-icon></v-card>
             <v-card v-if="canViewTasks" elevation="1" @click="goSection('tasks')"><v-icon color="primary">mdi-clipboard-text-outline</v-icon><div><h3>作业</h3><p>{{ selectedDirection === '运营' ? '图片、设计稿与运营实践' : '训练任务、实践成果与阶段考核' }}</p></div><v-icon color="grey">mdi-chevron-right</v-icon></v-card>
             <v-card v-if="canViewTasks" elevation="1" @click="goSection('exam')"><v-icon color="deep-purple">mdi-calendar-clock-outline</v-icon><div><h3>考试</h3><p>查看排期，按时参加考试</p></div><v-icon color="grey">mdi-chevron-right</v-icon></v-card>
-            <v-card v-if="canViewTasks && supportsBank" elevation="1" @click="goSection('bank')"><v-icon color="deep-orange">mdi-code-braces</v-icon><div><h3>题库</h3><p>电控、视觉与硬件编程练习</p></div><v-icon color="grey">mdi-chevron-right</v-icon></v-card>
+            <v-card v-if="canViewTasks && supportsBank" elevation="1" @click="goSection('bank')"><v-icon color="deep-orange">{{ mechanicalBank ? 'mdi-pencil-ruler' : 'mdi-code-braces' }}</v-icon><div><h3>题库</h3><p>{{ mechanicalBank ? '选择、填空与图纸自主练习' : '按知识标签与难度练习题目' }}</p></div><v-icon color="grey">mdi-chevron-right</v-icon></v-card>
           </div>
           <div v-if="canViewTasks" class="group-home-grid">
             <v-card class="group-home-panel" elevation="1"><div class="home-panel-heading"><h2>近期作业</h2><v-btn variant="text" color="primary" size="small" @click="goSection('tasks')">全部作业</v-btn></div>
@@ -885,7 +926,7 @@ onUnmounted(() => clearInterval(timeTicker));
               }}</strong>
             </div>
             <div>
-              <span>{{ section === 'bank' ? '评测次数' : isStudent ? "待修改" : "成果提交" }}</span>
+              <span>{{ section === 'bank' ? mechanicalBank ? '作答次数' : '评测次数' : isStudent ? "待修改" : "成果提交" }}</span>
               <strong>{{
                 section === 'bank' ? listedTasks.reduce((sum, task) => sum + (task.attemptCount || 0), 0) : isStudent
                   ? revisions
@@ -920,8 +961,8 @@ onUnmounted(() => clearInterval(timeTicker));
         <div v-if="section === 'bank'" class="problem-layout">
           <v-card class="problem-list" elevation="1">
             <div class="problem-list-tools"><v-select v-model="problemSort" :items="[{value:'newest',title:'最新发布'},{value:'title',title:'题目名称'},{value:'accepted',title:'通过次数'}]" density="compact" variant="outlined" hide-details aria-label="题库排序" /><span>{{ problems.length }} 道题目</span></div>
-            <div class="problem-table-scroll"><table class="problem-table"><thead><tr><th>状态</th><th>题目</th><th>标签</th><th>AC / 尝试</th><th>难度</th></tr></thead><tbody><tr v-for="task in pagedProblems" :key="task.id"><td><v-icon size="19" :color="task.myAccepted ? 'teal' : 'grey-lighten-1'">{{ task.myAccepted ? 'mdi-check-circle-outline' : 'mdi-circle-outline' }}</v-icon></td><td><button class="problem-title" @click="openTask(task)"><span>#{{ task.id.slice(0, 6).toUpperCase() }}</span><strong>{{ task.title }}</strong></button></td><td><div class="problem-tags"><v-chip v-for="tag in task.tags || []" :key="tag" size="x-small" color="primary" variant="tonal" @click="problemTag = tag">{{ tag }}</v-chip><span v-if="!task.tags?.length">{{ task.direction }}</span></div></td><td>{{ task.acceptedCount || 0 }} / {{ task.attemptCount || 0 }}</td><td><v-chip size="x-small" :color="task.difficulty === '挑战' ? 'deep-orange' : task.difficulty === '进阶' ? 'amber-darken-2' : 'teal'" variant="tonal">{{ task.difficulty }}</v-chip></td></tr></tbody></table></div>
-            <div v-if="!problems.length" class="problem-empty"><v-icon size="38" color="indigo-lighten-3">mdi-code-braces</v-icon><h2>暂无匹配的题目</h2><p>{{ canManage ? '发布带测试用例的题目，成员即可在题库中练习。' : '更换搜索条件，或等待管理员发布新的练习题目。' }}</p></div>
+            <div class="problem-table-scroll"><table class="problem-table"><thead><tr><th>状态</th><th>题目</th><th>标签</th><th>通过 / 尝试</th><th>难度</th></tr></thead><tbody><tr v-for="task in pagedProblems" :key="task.id"><td><v-icon v-if="task.mechanicalProblem?.type === 'drawing'" size="19" color="blue-grey" title="自主练习，无需提交">mdi-ruler-square</v-icon><v-icon v-else size="19" :color="task.myAccepted ? 'teal' : 'grey-lighten-1'">{{ task.myAccepted ? 'mdi-check-circle-outline' : 'mdi-circle-outline' }}</v-icon></td><td><button class="problem-title" @click="openTask(task)"><span>#{{ task.id.slice(0, 6).toUpperCase() }}</span><strong>{{ task.title }}</strong><span v-if="task.mechanicalProblem">{{ mechanicalTypeLabel(task) }}</span></button></td><td><div class="problem-tags"><v-chip v-for="tag in task.tags || []" :key="tag" size="x-small" color="primary" variant="tonal" @click="problemTag = tag">{{ tag }}</v-chip><span v-if="!task.tags?.length">{{ task.direction }}</span></div></td><td>{{ task.mechanicalProblem?.type === 'drawing' ? '自主练习' : `${task.acceptedCount || 0} / ${task.attemptCount || 0}` }}</td><td><v-chip size="x-small" :color="task.difficulty === '挑战' ? 'deep-orange' : task.difficulty === '进阶' ? 'amber-darken-2' : 'teal'" variant="tonal">{{ task.difficulty }}</v-chip></td></tr></tbody></table></div>
+            <div v-if="!problems.length" class="problem-empty"><v-icon size="38" color="indigo-lighten-3">{{ mechanicalBank ? 'mdi-pencil-ruler' : 'mdi-code-braces' }}</v-icon><h2>暂无匹配的题目</h2><p>{{ canManage ? mechanicalBank ? '发布选择、填空题或练习图纸，参考答案可按需提供。' : '发布带测试用例的题目，成员即可在题库中练习。' : '更换搜索条件，或等待管理员发布新的练习题目。' }}</p></div>
             <v-pagination v-if="problems.length > 15" v-model="problemPage" :length="Math.ceil(problems.length / 15)" :total-visible="5" density="compact" class="my-3" />
           </v-card>
           <aside class="problem-sidebar"><v-card elevation="1"><h3>题目分类</h3><v-select v-model="problemTag" :items="['全部标签', ...problemTags]" label="知识标签" density="compact" variant="outlined" hide-details /><v-select v-model="problemDifficulty" :items="['全部难度', '入门', '进阶', '挑战']" label="题目难度" density="compact" variant="outlined" hide-details class="mt-4" /><v-btn color="primary" variant="text" class="mt-3" @click="search = ''; problemTag = '全部标签'; problemDifficulty = '全部难度'">清除筛选</v-btn></v-card><v-card elevation="1"><h3>练习一道题</h3><p>从当前筛选结果中随机挑选，开始今天的练习。</p><v-btn color="primary" variant="tonal" block prepend-icon="mdi-shuffle-variant" :disabled="!problems.length" @click="randomProblem">随机题目</v-btn></v-card></aside>
@@ -1057,9 +1098,9 @@ onUnmounted(() => clearInterval(timeTicker));
               @click="selected = null" /></v-card-title
           ><v-tabs v-model="detailTab" color="primary" class="px-5"
             ><v-tab value="brief">任务要求</v-tab
-            ><v-tab v-if="canSubmitSelected" value="submit">提交成果</v-tab
-            ><v-tab v-if="isStudent || canManage" value="history"
-              >{{ canManage ? "成果审核" : "提交历史" }}
+            ><v-tab v-if="canSubmitSelected && !mechanicalProblem(selected)" value="submit">提交成果</v-tab
+            ><v-tab v-if="(isStudent || canManage) && selected.mechanicalProblem?.type !== 'drawing'" value="history"
+              >{{ mechanicalProblem(selected) ? "作答记录" : canManage ? "成果审核" : "提交历史" }}
               <v-chip size="x-small" class="ml-2">{{
                 canManage ? latestSubmissions.length : submissions.length
               }}</v-chip></v-tab
@@ -1074,7 +1115,7 @@ onUnmounted(() => clearInterval(timeTicker));
                   ><v-chip size="small" variant="tonal">{{
                     selected.difficulty
                   }}</v-chip
-                  ><v-chip size="small" variant="tonal" color="teal"
+                  ><v-chip v-if="selected.mechanicalProblem?.type !== 'drawing'" size="small" variant="tonal" color="teal"
                     >满分 {{ selected?.maxScore }}</v-chip
                   ><span
                     ><v-icon size="15">mdi-calendar-clock-outline</v-icon
@@ -1085,15 +1126,15 @@ onUnmounted(() => clearInterval(timeTicker));
                     }}</span
                   >
                 </div>
-                <v-alert v-if="selected.locked" type="info" variant="tonal" class="mb-5">本场考试尚未开始，题目和附件将在开考时间开放。</v-alert>
-                <v-alert v-if="isStudent" :type="isAssigned(selected) ? 'success' : 'info'" variant="tonal" density="compact" class="mb-5">{{ taskRelation(selected) }} · {{ isAssigned(selected) ? selected.required ? '此任务属于你的报名组，请按要求完成。' : '此任务属于你的报名组，可按学习需要选做。' : '可阅读任务要求，不计入你的必做任务。' }}</v-alert>
-                <template v-if="!selected.locked"><div class="brief-description">{{ selected.description }}</div><AttachmentList :ids="selected.fileIds" /></template>
+                <v-alert v-if="selected.locked" type="info" variant="tonal" class="mb-5">当前内容尚未开放，题目和附件将在开始时间开放。</v-alert>
+                <v-alert v-if="isStudent && !mechanicalProblem(selected)" :type="isAssigned(selected) ? 'success' : 'info'" variant="tonal" density="compact" class="mb-5">{{ taskRelation(selected) }} · {{ isAssigned(selected) ? selected.required ? '此任务属于你的报名组，请按要求完成。' : '此任务属于你的报名组，可按学习需要选做。' : '可阅读任务要求，不计入你的必做任务。' }}</v-alert>
+                <template v-if="!selected.locked"><div class="brief-description">{{ selected.description }}</div><AttachmentList :ids="selected.fileIds" /><MechanicalPractice v-if="mechanicalProblem(selected)" :key="selected.id" :task="selected" :can-practice="canSubmitSelected" :disabled="saving" @busy="judgeBusy = $event" @saved="onMechanicalPractice" /></template>
                 <v-alert
                   v-if="selected.startsAt"
                   type="info"
                   variant="tonal"
                   class="my-4"
-                  >考试开始：{{ formatDate(selected.startsAt)
+                  >{{ categoryOf(selected) === 'exam' ? '考试开始' : '开放时间' }}：{{ formatDate(selected.startsAt)
                   }}{{
                     selected.dueAt
                       ? ` · 截止：${formatDate(selected.dueAt)}`
@@ -1122,11 +1163,11 @@ onUnmounted(() => clearInterval(timeTicker));
                   >打开学习资料</v-btn
                 >
                 <div class="brief-actions">
-                  <v-alert v-if="eligibility" type="info" variant="tonal">{{
+                  <v-alert v-if="eligibility && !mechanicalProblem(selected)" type="info" variant="tonal">{{
                     eligibility
                   }}</v-alert
                   ><v-btn
-                    v-else-if="canSubmitSelected"
+                    v-else-if="canSubmitSelected && !mechanicalProblem(selected)"
                     color="primary"
                     append-icon="mdi-arrow-right"
                     @click="detailTab = 'submit'"
@@ -1134,17 +1175,17 @@ onUnmounted(() => clearInterval(timeTicker));
                       selected.mySubmission ? "提交新版本" : "开始提交成果"
                     }}</v-btn
                   ><v-btn
-                    v-else-if="canManage"
+                    v-else-if="canManage && selected.mechanicalProblem?.type !== 'drawing'"
                     color="primary"
                     append-icon="mdi-arrow-right"
                     @click="detailTab = 'history'"
-                    >查看成员提交</v-btn
+                    >{{ mechanicalProblem(selected) ? '查看作答记录' : '查看成员提交' }}</v-btn
                   >
                   <div v-if="canManageTask(selected)" class="task-management-actions"><v-btn color="primary" variant="tonal" prepend-icon="mdi-pencil-outline" :disabled="selected.submissionCount > 0" @click="startEdit(selected)">编辑{{ categoryOf(selected) === 'exam' ? '考试' : categoryOf(selected) === 'problem' ? '题目' : '作业' }}</v-btn><v-btn variant="text" prepend-icon="mdi-content-copy" @click="startEdit(selected, true)">发布新版本</v-btn><v-btn color="error" variant="text" :disabled="selected.submissionCount > 0" @click="removingTask = selected">删除</v-btn><p>已有提交或评测记录的内容需发布新版本，以保留原始成绩。</p></div>
                 </div></v-window-item
               >
-              <v-window-item v-if="canSubmitSelected" value="submit"
-                ><v-alert v-if="eligibility" type="info" variant="tonal">{{
+              <v-window-item v-if="canSubmitSelected && !mechanicalProblem(selected)" value="submit"
+                ><v-alert v-if="eligibility && !mechanicalProblem(selected)" type="info" variant="tonal">{{
                   eligibility
                 }}</v-alert
                 ><template v-else
@@ -1260,10 +1301,12 @@ onUnmounted(() => clearInterval(timeTicker));
                   <v-icon size="40" color="grey-lighten-1"
                     >mdi-tray-arrow-up</v-icon
                   >
-                  <h2>还没有提交记录</h2>
+                  <h2>{{ mechanicalProblem(selected) ? '还没有作答记录' : '还没有提交记录' }}</h2>
                   <p>
                     {{
-                      canManage
+                      mechanicalProblem(selected)
+                        ? '在线练习后，系统判定结果和作答历史会保留在这里。'
+                        : canManage
                         ? "成员提交成果后，将在这里按人展示最新版本。"
                         : "完成任务后提交成果，管理员的反馈也会保留在这里。"
                     }}
@@ -1271,7 +1314,8 @@ onUnmounted(() => clearInterval(timeTicker));
                 </div>
                 <div v-else class="submission-list">
                   <div v-if="canManage" class="review-summary">
-                    <span
+                    <span v-if="mechanicalProblem(selected)">共 {{ latestSubmissions.length }} 位成员作答，已自动判定</span>
+                    <span v-else
                       >共 {{ latestSubmissions.length }} 位成员提交，{{
                         latestSubmissions.filter((s) => s.status === "pending")
                           .length
@@ -1295,21 +1339,21 @@ onUnmounted(() => clearInterval(timeTicker));
                     <div class="submission-heading">
                       <div>
                         <strong>{{
-                          canManage ? submission.userName : "我的提交"
+                          canManage ? submission.userName : mechanicalProblem(selected) ? "我的作答" : "我的提交"
                         }}</strong
                         ><span
-                          >第 {{ submission.version }} 版 ·
+                          >第 {{ submission.version }} {{ mechanicalProblem(selected) ? '次作答' : '版' }} ·
                           {{ formatDate(submission.createdAt) }}</span
                         >
                       </div>
                       <v-chip
                         :color="statusOf(submission.status).color"
                         size="small"
-                        >{{ statusOf(submission.status).label }}</v-chip
+                        >{{ mechanicalProblem(selected) ? submission.status === 'approved' ? '回答正确' : '回答错误' : statusOf(submission.status).label }}</v-chip
                       >
                     </div>
                     <p class="submission-content">
-                      {{ submission.content || "已提交附件或评测结果。" }}
+                      {{ submissionContent(submission) }}
                     </p>
                     <AttachmentList :ids="submission.fileIds" />
                     <JudgePanel
@@ -1347,7 +1391,7 @@ onUnmounted(() => clearInterval(timeTicker));
                       class="review-feedback"
                     >
                       <div>
-                        <strong>管理员反馈</strong
+                        <strong>{{ mechanicalProblem(selected) ? '自动判定' : '管理员反馈' }}</strong
                         ><v-chip size="small" color="teal" variant="tonal"
                           >{{ submission.score }} /
                           {{ selected?.maxScore }}</v-chip
@@ -1355,10 +1399,10 @@ onUnmounted(() => clearInterval(timeTicker));
                       </div>
                       <p>{{ submission.feedback || "管理员已完成审核。" }}</p>
                       <span
-                        >审核于 {{ formatDate(submission.reviewedAt) }}</span
+                        >{{ mechanicalProblem(selected) ? '判定于' : '审核于' }} {{ formatDate(submission.reviewedAt) }}</span
                       >
                     </div>
-                    <div v-if="canManage" class="review-actions">
+                    <div v-if="canManage && !mechanicalProblem(selected)" class="review-actions">
                       <span>审核对象为当前最新提交版本</span
                       ><v-btn
                         color="primary"
@@ -1379,7 +1423,7 @@ onUnmounted(() => clearInterval(timeTicker));
                       class="older-versions"
                     >
                       <summary>
-                        查看历史版本（{{
+                        {{ mechanicalProblem(selected) ? '查看历史作答' : '查看历史版本' }}（{{
                           submissions.filter(
                             (s) =>
                               s.userId === submission.userId &&
@@ -1397,10 +1441,10 @@ onUnmounted(() => clearInterval(timeTicker));
                         class="older-version"
                       >
                         <strong
-                          >第 {{ old.version }} 版 ·
+                          >第 {{ old.version }} {{ mechanicalProblem(selected) ? '次作答' : '版' }} ·
                           {{ formatDate(old.createdAt) }}</strong
                         >
-                        <p>{{ old.content || "此版本包含文件或评测结果。" }}</p>
+                        <p>{{ submissionContent(old) }}</p>
                         <AttachmentList :ids="old.fileIds" />
                         <div class="submission-links">
                           <a
@@ -1432,19 +1476,19 @@ onUnmounted(() => clearInterval(timeTicker));
         v-model="createOpen"
         max-width="800"
         :fullscreen="smAndDown"
-        :persistent="saving || uploadBusy"
+        :persistent="saving || uploadBusy || mechanicalUploadBusy"
         scrollable
         ><v-card class="learning-dialog"
           ><v-card-title class="dialog-heading"
             ><div>
               <h2>{{ editingTaskId ? '编辑' : '发布' }}{{ taskForm.category === 'exam' ? '考试' : taskForm.category === 'problem' ? '题库题目' : '作业任务' }}</h2>
-              <p>把目标、提交要求与验收标准说明清楚。</p>
+              <p>{{ mechanicalProblemForm ? '设置文字题答案，或上传图纸供成员自主练习。' : '把目标、提交要求与验收标准说明清楚。' }}</p>
             </div>
             <v-btn
               icon="mdi-close"
               variant="text"
               aria-label="关闭任务发布"
-              :disabled="saving || uploadBusy"
+              :disabled="saving || uploadBusy || mechanicalUploadBusy"
               @click="createOpen = false" /></v-card-title
           ><v-card-text
             ><v-form @submit.prevent="createTask"
@@ -1457,7 +1501,7 @@ onUnmounted(() => clearInterval(timeTicker));
                 required
               /><v-textarea
                 v-model="taskForm.description"
-                label="任务要求与验收标准 *"
+                :label="mechanicalProblemForm ? '题目内容与练习要求 *' : '任务要求与验收标准 *'"
                 placeholder="学习目标、前置知识、实施步骤、提交要求与评分标准…"
                 rows="7"
                 variant="outlined"
@@ -1482,14 +1526,14 @@ onUnmounted(() => clearInterval(timeTicker));
                     ]"
                     label="面向方向"
                     variant="outlined" /></v-col
-                ><v-col cols="12" sm="6"
+                ><v-col v-if="!mechanicalProblemForm" cols="12" sm="6"
                   ><v-select
                     v-model="taskForm.kind"
                     :items="availableKinds"
                     :disabled="taskForm.category === 'problem'"
                     label="任务类型"
                     variant="outlined" /></v-col
-                ><v-col cols="12" sm="6"
+                ><v-col v-if="!mechanicalProblemForm" cols="12" sm="6"
                   ><v-select
                     v-model="taskForm.submissionType"
                     :items="availableSubmissionTypes"
@@ -1517,7 +1561,7 @@ onUnmounted(() => clearInterval(timeTicker));
                     :label="taskForm.category === 'exam' ? '考试截止时间 *' : '截止时间（选填）'"
                     :required="taskForm.category === 'exam'"
                     variant="outlined" /></v-col
-                ><v-col cols="12" sm="6"
+                ><v-col v-if="!mechanicalProblemForm || mechanicalDraft.type !== 'drawing'" cols="12" sm="6"
                   ><v-text-field
                     v-model.number="taskForm.maxScore"
                     type="number"
@@ -1535,10 +1579,10 @@ onUnmounted(() => clearInterval(timeTicker));
                 variant="outlined"
               /><FileUpload
                 v-model="taskFiles"
-                label="任务说明附件（选填）"
+                :label="mechanicalProblemForm ? mechanicalDraft.type === 'drawing' ? '练习图纸（必填）' : '题目附件（选填）' : '任务说明附件（选填）'"
                 :disabled="saving"
                 @busy="uploadBusy = $event"
-              /><JudgeFields
+              /><MechanicalProblemFields v-if="mechanicalProblemForm" v-model="mechanicalDraft" :disabled="saving" @busy="mechanicalUploadBusy = $event" /><JudgeFields
                 v-if="taskForm.submissionType === 'code' && !['机械', '运营'].includes(taskForm.direction)"
                 v-model="taskForm.judge"
               /><v-switch
@@ -1553,7 +1597,7 @@ onUnmounted(() => clearInterval(timeTicker));
                 ><v-btn
                   color="primary"
                   :loading="saving"
-                  :disabled="uploadBusy"
+                  :disabled="uploadBusy || mechanicalUploadBusy"
                   type="submit"
                   >{{ editingTaskId ? '保存修改' : taskForm.category === 'exam' ? '安排考试' : taskForm.category === 'problem' ? '发布题目' : '发布作业' }}</v-btn
                 >

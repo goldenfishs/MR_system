@@ -1,4 +1,5 @@
 import type { JudgeConfig } from "./platform";
+import type { MechanicalProblem } from "./learning";
 export type Role = "admin" | "group_admin" | "member" | "reserve" | "freshman";
 export type MemberType = "formal" | "reserve" | "freshman";
 export type Permission = "recruitment" | "assessment" | "tasks" | "knowledge" | "discussions" | "members" | "records" | "mail";
@@ -76,9 +77,10 @@ export interface Task {
   myAccepted?: boolean;
   teamId?: string;
   fileIds?: string[];
-  submissionType?: "files" | "code" | "project";
+  submissionType?: "" | "files" | "code" | "project";
   startsAt?: string;
   judge?: JudgeConfig;
+  mechanicalProblem?: MechanicalProblem;
   id: string;
   title: string;
   description: string;

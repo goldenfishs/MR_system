@@ -436,24 +436,28 @@ func (a *App) updateTask(w http.ResponseWriter, r *http.Request, u User) error {
 		return err
 	}
 	previousFiles := append([]string{}, task.FileIDs...)
+	if task.MechanicalProblem != nil {
+		previousFiles = append(previousFiles, task.MechanicalProblem.AnswerFileIDs...)
+	}
 	var in struct {
-		Title          *string         `json:"title"`
-		Description    *string         `json:"description"`
-		Direction      *string         `json:"direction"`
-		Team           *string         `json:"team"`
-		TeamID         *string         `json:"teamId"`
-		Kind           *string         `json:"kind"`
-		Difficulty     *string         `json:"difficulty"`
-		DueAt          *string         `json:"dueAt"`
-		StartsAt       *string         `json:"startsAt"`
-		ResourcesURL   *string         `json:"resourcesUrl"`
-		MaxScore       *float64        `json:"maxScore"`
-		Required       *bool           `json:"required"`
-		FileIDs        *[]string       `json:"fileIds"`
-		SubmissionType *string         `json:"submissionType"`
-		Category       *string         `json:"category"`
-		Tags           *[]string       `json:"tags"`
-		Judge          json.RawMessage `json:"judge"`
+		Title             *string         `json:"title"`
+		Description       *string         `json:"description"`
+		Direction         *string         `json:"direction"`
+		Team              *string         `json:"team"`
+		TeamID            *string         `json:"teamId"`
+		Kind              *string         `json:"kind"`
+		Difficulty        *string         `json:"difficulty"`
+		DueAt             *string         `json:"dueAt"`
+		StartsAt          *string         `json:"startsAt"`
+		ResourcesURL      *string         `json:"resourcesUrl"`
+		MaxScore          *float64        `json:"maxScore"`
+		Required          *bool           `json:"required"`
+		FileIDs           *[]string       `json:"fileIds"`
+		SubmissionType    *string         `json:"submissionType"`
+		Category          *string         `json:"category"`
+		Tags              *[]string       `json:"tags"`
+		Judge             json.RawMessage `json:"judge"`
+		MechanicalProblem json.RawMessage `json:"mechanicalProblem"`
 	}
 	if err = decode(r, &in); err != nil {
 		return err
@@ -524,6 +528,19 @@ func (a *App) updateTask(w http.ResponseWriter, r *http.Request, u User) error {
 				return fail(400, "请求数据格式不正确")
 			}
 			task.Judge = &judge
+		}
+	}
+	if in.MechanicalProblem != nil {
+		if strings.TrimSpace(string(in.MechanicalProblem)) == "null" {
+			task.MechanicalProblem = nil
+		} else {
+			var problem MechanicalProblem
+			decoder := json.NewDecoder(strings.NewReader(string(in.MechanicalProblem)))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&problem); err != nil {
+				return fail(400, "机械题目配置格式不正确")
+			}
+			task.MechanicalProblem = &problem
 		}
 	}
 	if task.Title == "" || len(task.Title) > 250 || task.Description == "" || len(task.Description) > 30000 || task.Direction != "" && !validDirection(task.Direction) || task.Team != "" && !validTeam(task.Team) || !validDate(task.DueAt) || !validURL(task.ResourcesURL) || !finite(task.MaxScore) || task.MaxScore <= 0 || task.MaxScore > 1000 {

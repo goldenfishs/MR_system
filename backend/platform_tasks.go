@@ -129,8 +129,8 @@ func (a *App) validateTaskPlatform(t *Task, u User, existing ...[]string) error 
 	if t.Category == "exam" && (t.StartsAt == "" || t.DueAt == "") {
 		return fail(400, "考试必须设置发布开始时间和截止时间")
 	}
-	if t.Category == "problem" && (t.Direction != "电控" && t.Direction != "视觉算法" && t.Direction != "硬件" || t.Kind != "code" || t.Judge == nil) {
-		return fail(400, "题库仅支持电控、视觉算法和硬件组的在线编程题，请配置测试用例")
+	if t.Category == "problem" && t.Direction != "机械" && (t.Direction != "电控" && t.Direction != "视觉算法" && t.Direction != "硬件" || t.Kind != "code" || t.Judge == nil) {
+		return fail(400, "机械题库使用选择、填空或图纸题；电控、视觉算法和硬件题库须配置在线编程测试用例")
 	}
 	if len(t.Tags) > 10 {
 		return fail(400, "最多设置 10 个题目标签")
@@ -174,6 +174,9 @@ func (a *App) validateTaskPlatform(t *Task, u User, existing ...[]string) error 
 	previous := []string{}
 	if len(existing) > 0 {
 		previous = existing[0]
+	}
+	if err := a.validateMechanicalProblem(t, u, previous); err != nil {
+		return err
 	}
 	if err := requireUpdatedFiles(a.store, u, t.FileIDs, previous); err != nil {
 		return err
@@ -224,7 +227,8 @@ func (a *App) taskFileAccess(u User, fileID string) (bool, error) {
 		return false, err
 	}
 	for _, t := range tasks {
-		if includesID(t.FileIDs, fileID) && !taskLocked(t, u) {
+		isReference := t.MechanicalProblem != nil && t.MechanicalProblem.Type == "drawing" && includesID(t.MechanicalProblem.AnswerFileIDs, fileID)
+		if (includesID(t.FileIDs, fileID) || isReference) && !taskLocked(t, u) {
 			visible, err := a.taskVisibleTo(t, u)
 			if err != nil || visible {
 				return visible, err
@@ -250,6 +254,7 @@ func (a *App) taskFileAccess(u User, fileID string) (bool, error) {
 }
 
 func (a *App) registerTaskPlatformRoutes(m *http.ServeMux) {
+	m.HandleFunc("POST /api/tasks/{id}/practice", a.wrap(true, a.practiceMechanicalProblem))
 	m.HandleFunc("GET /api/mail-campaigns", a.wrap(true, a.listMailCampaigns))
 	m.HandleFunc("POST /api/mail-campaigns", a.wrap(true, a.createMailCampaign))
 	m.HandleFunc("GET /api/mail-campaigns/{id}", a.wrap(true, a.getMailCampaign))

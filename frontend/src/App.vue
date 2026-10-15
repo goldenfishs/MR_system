@@ -185,7 +185,7 @@ const sectionTabs = computed(() => {
       { value: "home", title: "首页" },
       ...(canAccessLearningModule("knowledge", direction) ? [{ value: "knowledge", title: "知识库" }] : []),
       ...(canAccessLearningModule("tasks", direction) ? [{ value: "tasks", title: "作业" }, { value: "exam", title: "考试" }] : []),
-      ...(canAccessLearningModule("tasks", direction) && ["电控", "视觉算法", "硬件"].includes(String(route.query.direction))
+      ...(canAccessLearningModule("tasks", direction) && ["机械", "电控", "视觉算法", "硬件"].includes(String(route.query.direction))
         ? [{ value: "bank", title: "题库" }]
         : []),
     ];

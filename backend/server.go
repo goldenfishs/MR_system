@@ -829,6 +829,15 @@ func (a *App) tasksFor(u User) ([]Task, error) {
 			if s.TaskID != t.ID {
 				continue
 			}
+			if t.MechanicalProblem != nil && t.MechanicalProblem.Type != "drawing" && (s.Status == "approved" || s.Status == "changes_requested") {
+				t.AttemptCount++
+				if s.Status == "approved" {
+					t.AcceptedCount++
+					if s.UserID == u.ID {
+						t.MyAccepted = true
+					}
+				}
+			}
 			if !seen[s.UserID] {
 				if hasPermission(u, t.Direction, "tasks") {
 					t.SubmissionCount++
@@ -842,6 +851,9 @@ func (a *App) tasksFor(u User) ([]Task, error) {
 		}
 		t.Assigned = a.requireTaskEnrollment(t, u) == nil
 		t.CanSubmit = t.Assigned && a.requireTaskSubmission(t, u) == nil
+		if t.MechanicalProblem != nil && t.MechanicalProblem.Type == "drawing" {
+			t.CanSubmit = false
+		}
 		result = append(result, publicTask(t, u))
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt > result[j].CreatedAt })
@@ -947,6 +959,9 @@ func (a *App) submitTask(w http.ResponseWriter, r *http.Request, u User) error {
 	if err != nil {
 		return err
 	}
+	if t.MechanicalProblem != nil {
+		return fail(400, "机械选择或填空题请直接作答；图纸题供自由练习，无需提交")
+	}
 	if err = a.requireTaskSubmission(t, u); err != nil {
 		return err
 	}
@@ -996,6 +1011,9 @@ func (a *App) reviewSubmission(w http.ResponseWriter, r *http.Request, u User) e
 	}
 	if err = requirePermission(u, t.Direction, "tasks"); err != nil {
 		return err
+	}
+	if t.MechanicalProblem != nil {
+		return fail(400, "机械客观题由系统自动判定，不支持人工修改成绩")
 	}
 	if u.Role != "admin" && s.UserID == u.ID {
 		return fail(403, "不能评阅本人提交的成果")
