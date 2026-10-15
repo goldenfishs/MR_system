@@ -109,8 +109,12 @@ flowchart LR
 
 登录使用服务端会话及 HttpOnly、SameSite=Lax Cookie；正式环境设置 `SESSION_SECURE=true`。修改请求校验提供的 Origin，不开放通配 CORS。反向代理保留 Host，或设置准确的 `PUBLIC_ORIGIN`。普通 JSON 请求（含注册）上限 1 MiB，资料／标志更新 4 MiB，multipart 请求 26 MiB；反向代理的请求体与超时限制需与上传大小匹配。
 
-`UPLOAD_DIR` 默认 `DATA_DIR/uploads`，必须可写且持久化。数据库连接使用 `DATABASE_URL`；留空使用 DATA_DIR 下的 SQLite。SMTP 密钥和判题令牌只通过环境注入，API 不返回凭据。未配置 SMTP 时停止新注册与批量发送，已有登录继续使用；未配置判题服务时保留一般任务文件提交功能。
+`UPLOAD_DIR` 默认 `DATA_DIR/uploads`，必须可写且持久化。数据库连接使用 `DATABASE_URL`；留空使用 DATA_DIR 下的 SQLite。SMTP 初始配置和判题令牌通过环境注入；管理员可在后台更新 SMTP，授权码加密保存，密钥文件为 `DATA_DIR/mail-settings.key`，API 不返回凭据。备份应同时保留数据库及整个数据目录。未配置 SMTP 时停止新注册与批量发送，已有登录继续使用；未配置判题服务时保留一般任务文件提交功能。
 
 当前部署为单实例：常规写操作在进程内串行化，异步邮件和判题有各自状态保护；不能运行共享数据库的多个应用副本。Docker 以非 root 用户运行，前端静态资源打包进入镜像。`/api/health` 只检查服务和数据库，不能替代 SMTP、判题服务、文件持久化和备份恢复检查。
+
+已有部署升级时，先备份数据库、数据卷和当前镜像，再在更新后的仓库执行 `COMPOSE_PROJECT=mr-system-prod ./scripts/deploy-app.sh qut-proxy`（项目和代理容器名按实际修改）。脚本先保留当前版本的带哈希静态资源到数据卷 `web-assets`，再仅重建应用并检查健康、重载代理，避免用户已有页面继续加载旧模块时出现 404。保留目录只允许读取单层、带内容哈希的静态资源，不暴露上传文件或 HTML。
+
+证书生成使用单个受限子进程转换 PDF、DOCX、图片并叠加中文字段，Docker 镜像包含 Python、LibreOffice、Poppler 和中文字体。容器用户固定为 UID 100 / GID 101，以兼容已有数据卷。首次升级会增加约 1 GB 运行依赖，构建前应检查磁盘空间。证书批量接口最长运行 240 秒，反向代理 `proxy_read_timeout` 建议至少 300 秒，上传限制至少 26 MiB。Word 转换排版以生成预览为准；生成期间不占用全站写锁。
 
 公开仓库只包含虚构示例，不包含真实成员数据、上传文件或密钥。演示账号限定独立演示数据库；正式环境应从空数据库引导。变更 DEMO_MODE 不会清理数据，修改管理员引导环境变量不是常规改密码方式。上线还需根据实际负载配置代理限流、监控和备份，密码找回、文件扫描和多组织管理范围尚未实现。完整请求与响应见[接口契约](api-contract.md)。
