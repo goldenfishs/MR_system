@@ -840,7 +840,8 @@ func (a *App) tasksFor(u User) ([]Task, error) {
 				t.MySubmission = &copy
 			}
 		}
-		t.CanSubmit = a.requireTaskSubmission(t, u) == nil
+		t.Assigned = a.requireTaskEnrollment(t, u) == nil
+		t.CanSubmit = t.Assigned && a.requireTaskSubmission(t, u) == nil
 		result = append(result, publicTask(t, u))
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt > result[j].CreatedAt })
@@ -905,7 +906,7 @@ func (a *App) createTask(w http.ResponseWriter, r *http.Request, u User) error {
 	t.CreatedAt = now()
 	t.MySubmission = nil
 	t.SubmissionCount, t.AcceptedCount, t.AttemptCount = 0, 0, 0
-	t.Locked, t.MyAccepted = false, false
+	t.Locked, t.MyAccepted, t.Assigned, t.CanSubmit = false, false, false, false
 	if err := a.store.exec("INSERT INTO tasks(id,payload) VALUES(?,?)", t.ID, encoded(t)); err != nil {
 		return err
 	}
@@ -1067,7 +1068,7 @@ func (a *App) dashboard(w http.ResponseWriter, r *http.Request, u User) error {
 	}
 	active := 0
 	for _, t := range tasks {
-		if !expired(t.DueAt) {
+		if !expired(t.DueAt) && (hasPermission(u, t.Direction, "tasks") || t.Assigned) {
 			active++
 		}
 	}

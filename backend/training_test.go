@@ -233,51 +233,53 @@ func TestTrainingEliminationRevokesPersonalAccessButRetainsManagementAndHistory(
 	}
 }
 
-func TestTrainingReadmissionRequiresBothAssessmentGrantsAndPreservesCycles(t *testing.T) {
+func TestTrainingReadmissionRequiresOwnAssessmentGrantAndPreservesOtherGroups(t *testing.T) {
 	a, admin := setup(t)
 	admin.login("admin")
-	team := trainingTeamForTest(t, admin, "机械", "电控")
+	team := trainingTeamForTest(t, admin, "机械")
 	user, oldAP := trainingApplicantForTest(t, a, admin, team, "机械", "readmission@test.local")
 	old := admitForTest(t, a, admin, oldAP)
 	trainingDecisionForTest(admin, old, "foundation", "eliminated", 200)
-	// A separate team application exercises a changed target group while keeping
-	// the original accepted application and elimination audit intact.
 	otherTeam := trainingTeamForTest(t, admin, "电控")
 	newAP := TeamApplication{ID: randomID(), TeamID: otherTeam.ID, UserID: user.ID, UserName: user.Name, Direction: "电控", Status: "pending", CreatedAt: now(), UpdatedAt: now()}
 	if err := a.store.exec("INSERT INTO team_applications(id,team_id,user_id,payload) VALUES(?,?,?,?)", newAP.ID, newAP.TeamID, newAP.UserID, encoded(newAP)); err != nil {
 		t.Fatal(err)
 	}
-	grantForTest(t, admin, "demo-mentor", []GroupGrant{{"电控", []string{"recruitment"}}})
+	grantForTest(t, admin, "demo-mentor", []GroupGrant{{"电控", []string{"recruitment"}}, {"机械", []string{"recruitment"}}})
 	staff := &testClient{t: t, handler: admin.handler}
 	staff.login("mentor")
-	staff.request("PATCH", "/api/team-applications/"+newAP.ID, map[string]any{"status": "accepted", "reopenTraining": true}, 403)
-	grantForTest(t, admin, "demo-mentor", []GroupGrant{{"电控", []string{"recruitment", "assessment"}}})
-	staff.request("PATCH", "/api/team-applications/"+newAP.ID, map[string]any{"status": "accepted", "reopenTraining": true}, 403)
-	grantForTest(t, admin, "demo-mentor", []GroupGrant{{"电控", []string{"recruitment", "assessment"}}, {"机械", []string{"assessment"}}})
-	staff.request("PATCH", "/api/team-applications/"+newAP.ID, map[string]string{"status": "accepted"}, 409)
-	staff.request("PATCH", "/api/team-applications/"+newAP.ID, map[string]any{"status": "accepted", "reopenTraining": true}, 200)
-	current, err := latestTraining(a.store, user.ID)
-	if err != nil || current == nil || current.Cycle != 2 || current.Direction != "电控" || current.Status != "training" || current.CreatedBy != "demo-mentor" || len(current.Decisions) != 0 {
-		t.Fatal("authorized readmission did not start a fresh cycle")
-	}
+	// Another group's first admission is independent of the old elimination.
 	staff.request("PATCH", "/api/team-applications/"+newAP.ID, map[string]string{"status": "accepted"}, 200)
-	if stored := trainingProgressForTest(t, a, old.ID); stored.Status != "eliminated" || len(stored.Decisions) != 1 {
+	current, err := latestTrainingInScope(a.store, user.ID, otherTeam.ID, "电控")
+	if err != nil || current == nil || current.Cycle != 2 || current.Status != "training" {
+		t.Fatalf("independent group admission failed: %+v, %v", current, err)
+	}
+	staff.request("PATCH", "/api/team-applications/"+oldAP.ID, map[string]string{"status": "accepted"}, 409)
+	staff.request("PATCH", "/api/team-applications/"+oldAP.ID, map[string]any{"status": "accepted", "reopenTraining": true}, 403)
+	grantForTest(t, admin, "demo-mentor", []GroupGrant{{"机械", []string{"recruitment", "assessment"}}})
+	staff.request("PATCH", "/api/team-applications/"+oldAP.ID, map[string]any{"status": "accepted", "reopenTraining": true}, 200)
+	reopened, err := latestTrainingInScope(a.store, user.ID, team.ID, "机械")
+	if err != nil || reopened == nil || reopened.Cycle != 3 || reopened.Status != "training" || len(reopened.Decisions) != 0 {
+		t.Fatalf("readmission did not start a fresh scoped cycle: %+v, %v", reopened, err)
+	}
+	if historical := trainingProgressForTest(t, a, old.ID); historical.Status != "eliminated" || len(historical.Decisions) != 1 {
 		t.Fatal("readmission changed historical elimination")
 	}
+	trainingDecisionForTest(admin, *current, "foundation", "passed", 200)
+	trainingDecisionForTest(staff, old, "foundation", "passed", 409)
+	trainingDecisionForTest(staff, *reopened, "foundation", "passed", 200)
 	student := &testClient{t: t, handler: admin.handler}
 	student.request("POST", "/api/auth/login", map[string]string{"email": user.Email, "password": trainingPassword}, 200)
-	if !unmarshal[bool](t, student.request("GET", "/api/learning-access", nil, 200)["allowed"]) {
-		t.Fatal("latest admitted cycle did not restore personal learning")
+	access := student.request("GET", "/api/learning-access", nil, 200)
+	if !unmarshal[bool](t, access["allowed"]) || len(unmarshal[[]string](t, access["enrolledDirections"])) != 2 {
+		t.Fatal("both groups should remain independently active")
 	}
-	if len(unmarshal[[]TrainingProgress](t, student.request("GET", "/api/training-progress", nil, 200)["items"])) != 2 {
-		t.Fatal("readmission duplicated cycles or lost history")
+	if len(unmarshal[[]TrainingProgress](t, student.request("GET", "/api/training-progress", nil, 200)["items"])) != 3 {
+		t.Fatal("independent admission lost prior cycle history")
 	}
-	grantForTest(t, admin, "demo-mentor", []GroupGrant{{"机械", []string{"recruitment"}}})
 	oldApplications := unmarshal[[]TeamApplication](t, staff.request("GET", "/api/teams/"+team.ID+"/applications", nil, 200)["items"])
-	for _, application := range oldApplications {
-		if application.UserID == user.ID && (application.TrainingStatus != "" || application.TrainingStageTitle != "") {
-			t.Fatal("old-group recruiter saw the new group's current assessment progress")
-		}
+	if len(oldApplications) != 1 || oldApplications[0].TrainingCycle != 3 || oldApplications[0].TrainingStatus != "training" {
+		t.Fatal("recruiter did not see their own group's current cycle")
 	}
 }
 
@@ -291,7 +293,6 @@ func TestTrainingRevokedAdmissionCannotFinishOrChangeActiveGroup(t *testing.T) {
 	if err := a.store.exec("INSERT INTO applicants(id,user_id,payload) VALUES(?,?,?)", legacy.ID, user.ID, encoded(legacy)); err != nil {
 		t.Fatal(err)
 	}
-	admin.request("PATCH", "/api/applicants/"+legacy.ID, map[string]string{"status": "accepted"}, 409)
 	admin.request("PATCH", "/api/members/"+user.ID, map[string]string{"direction": "机械"}, 409)
 	trainingDecisionForTest(admin, p, "foundation", "passed", 200)
 	trainingDecisionForTest(admin, p, "phase", "passed", 200)

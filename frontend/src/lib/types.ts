@@ -66,6 +66,7 @@ export interface Applicant {
   updatedAt: string;
 }
 export interface Task {
+  assigned?: boolean;
   canSubmit?: boolean;
   category?: "assignment" | "exam" | "problem";
   tags?: string[];

@@ -180,12 +180,47 @@ func latestTraining(s *Store, userID string) (*TrainingProgress, error) {
 	}
 	return &p, err
 }
+
+// Cycles retain their globally increasing audit number, but each team and group
+// has its own current cycle. A decision in one group cannot supersede another.
+func latestTrainingInScope(s *Store, userID, teamID, direction string) (*TrainingProgress, error) {
+	p, err := readOne[TrainingProgress](s, "SELECT payload FROM training_progress WHERE user_id=? AND team_id=? AND direction=? ORDER BY cycle DESC LIMIT 1", userID, teamID, direction)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return &p, err
+}
+func currentTraining(s *Store, userID string) ([]TrainingProgress, error) {
+	items, err := readAll[TrainingProgress](s, "SELECT payload FROM training_progress WHERE user_id=? ORDER BY cycle DESC", userID)
+	if err != nil {
+		return nil, err
+	}
+	out := []TrainingProgress{}
+	seen := map[string]bool{}
+	for _, p := range items {
+		key := p.TeamID + "\x00" + p.Direction
+		if !seen[key] {
+			out = append(out, p)
+			seen[key] = true
+		}
+	}
+	return out, nil
+}
 func trainingEliminated(s *Store, u User) (bool, error) {
 	if u.MemberType != "freshman" || u.Role == "admin" {
 		return false, nil
 	}
-	p, err := latestTraining(s, u.ID)
-	return p != nil && p.Status == "eliminated", err
+	directions, err := memberDirectionsAt(s, u.ID)
+	if err != nil || len(directions) > 0 {
+		return false, err
+	}
+	progress, err := currentTraining(s, u.ID)
+	for _, p := range progress {
+		if p.Status == "eliminated" {
+			return true, err
+		}
+	}
+	return false, err
 }
 
 func trainingEnrollmentActive(s *Store, p TrainingProgress) (bool, error) {
@@ -211,23 +246,9 @@ func trainingEnrollmentActive(s *Store, p TrainingProgress) (bool, error) {
 
 func annotateTrainingApplication(s *Store, ap *TeamApplication) error {
 	ap.TrainingStatus, ap.TrainingStageTitle, ap.TrainingCycle = "", "", 0
-	p, err := latestTraining(s, ap.UserID)
+	p, err := latestTrainingInScope(s, ap.UserID, ap.TeamID, ap.Direction)
 	if err != nil || p == nil {
 		return err
-	}
-	owner, err := s.user(ap.UserID)
-	if err != nil {
-		return err
-	}
-	if p.Status == "eliminated" && owner.MemberType != "freshman" {
-		return nil
-	}
-	if p.Status != "eliminated" && (p.TeamID != ap.TeamID || p.Direction != ap.Direction) {
-		return nil
-	}
-	if p.TeamID != ap.TeamID || p.Direction != ap.Direction {
-		ap.TrainingStatus = "eliminated"
-		return nil
 	}
 	ap.TrainingStatus, ap.TrainingCycle = p.Status, p.Cycle
 	for _, stage := range p.Stages {
@@ -241,39 +262,37 @@ func annotateTrainingApplication(s *Store, ap *TeamApplication) error {
 	return nil
 }
 
-// Only explicit, authorized readmission opens another cycle. Its greater cycle
-// number supersedes the old elimination without destroying historical decisions.
+// Only explicit, authorized readmission reopens an eliminated group. Admissions
+// and assessments in other groups have no effect on this group's history.
 func admitTraining(s *Store, actor User, userID, teamID, direction string, reopen bool) error {
 	user, err := s.user(userID)
-	if err != nil || user.MemberType != "freshman" {
-		return err
-	}
-	old, err := latestTraining(s, userID)
 	if err != nil {
 		return err
 	}
-	cycle := 1
+	old, err := latestTrainingInScope(s, userID, teamID, direction)
+	if err != nil {
+		return err
+	}
 	if old != nil {
-		cycle = old.Cycle + 1
-		if old.Status == "training" {
-			if old.Direction != direction || old.TeamID != teamID {
-				return fail(409, "新生正在另一培养周期中，请先结束当前培养后再调整组别或团队")
-			}
-			return nil
-		}
-		if old.Status == "completed" {
+		if old.Status == "training" || old.Status == "completed" {
 			return nil
 		}
 		if !reopen {
-			return fail(409, "该新生已淘汰，需考核管理员明确重新录取并开启新周期")
-		}
-		if err := requirePermission(actor, old.Direction, "assessment"); err != nil {
-			return err
+			return fail(409, "该组新生考核已淘汰，需本组考核管理员明确重新录取并开启新周期")
 		}
 		if err := requirePermission(actor, direction, "assessment"); err != nil {
 			return err
 		}
 	}
+	latest, err := latestTraining(s, userID)
+	if err != nil {
+		return err
+	}
+	cycle := 1
+	if latest != nil {
+		cycle = latest.Cycle + 1
+	}
+
 	plan, err := readOne[TrainingPlan](s, "SELECT payload FROM training_plans WHERE team_id=? AND direction=?", teamID, direction)
 	if errors.Is(err, sql.ErrNoRows) && teamID != "" {
 		plan, err = readOne[TrainingPlan](s, "SELECT payload FROM training_plans WHERE team_id='' AND direction=?", direction)
@@ -352,7 +371,7 @@ func (a *App) decideTrainingStage(w http.ResponseWriter, r *http.Request, u User
 		if p.UserID == u.ID && u.Role != "admin" {
 			return fail(403, "组管理员不能确认自己的新生考核")
 		}
-		latest, err := latestTraining(s, p.UserID)
+		latest, err := latestTrainingInScope(s, p.UserID, p.TeamID, p.Direction)
 		if err != nil {
 			return err
 		}
@@ -362,9 +381,6 @@ func (a *App) decideTrainingStage(w http.ResponseWriter, r *http.Request, u User
 		owner, err := s.user(p.UserID)
 		if err != nil {
 			return err
-		}
-		if owner.MemberType != "freshman" {
-			return fail(409, "只有新生参与阶段培养考核")
 		}
 		if admitted, err := trainingEnrollmentActive(s, p); err != nil {
 			return err
@@ -395,13 +411,21 @@ func (a *App) decideTrainingStage(w http.ResponseWriter, r *http.Request, u User
 		decision := TrainingDecision{StageID: stage.ID, StageTitle: stage.Title, Status: in.Status, Note: strings.TrimSpace(in.Note), DecidedBy: u.ID, DecidedByName: u.Name, DecidedAt: now()}
 		if in.Status == "eliminated" {
 			p.Status, p.CurrentStageID = "eliminated", ""
-			if err = s.exec("DELETE FROM team_memberships WHERE user_id=?", p.UserID); err != nil {
+			if err = s.exec("DELETE FROM team_memberships WHERE user_id=? AND team_id=? AND direction=?", p.UserID, p.TeamID, p.Direction); err != nil {
 				return err
 			}
 		} else if stage.Final {
 			p.Status, p.CurrentStageID = "completed", ""
-			decision.MemberType = in.TargetMemberType
-			owner.MemberType, owner.Direction = in.TargetMemberType, p.Direction
+			// Completing another group must never downgrade an existing formal member.
+			targetType := in.TargetMemberType
+			if owner.MemberType == "formal" {
+				targetType = "formal"
+			}
+			decision.MemberType = targetType
+			if owner.MemberType == "freshman" || owner.Direction == "" {
+				owner.Direction = p.Direction
+			}
+			owner.MemberType = targetType
 			if owner.Role != "admin" && owner.Role != "group_admin" {
 				owner.Role = memberRole(owner.MemberType)
 			}

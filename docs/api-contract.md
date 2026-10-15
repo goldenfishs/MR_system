@@ -89,13 +89,13 @@ interface Membership { teamId: string; userId: string; direction: Direction; joi
 - `PATCH /teams/:id`：上述字段的部分更新 → `{item:Team}`，仅管理员，可关闭或重新开放报名。
 - `POST /teams/:id/applications`：`{direction,resumeFileId,motivation}` → 201 `{item:TeamApplication}`，普通人员。必须完成资料、上传本人 PDF 简历、选择开放方向，且团队开放并未到截止时间。每人每团队一份申请，pending/rejected 可更新重新提交，accepted 不允许自改。
 - `GET /teams/:id/applications` → `{items:TeamApplication[]}`。管理员可读本团队全部申请及 `profile`；有 recruitment 权限的组管理员可读对应方向申请及资料；其余仅本人申请。
-- `PATCH /team-applications/:id`：`{status:'accepted'|'rejected',feedback,reopenTraining?:boolean}` → `{item:TeamApplication}`，管理员或对应方向有 recruitment 权限的组管理员。报名通过不改变新生身份；录取、成员关系和新生培养周期写入原子提交，重复录取不产生重复成员或培养周期，撤销录取删除相应成员关系。已淘汰新生不能用重复 accepted 恢复资格，须明确传 `reopenTraining:true`，并同时具备原培养组和新方向的 assessment 权限；仅 recruitment 权限不能重开。
+- `PATCH /team-applications/:id`：`{status:'accepted'|'rejected',feedback,reopenTraining?:boolean}` → `{item:TeamApplication}`，管理员或对应方向有 recruitment 权限的组管理员。报名通过不改变新生身份；录取、成员关系和新生培养周期写入原子提交，重复录取不产生重复成员或培养周期，撤销录取删除相应成员关系。当前团队／方向已淘汰的人员不能用重复 accepted 恢复本组资格，须明确传 `reopenTraining:true` 并具备该组 assessment 权限；仅 recruitment 权限不能重开。其他团队／方向可以独立录取，不受该淘汰记录影响。
 - `GET /memberships` → `{items:Membership[]}`，管理员全部；组管理员本人及有 members 权限的方向；普通用户自己的。
-- `GET /learning-access` → `{allowed:boolean,directions:Direction[]}`，必须登录。管理员、正式／梯队队员，以及有有效入队关系或历史 accepted 记录的新生可查看全部技术组学习内容；其余返回 false 和空 directions。已有培养周期的新生只依据最新周期对应团队／方向的有效录取关系，最新周期淘汰优先于所有旧成员关系和 accepted 记录，关闭其成员学习与提交资格。管理角色与人员身份分别判断：未录取或已淘汰的新生组管理员仍可执行明确授予的管理操作，但不能借管理身份跨组学习或恢复成员提交资格。根据数据库中的当前状态判断，无需重新登录即可反映审核、权限调整、淘汰或撤销结果。
+- `GET /learning-access` → `{allowed:boolean,directions:Direction[],appliedDirections:Direction[],enrolledDirections:Direction[]}`，必须登录。`allowed` 表示跨组学习资格；允许时 `directions` 为全部技术组，否则为空。`appliedDirections` 表示有效待审或已录取报名及兼容成员方向，用于侧栏星标；拒绝、已淘汰的对应报名不计入。`enrolledDirections` 为已生效的录取方向。管理员、正式／梯队队员，以及至少有一个有效入队关系或兼容历史 accepted 记录的新生可查看全部组学习内容。培养资格按用户、团队、方向各自最新周期判断，某组淘汰只使该范围失效，其他有效组继续授予学习资格。管理角色不代替成员提交资格；组管理员仍可执行明确授予的管理操作。所有状态从数据库动态计算，审核、淘汰与撤销无需重新登录即可生效。
 
-`User.team` 是旧面试流程的赛事字段；新团队的实体 ID 为 `Team.id`／`Task.teamId`。一个用户可以加入多个团队，不用覆盖旧字段表达多团队关系。
+`User.team` 是旧面试流程的赛事字段；新团队的实体 ID 为 `Team.id`／`Task.teamId`。一个用户可以同时加入多个单方向团队，各组分别报名、审核与考核，不用覆盖旧字段表达多团队关系。
 
-普通人员通过报名审核后，前端开放全部组的“学习与任务”和“技术分组”，仍保留新生身份；新生考核通过后再晋升梯队／正式队员。未开放时直接访问 `/learning` 或 `/assessment` 转至团队报名页。报名、个人资料、个人荣誉和讨论区仍可使用；有跨组学习访问权限不代表可以管理其他组、读取他人成果或提交任意任务，具体团队、方向和时间限制继续生效。
+侧栏始终显示机械、电控、硬件、视觉算法、运营五组，已有效报名的组显示 🌟。普通人员通过任一组报名审核后，可以浏览全部组的学习内容，仍保留新生身份；最终考核通过后再晋升梯队／正式队员。未获学习资格时访问 `/learning` 或 `/assessment` 转至团队报名页，并保留所选方向提示。报名、个人资料、个人荣誉和讨论区仍可使用；有跨组学习访问权限不代表可以管理其他组、读取他人成果或提交任意任务，具体团队、方向和时间限制继续生效。
 
 ## 新生培养与阶段考核
 
@@ -122,11 +122,11 @@ interface TrainingProgress {
 - `GET /training-plans?teamId=&direction=` → `{items:TrainingPlan[]}`，已登录可查看阶段方案，不返回人员考核记录。
 - `POST /training-plans`：`{teamId?,direction,title,stages}` → 201 `{item:TrainingPlan}`；`PATCH /training-plans/:id`：`{title?,stages?}` → `{item:TrainingPlan}`。管理员或该组有 assessment 权限的组管理员可维护。同一团队、组别只有一份方案；teamId 为空时为该组通用方案，指定团队须开放该方向。配置 1–12 个阶段，阶段 ID 唯一，名称最多 200 字节，说明最多 5000 字节；顺序按数组保存，只有最后阶段为 final。方案编辑只影响新培养周期。
 - `GET /training-progress?teamId=&direction=&status=` → `{items:TrainingProgress[]}`，本人可查看自己全部周期，管理员全部，组管理员只可查看有 assessment 权限组的人员进度与反馈；跨组学习权限不开放他人记录。
-- `POST /training-progress/decisions`：`{progressIds:string[],stageId,status:'passed'|'eliminated',note?,targetMemberType?:'reserve'|'formal'}` → `{items:TrainingProgress[]}`，管理员或该组有 assessment 权限者。每批 1–100 个唯一记录，必须均为各自最新培养周期的当前阶段，并仍具备该周期团队／方向的有效录取关系；任一记录越权、录取撤销、过期、已处理或缺少前置通过记录时整批失败。同一批不能混合最终阶段与普通阶段，避免方案版本调整后部分人员意外晋升。组管理员不能确认自己的考核。反馈最多 5000 字节，成员本人可查看。
+- `POST /training-progress/decisions`：`{progressIds:string[],stageId,status:'passed'|'eliminated',note?,targetMemberType?:'reserve'|'formal'}` → `{items:TrainingProgress[]}`，管理员或该组有 assessment 权限者。每批 1–100 个唯一记录，必须均为该用户在相应团队／方向的最新培养周期当前阶段，并仍具备该周期团队／方向的有效录取关系；任一记录越权、录取撤销、过期、已处理或缺少前置通过记录时整批失败。同一批不能混合最终阶段与普通阶段，避免方案版本调整后部分人员意外晋升。组管理员不能确认自己的考核。反馈最多 5000 字节，成员本人可查看。
 
-新生录取时自动开始培养周期，依次选用团队组方案、该组通用方案、默认「基础学习 → 阶段考核 → 最终考核」。周期保存当时的完整阶段快照，后来调整方案不改写既有阶段与结果。非最终阶段通过只进入下一阶段，身份继续为新生；最终通过将周期置 completed，并晋升 targetMemberType（默认 reserve），记录最终确认人、时间和说明，保留管理角色及原有授权。任一阶段淘汰将周期置 eliminated、移除全部团队关系并立即关闭成员学习与提交；个人历史、荣誉和本人附件保留。
+每个团队／方向首次录取时自动开始独立培养周期，已是正式／梯队队员再加入新组也需参加该组培养；依次选用团队组方案、该组通用方案、默认「基础学习 → 阶段考核 → 最终考核」。周期保存当时的完整阶段快照，后来调整方案不改写既有阶段与结果。同一人员可并行推进多个团队／方向的培养周期，`cycle` 是该用户所有周期共享的递增审计编号，不能用全局最大编号判断其他组周期失效。非最终阶段通过只推进本周期，不改变其他组进度；最终通过将本周期置 completed，按 targetMemberType（默认 reserve）提升账号统一成员身份，已有更高身份不降级，保留管理角色及原有授权。即使已在一组晋升，其他尚未完成周期仍需独立考核。任一阶段淘汰仅将本周期置 eliminated、移除对应团队／方向成员关系并关闭该范围提交资格，其他组的学习资格与考核不受影响；个人历史、荣誉和本人附件保留。
 
-有进行中的培养周期时，不能通过人员身份接口跳过阶段晋升，也不能直接改换方向。淘汰历史不能通过身份调整或旧录取记录恢复；重新参与必须显式重开新的录取周期。`/training` 前端入口保留，未录取或已淘汰人员仍可查看自己的培养状态与历史。
+有进行中的培养周期时，不能通过人员身份接口跳过阶段晋升，也不能直接改换方向。对应组的淘汰历史不能通过身份调整或旧录取记录恢复；重新参加该组必须显式重开该团队／方向的新录取周期。`/training` 前端入口保留，未录取或已淘汰人员仍可查看自己的培养状态与历史。
 
 撤销报名录取保留周期与已有决策，但不能继续确认后续阶段；恢复同一团队、方向的 accepted 后可继续当前未淘汰周期。申请响应的 trainingStatus／trainingStageTitle／trainingCycle 为相关培养状态展示，不等同原始报名状态。
 
@@ -154,7 +154,7 @@ interface JudgeConfig {
 interface Task {
   id: string; title: string; description: string; direction: string; team: string; teamId?: string;
   category: 'assignment' | 'exam' | 'problem'; tags: string[]; locked: boolean;
-  acceptedCount: number; attemptCount: number; myAccepted: boolean; canSubmit: boolean;
+  acceptedCount: number; attemptCount: number; myAccepted: boolean; assigned: boolean; canSubmit: boolean;
   kind: 'code' | 'document' | 'hardware' | 'quiz'; difficulty: '入门' | '进阶' | '挑战';
   startsAt?: string; dueAt: string; resourcesUrl: string; fileIds: string[];
   submissionType?: 'files' | 'project' | 'code'; judge?: JudgeConfig;
@@ -169,13 +169,13 @@ interface Submission {
 }
 ```
 
-- `GET /tasks` → `{items:Task[]}`。未取得学习访问权限的用户只返回其 tasks 管理授权范围内的任务，无管理授权则为空列表；已取得学习资格的人员可查看各组学习任务。canSubmit 表示当前是否可作为成员提交，提交仍受录取、淘汰、所属团队、方向和时间限制。submissionCount 仅为有该任务管理权限者计算，其他人员返回 0，并仅获得自己的 mySubmission。题库 acceptedCount／attemptCount 为公开汇总，myAccepted 为本人是否通过；没有该任务管理权限的响应隐藏 `hidden:true` 的输入和预期输出，保留 `totalCases`。
+- `GET /tasks` → `{items:Task[]}`。未取得学习访问权限的用户只返回其 tasks 管理授权范围内的任务，无管理授权则为空列表；已取得学习资格的人员可查看各组学习任务。`assigned` 表示任务属于本人的有效录取团队／方向，与开考和截止时间无关；作业／考试据此区分本组必做、选做和跨组参考。`canSubmit` 进一步校验时间窗口，表示当前是否可提交；录取、淘汰、团队和方向条件均由服务端判断。submissionCount 仅为有该任务管理权限者计算，其他人员返回 0，并仅获得自己的 mySubmission。题库 acceptedCount／attemptCount 为公开汇总，myAccepted 为本人是否通过；没有该任务管理权限的响应隐藏 `hidden:true` 的输入和预期输出，保留 `totalCases`。
 - `POST /tasks`：Task 的非服务器管理字段 → 201 `{item:Task}`，管理员或对应组有 tasks 权限的组管理员。`fileIds` 为教材或题目附件；`submissionType` 区分一般文件、工程项目和单文件代码。`teamId` 指定发布团队，`team` 为兼容旧数据的赛事字段。
 - `GET /tasks/:id/submissions` → `{items:Submission[]}`，普通人员必须仍有该任务的访问权限，且仅返回本人记录；管理员或对应组有 tasks 权限的组管理员可评阅。入队资格撤销后，不再凭历史提交获得任务记录访问权。
 - `POST /tasks/:id/submissions`：`{content,repoUrl?,artifactUrl?,fileIds?,judgeRunId?}` → 201 `{item:Submission}`。必须符合下述成员方向与团队规则，在开始与截止时间内；每次创建新版本。声明提交形式的任务必须上传文件，启用判题时必须引用本任务、本人、完成状态的判题记录以及对应代码文件；源代码哈希须一致。
 - `PATCH /submissions/:id`：`{status:'approved'|'changes_requested',score,feedback}` → `{item:Submission}`，管理员或对应组有 tasks 权限的组管理员，只可审核最新版本，分值范围为 0 至 task.maxScore。
 
-任务浏览跨组开放；提交需有学习资格且属于任务方向。新生还必须加入任务指定的团队；正式／梯队队员及兼任管理者按已记录的成员方向提交，有对应团队关系时以该团队方向为准。新任务应指定 teamId；不含 teamId 的旧任务使用已记录成员方向。机械说明书、工程 ZIP、PCB、运营图片统一使用附件；这些文件由人工评分，工程 ZIP 不自动编译。
+任务浏览跨组开放；带 teamId 的任务须有该团队／方向有效成员关系才会分配并允许提交，人员身份或另一组的录取不能绕过本组要求。本组最新周期淘汰后不再分配该任务，其他组任务不受影响。新任务应指定 teamId；不含 teamId 的历史任务按有效成员方向兼容校验。机械说明书、工程 ZIP、PCB、运营图片统一使用附件；这些文件由人工评分，工程 ZIP 不自动编译。
 
 ## 在线编译测试
 

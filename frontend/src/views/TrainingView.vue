@@ -16,6 +16,7 @@ const teams = ref<TeamSpace[]>([]), plans = ref<TrainingPlan[]>([]), progress = 
 const loading = ref(true), saving = ref(false), error = ref(""), notice = ref("");
 const direction = ref<string>(groups.value[0]?.value || ""), teamId = ref(""), stageFilter = ref(""), status = ref("training"), search = ref("");
 const selectedIds = ref<string[]>([]), detail = ref<TrainingProgress | null>(null);
+const mineDirection = ref(""), showHistory = ref(false);
 const planDialog = ref(false), planError = ref(""), planDraft = reactive({ title: "", stages: [] as TrainingStage[] });
 const decisionDialog = ref(false), decisionError = ref(""), decisionStatus = ref<"passed" | "eliminated">("passed"), decisionNote = ref("");
 const targetMemberType = ref<Exclude<MemberType, "freshman">>("reserve");
@@ -24,6 +25,19 @@ let loadVersion = 0;
 
 const scopedProgress = computed(() => progress.value.filter(item => hasPermission("assessment", item.direction)));
 const mine = computed(() => progress.value.filter(item => item.userId === auth.user?.id).sort((a, b) => b.cycle - a.cycle || b.createdAt.localeCompare(a.createdAt)));
+const progressScope = (item: TrainingProgress) => JSON.stringify([item.teamId, item.direction]);
+const latestMineIds = computed(() => {
+  const scopes = new Set<string>();
+  return new Set(mine.value.filter(item => {
+    const key = progressScope(item);
+    if (scopes.has(key)) return false;
+    scopes.add(key);
+    return true;
+  }).map(item => item.id));
+});
+const mineGroupOptions = computed(() => [...new Set(mine.value.map(item => item.direction))].map(value => ({ title: groupLabel(value), value })));
+const visibleMine = computed(() => mine.value.filter(item => (!mineDirection.value || item.direction === mineDirection.value) && (showHistory.value || latestMineIds.value.has(item.id))));
+const historicalCount = computed(() => mine.value.filter(item => !latestMineIds.value.has(item.id) && (!mineDirection.value || item.direction === mineDirection.value)).length);
 const legacyTeam = "__legacy_training__";
 const actualTeamId = computed(() => teamId.value === legacyTeam ? "" : teamId.value);
 const teamOptions = computed(() => [
@@ -173,7 +187,7 @@ onUnmounted(() => { loadVersion++; });
 <template>
   <div class="page-content training-page">
     <div class="training-heading">
-      <div><h1 class="page-title">新生考核</h1><p class="page-subtitle">从基础学习到最终考核，记录每一步成长与选拔结果。</p></div>
+      <div><h1 class="page-title">新生考核</h1><p class="page-subtitle">各组独立记录培养阶段、考核结果与成长历程。</p></div>
       <v-btn variant="text" prepend-icon="mdi-refresh" :disabled="loading || saving" @click="load">刷新记录</v-btn>
     </div>
     <v-tabs v-if="isManager" v-model="tab" color="primary" class="training-tabs"><v-tab value="manage">阶段管理</v-tab><v-tab value="mine">我的进度</v-tab></v-tabs>
@@ -193,25 +207,29 @@ onUnmounted(() => { loadVersion++; });
           <div class="stage-overview"><div v-for="(stage, index) in (plan?.stages.length ? plan.stages : defaultTrainingStages())" :key="stage.id || index" class="overview-stage"><span class="stage-number">{{ index + 1 }}</span><div><strong>{{ stage.title }}</strong><small>{{ stage.final ? '最终通过后晋升' : '通过后进入下一阶段' }}</small></div></div></div>
         </v-card>
         <v-card class="roster-card">
-          <div class="roster-heading"><div><h2>阶段名单</h2><p>选择同一阶段的培养中人员，批量确认通过或淘汰。</p></div><span class="roster-count">{{ roster.length }} 条记录</span></div>
+          <div class="roster-heading"><div><h2>阶段名单</h2><p>选择同一阶段的培养中人员，批量确认通过或淘汰；结果仅影响当前团队与组别。</p></div><span class="roster-count">{{ roster.length }} 条记录</span></div>
           <div class="roster-filters"><v-text-field v-model="search" placeholder="搜索姓名或邮箱" prepend-inner-icon="mdi-magnify" hide-details /><v-select v-model="stageFilter" :items="[{ title: '全部阶段', value: '' }, ...stageOptions]" label="考核阶段" hide-details /><v-select v-model="status" :items="[{ title: '全部状态', value: '' }, ...Object.entries(trainingStatusNames).map(([value, title]) => ({ title, value }))]" label="培养状态" hide-details /></div>
           <div class="batch-toolbar"><v-checkbox :model-value="allSelected" :indeterminate="selectedRecords.length > 0 && !allSelected" label="选择本阶段待考核人员" hide-details density="compact" :disabled="!eligible.length || saving" @update:model-value="toggleAll" /><v-spacer /><span class="selected-count">已选 {{ selectedRecords.length }} 人</span><v-btn size="small" variant="tonal" color="error" :disabled="!selectedRecords.length || saving" @click="openDecision('eliminated')">淘汰</v-btn><v-btn size="small" color="primary" :disabled="!selectedRecords.length || saving" prepend-icon="mdi-check" @click="openDecision('passed')">确认通过</v-btn></div>
           <p v-if="!stageFilter && roster.some(item => item.status === 'training')" class="stage-tip">先选择一个当前阶段，即可勾选人员进行批量考核。</p>
-          <v-table v-if="roster.length" class="training-table"><thead><tr><th class="select-column"></th><th>成员</th><th>当前阶段</th><th>状态</th><th>录取周期</th><th>记录</th></tr></thead><tbody><tr v-for="item in roster" :key="item.id"><td><v-checkbox v-model="selectedIds" :value="item.id" hide-details density="compact" :disabled="!canDecide(item) || saving" :aria-label="`选择${item.userName}`" /></td><td><strong>{{ item.userName }}</strong><small>{{ item.email }}</small></td><td>{{ stageName(item) }}</td><td><v-chip size="small" :color="trainingStatusColors[item.status]" variant="tonal">{{ trainingStatusNames[item.status] }}</v-chip></td><td>第 {{ item.cycle }} 次<small>{{ dateTime(item.createdAt) }}</small></td><td><v-btn size="small" variant="text" color="primary" @click="detail = item">查看进度</v-btn></td></tr></tbody></v-table>
+          <v-table v-if="roster.length" class="training-table"><thead><tr><th class="select-column"></th><th>成员</th><th>当前阶段</th><th>状态</th><th>录取周期</th><th>记录</th></tr></thead><tbody><tr v-for="item in roster" :key="item.id"><td><v-checkbox v-model="selectedIds" :value="item.id" hide-details density="compact" :disabled="!canDecide(item) || saving" :aria-label="`选择${item.userName}`" /></td><td><strong>{{ item.userName }}</strong><small>{{ item.email }}</small></td><td>{{ stageName(item) }}</td><td><v-chip size="small" :color="trainingStatusColors[item.status]" variant="tonal">{{ trainingStatusNames[item.status] }}</v-chip></td><td>周期 #{{ item.cycle }}<small>{{ dateTime(item.createdAt) }}</small></td><td><v-btn size="small" variant="text" color="primary" @click="detail = item">查看进度</v-btn></td></tr></tbody></v-table>
           <div v-else class="roster-empty"><v-icon size="36" color="grey">mdi-account-search-outline</v-icon><p>没有符合条件的培养记录</p></div>
         </v-card>
       </template>
     </template>
     <template v-else>
       <v-card v-if="!mine.length" class="training-empty"><v-icon size="44" color="primary">mdi-school-outline</v-icon><h2>等待开始你的培养历程</h2><p>团队报名审核通过后，分组培养阶段与考核进度会显示在这里。</p><v-btn to="/teams" color="primary" variant="tonal" class="mt-5">前往团队报名</v-btn></v-card>
-      <div v-else class="my-progress-list"><v-card v-for="item in mine" :key="item.id" class="progress-card">
-        <div class="progress-header"><div><span class="progress-context">{{ teamName(item.teamId) }} · {{ groupLabel(item.direction) }} · 第 {{ item.cycle }} 次录取</span><h2>{{ item.planTitle }}</h2></div><v-chip :color="trainingStatusColors[item.status]" variant="tonal">{{ trainingStatusNames[item.status] }}</v-chip></div>
-        <v-alert v-if="item.status === 'eliminated'" :type="mine[0]?.id === item.id ? 'error' : 'info'" variant="tonal" density="compact" class="mb-5">{{ mine[0]?.id === item.id ? '本次培养已淘汰，学习与提交资格已关闭。考核记录保留；如需重新参与，请联系管理员重新录取。' : '本次培养已淘汰，考核记录已保留。当前参与情况请查看最新录取周期。' }}</v-alert>
-        <v-alert v-else-if="item.status === 'completed'" type="success" variant="tonal" density="compact" class="mb-5">已通过本次最终考核{{ item.decisions.at(-1)?.memberType ? `，晋升为${memberTypeNames[item.decisions.at(-1)!.memberType!]}` : '' }}。</v-alert>
-        <p v-else class="current-caption">当前：{{ stageName(item) }}<span>每一阶段通过后再进入下一阶段，最终考核通过后确认成员身份。</span></p>
+      <template v-else>
+      <v-alert type="info" variant="tonal" density="compact" class="mb-5">可以同时参加多个组，各组分别报名、审核和考核。某组淘汰不影响其他组的培养与提交资格。</v-alert>
+      <div class="mine-filters"><v-select v-model="mineDirection" :items="[{ title: '全部组别', value: '' }, ...mineGroupOptions]" label="查看组别" hide-details /><v-switch v-model="showHistory" :label="`包含历史周期${historicalCount ? `（${historicalCount} 条）` : ''}`" color="primary" hide-details density="compact" /></div>
+      <div class="my-progress-list"><v-card v-for="item in visibleMine" :key="item.id" class="progress-card">
+        <div class="progress-header"><div><span class="progress-context">{{ teamName(item.teamId) }} · {{ groupLabel(item.direction) }} · 录取周期 #{{ item.cycle }} · {{ latestMineIds.has(item.id) ? '本组最新记录' : '历史记录' }}</span><h2>{{ item.planTitle }}</h2></div><v-chip :color="trainingStatusColors[item.status]" variant="tonal">{{ trainingStatusNames[item.status] }}</v-chip></div>
+        <v-alert v-if="item.status === 'eliminated'" :type="latestMineIds.has(item.id) ? 'error' : 'info'" variant="tonal" density="compact" class="mb-5">{{ latestMineIds.has(item.id) ? '本次培养已淘汰，此团队与组别的提交资格已关闭，其他组不受影响。考核记录保留；重新参与本组需由管理员重新录取。' : '此历史周期已淘汰，考核记录保留。请查看该团队与组别的最新录取周期了解当前进度。' }}</v-alert>
+        <v-alert v-else-if="item.status === 'completed'" type="success" variant="tonal" density="compact" class="mb-5">已通过本组本次最终考核{{ item.decisions.at(-1)?.memberType ? `，确认身份为${memberTypeNames[item.decisions.at(-1)!.memberType!]}` : '' }}。其他组按各自阶段继续考核。</v-alert>
+        <p v-else class="current-caption">当前：{{ stageName(item) }}<span>本组按阶段依次考核，最终通过后确认成员身份；其他组进度独立。</span></p>
         <div class="personal-stages"><div v-for="(stage, index) in item.stages" :key="stage.id" class="personal-stage" :class="{ 'is-current': stage.id === item.currentStageId && item.status === 'training' }"><div class="personal-stage-icon"><v-icon :color="stageState(item, stage).color" size="19">{{ stageState(item, stage).icon }}</v-icon></div><div class="personal-stage-content"><div><strong>{{ index + 1 }}. {{ stage.title }}</strong><v-chip size="x-small" :color="stageState(item, stage).color" variant="tonal">{{ stageState(item, stage).label }}</v-chip></div><p v-if="stage.description">{{ stage.description }}</p><p v-if="stageDecision(item, stage.id)?.note" class="decision-note">反馈：{{ stageDecision(item, stage.id)?.note }}</p><small v-if="stageDecision(item, stage.id)">{{ stageDecision(item, stage.id)?.decidedByName }} · {{ dateTime(stageDecision(item, stage.id)?.decidedAt || '') }}</small></div></div></div>
         <div class="progress-footer"><span>录取于 {{ dateTime(item.createdAt) }}</span><v-btn variant="text" color="primary" size="small" @click="detail = item">完整考核记录<v-icon end>mdi-arrow-right</v-icon></v-btn></div>
       </v-card></div>
+      </template>
     </template>
 
     <v-dialog v-model="planDialog" max-width="800" scrollable :persistent="saving"><v-card><v-card-title class="dialog-heading">配置培养阶段<v-spacer /><v-btn icon="mdi-close" aria-label="关闭阶段设置" variant="text" :disabled="saving" @click="planDialog = false" /></v-card-title><v-card-text>
@@ -220,9 +238,9 @@ onUnmounted(() => { loadVersion++; });
       <v-btn variant="tonal" prepend-icon="mdi-plus" :disabled="saving || planDraft.stages.length >= 12" @click="addStage">增加阶段</v-btn>
     </v-card-text><v-card-actions class="dialog-actions"><v-spacer /><v-btn :disabled="saving" @click="planDialog = false">取消</v-btn><v-btn color="primary" variant="flat" :loading="saving" @click="savePlan">保存阶段方案</v-btn></v-card-actions></v-card></v-dialog>
 
-    <v-dialog v-model="decisionDialog" max-width="600" :persistent="saving"><v-card><v-card-title class="dialog-heading">{{ decisionStatus === 'passed' ? '确认阶段通过' : '确认淘汰' }}<v-spacer /><v-btn icon="mdi-close" variant="text" aria-label="关闭考核确认" :disabled="saving" @click="decisionDialog = false" /></v-card-title><v-card-text><v-alert v-if="decisionError" type="error" variant="tonal" class="mb-4">{{ decisionError }}</v-alert><p class="decision-summary">{{ groupLabel(decisionRecords[0]?.direction || '') }} · {{ decisionRecords[0] ? stageName(decisionRecords[0]) : '' }}<strong>{{ decisionRecords.length }} 人</strong></p><div class="decision-people"><v-chip v-for="item in decisionRecords" :key="item.id" size="small">{{ item.userName }}</v-chip></div><v-alert :type="decisionStatus === 'eliminated' ? 'warning' : 'info'" variant="tonal" density="compact" class="my-5">{{ decisionStatus === 'eliminated' ? '淘汰后关闭本次学习与提交资格，保留所有考核记录。再次录取需由管理员明确重新开启培养。' : finalDecision ? '通过最终考核后，按下方选定的身份完成晋升。' : '通过本阶段后进入下一阶段，成员身份仍为新生。' }}</v-alert><v-select v-if="decisionStatus === 'passed' && finalDecision" v-model="targetMemberType" :items="[{ title: '梯队队员', value: 'reserve' }, { title: '正式队员', value: 'formal' }]" label="晋升为" :disabled="saving" /><v-textarea v-model="decisionNote" label="考核反馈（成员可查看）" rows="3" maxlength="2000" hide-details :disabled="saving" /></v-card-text><v-card-actions class="dialog-actions"><v-spacer /><v-btn :disabled="saving" @click="decisionDialog = false">取消</v-btn><v-btn :color="decisionStatus === 'eliminated' ? 'error' : 'primary'" variant="flat" :loading="saving" @click="confirmDecision">{{ decisionStatus === 'eliminated' ? '确认淘汰' : finalDecision ? '通过并晋升' : '确认通过' }}</v-btn></v-card-actions></v-card></v-dialog>
+    <v-dialog v-model="decisionDialog" max-width="600" :persistent="saving"><v-card><v-card-title class="dialog-heading">{{ decisionStatus === 'passed' ? '确认阶段通过' : '确认淘汰' }}<v-spacer /><v-btn icon="mdi-close" variant="text" aria-label="关闭考核确认" :disabled="saving" @click="decisionDialog = false" /></v-card-title><v-card-text><v-alert v-if="decisionError" type="error" variant="tonal" class="mb-4">{{ decisionError }}</v-alert><p class="decision-summary">{{ groupLabel(decisionRecords[0]?.direction || '') }} · {{ decisionRecords[0] ? stageName(decisionRecords[0]) : '' }}<strong>{{ decisionRecords.length }} 人</strong></p><div class="decision-people"><v-chip v-for="item in decisionRecords" :key="item.id" size="small">{{ item.userName }}</v-chip></div><v-alert :type="decisionStatus === 'eliminated' ? 'warning' : 'info'" variant="tonal" density="compact" class="my-5">{{ decisionStatus === 'eliminated' ? '淘汰仅关闭当前团队与组别的提交资格，其他组的培养与报名不受影响。保留所有考核记录，重新参加本组需明确重新开启培养。' : finalDecision ? '通过本组最终考核后确认成员身份；已有更高身份会保留，其他组仍按各自阶段考核。' : '通过本组当前阶段后进入下一阶段，不改变其他组的培养进度。' }}</v-alert><v-select v-if="decisionStatus === 'passed' && finalDecision" v-model="targetMemberType" :items="[{ title: '梯队队员', value: 'reserve' }, { title: '正式队员', value: 'formal' }]" label="晋升为" :disabled="saving" /><v-textarea v-model="decisionNote" label="考核反馈（成员可查看）" rows="3" maxlength="2000" hide-details :disabled="saving" /></v-card-text><v-card-actions class="dialog-actions"><v-spacer /><v-btn :disabled="saving" @click="decisionDialog = false">取消</v-btn><v-btn :color="decisionStatus === 'eliminated' ? 'error' : 'primary'" variant="flat" :loading="saving" @click="confirmDecision">{{ decisionStatus === 'eliminated' ? '确认淘汰' : finalDecision ? '通过并晋升' : '确认通过' }}</v-btn></v-card-actions></v-card></v-dialog>
 
-    <v-dialog :model-value="Boolean(detail)" max-width="740" scrollable @update:model-value="!$event && (detail = null)"><v-card v-if="detail"><v-card-title class="dialog-heading">{{ detail.userName }} · 考核记录<v-spacer /><v-btn icon="mdi-close" aria-label="关闭考核记录" variant="text" @click="detail = null" /></v-card-title><v-card-text><div class="detail-context"><span>{{ teamName(detail.teamId) }} · {{ groupLabel(detail.direction) }} · 第 {{ detail.cycle }} 次录取</span><v-chip size="small" :color="trainingStatusColors[detail.status]">{{ trainingStatusNames[detail.status] }}</v-chip></div><h3 class="mt-5 mb-3">{{ detail.planTitle }}</h3><p v-if="!detail.decisions.length" class="text-body-2 text-medium-emphasis">尚未确认阶段结果，当前处于{{ stageName(detail) }}。</p><div v-for="decision in detail.decisions" :key="`${decision.stageId}-${decision.decidedAt}`" class="history-entry"><div class="d-flex align-center ga-3"><strong>{{ decision.stageTitle }}</strong><v-chip size="x-small" :color="decision.status === 'passed' ? 'success' : 'error'">{{ decision.status === 'passed' ? '通过' : '淘汰' }}</v-chip><v-chip v-if="decision.memberType" size="x-small" variant="outlined">{{ memberTypeNames[decision.memberType] }}</v-chip></div><p>{{ decision.note || '未填写考核反馈' }}</p><small>{{ decision.decidedByName }} · {{ dateTime(decision.decidedAt) }}</small></div></v-card-text><v-card-actions class="dialog-actions"><v-spacer /><v-btn color="primary" @click="detail = null">关闭</v-btn></v-card-actions></v-card></v-dialog>
+    <v-dialog :model-value="Boolean(detail)" max-width="740" scrollable @update:model-value="!$event && (detail = null)"><v-card v-if="detail"><v-card-title class="dialog-heading">{{ detail.userName }} · 考核记录<v-spacer /><v-btn icon="mdi-close" aria-label="关闭考核记录" variant="text" @click="detail = null" /></v-card-title><v-card-text><div class="detail-context"><span>{{ teamName(detail.teamId) }} · {{ groupLabel(detail.direction) }} · 录取周期 #{{ detail.cycle }}</span><v-chip size="small" :color="trainingStatusColors[detail.status]">{{ trainingStatusNames[detail.status] }}</v-chip></div><h3 class="mt-5 mb-3">{{ detail.planTitle }}</h3><p v-if="!detail.decisions.length" class="text-body-2 text-medium-emphasis">尚未确认阶段结果，当前处于{{ stageName(detail) }}。</p><div v-for="decision in detail.decisions" :key="`${decision.stageId}-${decision.decidedAt}`" class="history-entry"><div class="d-flex align-center ga-3"><strong>{{ decision.stageTitle }}</strong><v-chip size="x-small" :color="decision.status === 'passed' ? 'success' : 'error'">{{ decision.status === 'passed' ? '通过' : '淘汰' }}</v-chip><v-chip v-if="decision.memberType" size="x-small" variant="outlined">{{ memberTypeNames[decision.memberType] }}</v-chip></div><p>{{ decision.note || '未填写考核反馈' }}</p><small>{{ decision.decidedByName }} · {{ dateTime(decision.decidedAt) }}</small></div></v-card-text><v-card-actions class="dialog-actions"><v-spacer /><v-btn color="primary" @click="detail = null">关闭</v-btn></v-card-actions></v-card></v-dialog>
     <v-snackbar :model-value="Boolean(notice)" @update:model-value="!$event && (notice = '')">{{ notice }}</v-snackbar>
   </div>
 </template>
@@ -261,6 +279,8 @@ onUnmounted(() => { loadVersion++; });
 .training-empty h2 { font-size: 18px; font-weight: 500; color: #424242; margin: 20px 0 10px; }
 .training-empty p { font-size: 14px; line-height: 1.8; }
 .my-progress-list { display: flex; flex-direction: column; gap: 22px; }
+.mine-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 16px 28px; margin-bottom: 22px; }
+.mine-filters > .v-select { max-width: 320px; min-width: 180px; }
 .progress-card { padding: 27px; }
 .progress-header { margin-bottom: 23px; }
 .progress-context { display: block; font-size: 12px; color: #8b8b8b; margin-bottom: 9px; }

@@ -105,7 +105,15 @@ func (a *App) getLearningAccess(w http.ResponseWriter, _ *http.Request, u User) 
 	if allowed {
 		directions = append(directions, technicalDirections...)
 	}
-	respond(w, http.StatusOK, map[string]any{"allowed": allowed, "directions": directions})
+	enrolled, err := a.memberDirections(u.ID)
+	if err != nil {
+		return err
+	}
+	applied, err := appliedDirectionsAt(a.store, u, enrolled)
+	if err != nil {
+		return err
+	}
+	respond(w, http.StatusOK, map[string]any{"allowed": allowed, "directions": directions, "appliedDirections": applied, "enrolledDirections": enrolled})
 	return nil
 }
 

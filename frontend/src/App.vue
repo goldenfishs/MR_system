@@ -3,9 +3,9 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useDisplay } from "vuetify";
 import { auth, roleNames, signOut } from "./lib/auth";
-import { canAccessLearning, canOpenLearning, canAccessDirection, canAccessLearningModule, learningDirections, refreshLearningAccess } from "./lib/learning-access";
+import { canAccessLearning, canOpenLearning, canAccessDirection, canAccessLearningModule, learningAccess, learningDirections, refreshLearningAccess } from "./lib/learning-access";
 import { api } from "./lib/api";
-import { groupLabel, hasPermission } from "./lib/permissions";
+import { groupOptions, groupLabel, hasPermission } from "./lib/permissions";
 import type { Permission, Settings } from "./lib/types";
 import type { Profile } from "./lib/platform";
 import ProfileCompletionReminder from "./components/ProfileCompletionReminder.vue";
@@ -168,7 +168,7 @@ watch(accessIdentity, async () => {
   else if (route.meta.admin && auth.user?.role !== "admin" || route.meta.permission && !hasPermission(route.meta.permission as Permission)) await router.replace("/");
   else if (auth.user) await refreshAccess();
 });
-const directions = learningDirections;
+const directions = groupOptions;
 const sectionTabs = computed(() => {
   if (route.path === "/recruitment" && hasPermission("recruitment"))
     return [
@@ -213,6 +213,7 @@ function selectTab(value: unknown) {
   router.push({ path: route.path, query });
 }
 function directionLink(direction: string) {
+  if (!canAccessDirection(direction)) return { path: "/teams", query: { admissionRequired: "1", direction } };
   return {
     path: "/learning",
     query: { direction, section: "home" },
@@ -254,9 +255,8 @@ function directionLink(direction: string) {
             rounded="0"
           />
         </v-list>
-        <template v-if="canOpenLearning">
         <v-divider class="mx-4 my-2" />
-        <div class="nav-caption">技术分组</div>
+        <div class="nav-caption">技术分组 <span class="group-legend">🌟 已报名</span></div>
         <v-list
           nav
           density="compact"
@@ -277,17 +277,17 @@ function directionLink(direction: string) {
             rounded="0"
           >
             <template #append
-              ><v-icon
-                v-if="auth.user.direction === item.value"
-                color="amber-darken-1"
-                size="18"
-                title="我的方向"
-                >mdi-star</v-icon
+              ><span
+                v-if="learningAccess.appliedDirections.includes(item.value)"
+                class="applied-star"
+                role="img"
+                :aria-label="`已报名${item.title}`"
+                title="已报名"
+                >🌟</span
               ></template
             >
           </v-list-item>
         </v-list>
-        </template>
         <template #append>
           <div class="sidebar-bottom">
             <v-btn
@@ -431,6 +431,14 @@ function directionLink(direction: string) {
   font-size: 12px;
   color: #858585;
   padding: 20px 23px 5px;
+}
+.group-legend {
+  float: right;
+  font-size: 11px;
+}
+.applied-star {
+  font-size: 17px;
+  line-height: 1;
 }
 .nav-list {
   padding: 4px 10px 8px;

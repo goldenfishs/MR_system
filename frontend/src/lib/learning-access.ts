@@ -3,7 +3,7 @@ import { api } from "./api";
 import { auth, loadSession } from "./auth";
 import { groupOptions, hasPermission } from "./permissions";
 
-export const learningAccess = reactive({ userId: "", allowed: false, directions: [] as string[], error: "" });
+export const learningAccess = reactive({ userId: "", allowed: false, directions: [] as string[], appliedDirections: [] as string[], enrolledDirections: [] as string[], error: "" });
 export const canAccessLearning = computed(() => Boolean(auth.user && learningAccess.userId === auth.user.id && learningAccess.allowed));
 export const learningDirections = computed(() => groupOptions.filter(group =>
   canAccessLearning.value && learningAccess.directions.includes(group.value) || hasPermission("tasks", group.value) || hasPermission("knowledge", group.value),
@@ -17,7 +17,7 @@ let pending: Promise<void> | undefined;
 watch(() => auth.user?.id, () => {
   generation++;
   pending = undefined;
-  Object.assign(learningAccess, { userId: "", allowed: false, directions: [], error: "" });
+  Object.assign(learningAccess, { userId: "", allowed: false, directions: [], appliedDirections: [], enrolledDirections: [], error: "" });
 }, { flush: "sync" });
 
 export function refreshLearningAccess(): Promise<void> {
@@ -27,12 +27,12 @@ export function refreshLearningAccess(): Promise<void> {
   const requestGeneration = generation;
   pending = loadSession(true).then(async () => {
     if (!auth.user || auth.signingOut || auth.user.id !== userId || requestGeneration !== generation) return;
-    const { allowed, directions } = await api.get<{ allowed: boolean; directions: string[] }>("/learning-access");
+    const { allowed, directions, appliedDirections, enrolledDirections } = await api.get<{ allowed: boolean; directions: string[]; appliedDirections: string[]; enrolledDirections: string[] }>("/learning-access");
     if (requestGeneration !== generation || auth.signingOut) return;
-    Object.assign(learningAccess, { userId, allowed, directions: directions || [], error: "" });
+    Object.assign(learningAccess, { userId, allowed, directions: directions || [], appliedDirections: appliedDirections || [], enrolledDirections: enrolledDirections || [], error: "" });
   }).catch(() => {
     if (requestGeneration !== generation || auth.signingOut) return;
-    Object.assign(learningAccess, { userId, allowed: false, directions: [], error: "暂时无法确认组别权限，请刷新重试。" });
+    Object.assign(learningAccess, { userId, allowed: false, directions: [], appliedDirections: [], enrolledDirections: [], error: "暂时无法确认组别权限，请刷新重试。" });
   }).finally(() => {
     if (requestGeneration === generation) pending = undefined;
   });

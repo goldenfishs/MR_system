@@ -21,6 +21,7 @@ const taskCompetitionLabel = (task: Task) => {
   return team ? competitionLabel(team) : task.team === "ROBOCON" ? "RoboCon" : task.team || "所有团队";
 };
 const tasks = ref<Task[]>([]);
+const dashboardTasks = computed(() => tasks.value.filter(task => task.assigned || hasPermission("tasks", task.direction)));
 const loading = ref(true);
 const error = ref("");
 const isAdmin = computed(() => auth.user?.role === "admin");
@@ -30,12 +31,12 @@ const taskDirections = computed(() => learningDirections.value.filter(group => c
 const knowledgeDirections = computed(() => learningDirections.value.filter(group => canAccessLearningModule("knowledge", group.value)));
 const learningTarget = computed(() => ({
   path: "/learning",
-  query: { direction: (canReadTasks.value ? taskDirections.value : knowledgeDirections.value)[0]?.value, section: canReadTasks.value ? "tasks" : "knowledge" },
+  query: { direction: (!canManage.value && learningAccess.enrolledDirections[0]) || (canReadTasks.value ? taskDirections.value : knowledgeDirections.value)[0]?.value, section: canReadTasks.value ? "tasks" : "knowledge" },
 }));
 const showAdmissionNotice = computed(() => !canAccessLearning.value && (isParticipant() || auth.user?.role === "group_admin"));
 const admissionNotice = computed(() => canOpenLearning.value
   ? "授权组别的管理权限已可使用。你的个人学习资格仍需报名审核通过后开通，当前不能以学员身份提交作业或参加考试。"
-  : "报名审核通过后，技术分组、知识库、作业和考试将向你开放。"
+  : "侧栏展示全部五组，🌟 表示已报名。审核通过后可浏览各组学习内容，并完成已录取组的作业和考试。"
 );
 const canRecruit = computed(() => hasPermission("recruitment"));
 const canIssueRecords = computed(() => hasPermission("records"));
@@ -269,15 +270,15 @@ onMounted(load);
         <div class="card-heading">
           <h2>
             <v-icon color="teal" size="20">mdi-clipboard-list-outline</v-icon
-            >{{ canManage ? "授权组培养任务" : "可参与的任务" }}
+            >{{ canManage ? "授权组培养任务" : "我的组别任务" }}
           </h2>
           <v-btn :to="learningTarget" variant="text" size="small" color="primary"
             >全部任务<v-icon end>mdi-chevron-right</v-icon></v-btn
           >
         </div>
-        <div v-if="tasks.length" class="task-list">
+        <div v-if="dashboardTasks.length" class="task-list">
           <router-link
-            v-for="task in tasks.slice(0, 4)"
+            v-for="task in dashboardTasks.slice(0, 4)"
             :key="task.id"
             :to="{ path: '/learning', query: { task: task.id, direction: task.direction || undefined, section: task.category === 'exam' ? 'exam' : task.category === 'problem' ? 'bank' : 'tasks' } }"
             class="task-row"

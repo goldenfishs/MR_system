@@ -151,21 +151,27 @@ func memberDirectionsAt(s *Store, id string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if user.MemberType == "freshman" {
-		p, err := latestTraining(s, id)
+	progress, err := currentTraining(s, id)
+	if err != nil {
+		return nil, err
+	}
+	dirs := []string{}
+	tracked := map[string]TrainingProgress{}
+	trackedDirection := map[string]bool{}
+	for _, p := range progress {
+		tracked[p.TeamID+"\x00"+p.Direction] = p
+		trackedDirection[p.Direction] = true
+		active, err := trainingEnrollmentActive(s, p)
 		if err != nil {
 			return nil, err
 		}
-		if p != nil {
-			admitted, err := trainingEnrollmentActive(s, *p)
-			if err != nil || !admitted {
-				return []string{}, err
-			}
-			return []string{p.Direction}, nil
+		if active {
+			dirs = append(dirs, p.Direction)
 		}
 	}
-	dirs := []string{}
-	if user.MemberType != "freshman" && validDirection(user.Direction) {
+	// Explicit administrative placement remains valid for imported members. Once
+	// a group has a training record, that record governs its enrollment instead.
+	if user.MemberType != "freshman" && validDirection(user.Direction) && !trackedDirection[user.Direction] {
 		dirs = append(dirs, user.Direction)
 	}
 	memberships, err := readAll[Membership](s, "SELECT payload FROM team_memberships WHERE user_id=?", id)
@@ -177,20 +183,67 @@ func memberDirectionsAt(s *Store, id string) ([]string, error) {
 		if err := s.row("SELECT direction FROM team_memberships WHERE team_id=? AND user_id=?", m.TeamID, m.UserID).Scan(&direction); err != nil {
 			return nil, err
 		}
-		if validDirection(direction) {
+		if _, hasProgress := tracked[m.TeamID+"\x00"+direction]; !hasProgress && validDirection(direction) {
 			dirs = append(dirs, direction)
 		}
 	}
-	apps, err := readAll[Applicant](s, "SELECT payload FROM applicants WHERE user_id=?", id)
+	// Retired single-application records are a fallback only before stage training
+	// exists. Later explicit legacy admissions receive a scoped cycle of their own.
+	if len(progress) == 0 {
+		apps, err := readAll[Applicant](s, "SELECT payload FROM applicants WHERE user_id=?", id)
+		if err != nil {
+			return nil, err
+		}
+		for _, ap := range apps {
+			if ap.Status == "accepted" && validDirection(ap.Direction) {
+				dirs = append(dirs, ap.Direction)
+			}
+		}
+	}
+	return normalizedIDs(dirs), nil
+}
+
+func appliedDirectionsAt(s *Store, user User, enrolled []string) ([]string, error) {
+	dirs := append([]string{}, enrolled...)
+	apps, err := readAll[TeamApplication](s, "SELECT payload FROM team_applications WHERE user_id=?", user.ID)
 	if err != nil {
 		return nil, err
 	}
 	for _, ap := range apps {
-		if ap.Status == "accepted" && validDirection(ap.Direction) {
+		if ap.Status != "pending" || !validDirection(ap.Direction) {
+			continue
+		}
+		p, err := latestTrainingInScope(s, user.ID, ap.TeamID, ap.Direction)
+		if err != nil {
+			return nil, err
+		}
+		if p == nil || p.Status != "eliminated" {
 			dirs = append(dirs, ap.Direction)
 		}
 	}
-	return normalizedIDs(dirs), nil
+	progress, err := currentTraining(s, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(progress) == 0 {
+		legacy, err := readAll[Applicant](s, "SELECT payload FROM applicants WHERE user_id=?", user.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, ap := range legacy {
+			if validDirection(ap.Direction) && slices.Contains([]string{"submitted", "screening", "interview"}, ap.Status) {
+				dirs = append(dirs, ap.Direction)
+			}
+		}
+	}
+	// Stable navigation order, independent of application creation order.
+	out := []string{}
+	for _, direction := range technicalDirections {
+		if slices.Contains(dirs, direction) {
+			out = append(out, direction)
+		}
+	}
+	return out, nil
 }
 
 // Applicant group preference is also a scope for contacting and reviewing a new recruit.
@@ -287,8 +340,14 @@ func (a *App) updateMember(w http.ResponseWriter, r *http.Request, u User) error
 	if err != nil {
 		return err
 	}
-	if progress != nil && progress.Status == "training" && in.Direction != nil && strings.TrimSpace(*in.Direction) != progress.Direction {
-		return fail(409, "新生正在阶段培养中，请先结束当前培养后再调整所属组")
+	current, err := currentTraining(s, member.ID)
+	if err != nil {
+		return err
+	}
+	for _, p := range current {
+		if p.Status == "training" && in.Direction != nil && strings.TrimSpace(*in.Direction) != member.Direction {
+			return fail(409, "成员仍有组别在阶段培养中，请通过各组报名和考核管理所属组")
+		}
 	}
 	if in.MemberType != nil {
 		member.MemberType = *in.MemberType
@@ -314,7 +373,12 @@ func (a *App) updateMember(w http.ResponseWriter, r *http.Request, u User) error
 	} else if member.Role != "group_admin" {
 		member.GroupGrants = []GroupGrant{}
 	}
+	previousDirections := []string{}
 	if in.Direction != nil {
+		previousDirections, err = memberDirectionsAt(s, member.ID)
+		if err != nil {
+			return err
+		}
 		member.Direction = strings.TrimSpace(*in.Direction)
 	}
 	if err = validateUserAccess(&member); err != nil {
@@ -360,38 +424,46 @@ func (a *App) updateMember(w http.ResponseWriter, r *http.Request, u User) error
 		if len(memberships) > 0 && member.Direction == "" {
 			return fail(400, "已入队成员必须指定有效技术组")
 		}
-		for _, m := range memberships {
-			m.Direction = member.Direction
-			if err = s.exec("UPDATE team_memberships SET direction=?,payload=? WHERE team_id=? AND user_id=?", m.Direction, encoded(m), m.TeamID, m.UserID); err != nil {
+		if len(memberships) > 1 || len(current) > 1 {
+			// With independent group memberships this field selects the primary group;
+			// changing it must not transfer every accepted application to that group.
+			if !slices.Contains(previousDirections, member.Direction) {
+				return fail(400, "主技术组须选自成员当前有效的已加入组别")
+			}
+		} else {
+			for _, m := range memberships {
+				m.Direction = member.Direction
+				if err = s.exec("UPDATE team_memberships SET direction=?,payload=? WHERE team_id=? AND user_id=?", m.Direction, encoded(m), m.TeamID, m.UserID); err != nil {
+					return err
+				}
+			}
+			applicants, err := readAll[Applicant](s, "SELECT payload FROM applicants WHERE user_id=?", member.ID)
+			if err != nil {
 				return err
 			}
-		}
-		applicants, err := readAll[Applicant](s, "SELECT payload FROM applicants WHERE user_id=?", member.ID)
-		if err != nil {
-			return err
-		}
-		for _, ap := range applicants {
-			if ap.Status == "accepted" {
-				ap.Direction = member.Direction
-				if ap.Direction == "" {
-					return fail(400, "已录取成员必须指定有效技术组")
-				}
-				ap.UpdatedAt = now()
-				if err = s.exec("UPDATE applicants SET payload=? WHERE id=?", encoded(ap), ap.ID); err != nil {
-					return err
+			for _, ap := range applicants {
+				if ap.Status == "accepted" {
+					ap.Direction = member.Direction
+					if ap.Direction == "" {
+						return fail(400, "已录取成员必须指定有效技术组")
+					}
+					ap.UpdatedAt = now()
+					if err = s.exec("UPDATE applicants SET payload=? WHERE id=?", encoded(ap), ap.ID); err != nil {
+						return err
+					}
 				}
 			}
-		}
-		modern, err := readAll[TeamApplication](s, "SELECT payload FROM team_applications WHERE user_id=?", member.ID)
-		if err != nil {
-			return err
-		}
-		for _, ap := range modern {
-			if ap.Status == "accepted" {
-				ap.Direction = member.Direction
-				ap.UpdatedAt = now()
-				if err = s.exec("UPDATE team_applications SET payload=? WHERE id=?", encoded(ap), ap.ID); err != nil {
-					return err
+			modern, err := readAll[TeamApplication](s, "SELECT payload FROM team_applications WHERE user_id=?", member.ID)
+			if err != nil {
+				return err
+			}
+			for _, ap := range modern {
+				if ap.Status == "accepted" {
+					ap.Direction = member.Direction
+					ap.UpdatedAt = now()
+					if err = s.exec("UPDATE team_applications SET payload=? WHERE id=?", encoded(ap), ap.ID); err != nil {
+						return err
+					}
 				}
 			}
 		}

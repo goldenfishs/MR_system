@@ -65,7 +65,7 @@ func (a *App) workspaceSummary(w http.ResponseWriter, _ *http.Request, u User) e
 	for _, task := range tasks {
 		visible[task.ID] = task
 		start, _ := time.Parse(time.RFC3339, task.StartsAt)
-		if !expired(task.DueAt) && (task.StartsAt == "" || !time.Now().Before(start)) {
+		if (hasPermission(u, task.Direction, "tasks") || task.Assigned) && !expired(task.DueAt) && (task.StartsAt == "" || !time.Now().Before(start)) {
 			stats["activeTasks"]++
 		}
 	}

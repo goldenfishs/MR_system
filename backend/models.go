@@ -39,6 +39,7 @@ type Applicant struct {
 	UpdatedAt       string   `json:"updatedAt"`
 }
 type Task struct {
+	Assigned        bool         `json:"assigned"`
 	CanSubmit       bool         `json:"canSubmit"`
 	Category        string       `json:"category"`
 	Tags            []string     `json:"tags"`

@@ -4,7 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useDisplay } from "vuetify";
 import { api, ApiError } from "../lib/api";
 import { groupOptions, groupLabel, hasPermission, isParticipant } from "../lib/permissions";
-import { canAccessLearning, canAccessLearningModule, learningDirections } from "../lib/learning-access";
+import { canAccessLearning, canAccessLearningModule, learningAccess, learningDirections } from "../lib/learning-access";
 import { auth } from "../lib/auth";
 import type { Task, Submission, Applicant } from "../lib/types";
 import type { JudgeConfig, JudgeRun, Membership, TeamSpace } from "../lib/platform";
@@ -232,6 +232,12 @@ function clearFilters() {
   });
 }
 const isStudent = computed(() => isParticipant() && canAccessLearning.value);
+const isAssigned = (task: Task) => task.assigned === true;
+const assignedTasks = computed(() => listedTasks.value.filter(isAssigned));
+const enrolledInDirection = computed(() => selectedDirection.value && learningAccess.enrolledDirections.includes(selectedDirection.value));
+const appliedToDirection = computed(() => selectedDirection.value && learningAccess.appliedDirections.includes(selectedDirection.value));
+const taskRelation = (task: Task) => isAssigned(task) ? task.required ? "本组必做" : "本组选做" : "浏览学习";
+const studentStatus = (task: Task) => task.mySubmission || isAssigned(task) ? statusOf(task.mySubmission?.status) : { label: "浏览学习", color: "blue-grey", icon: "mdi-book-open-outline" };
 const canSubmitSelected = computed(() => isStudent.value && Boolean(selected.value) && selected.value?.canSubmit !== false);
 const canManage = computed(() => hasPermission("tasks", selected.value ? selected.value.direction : selectedDirection.value || undefined));
 const canManageTask = (task: Task) => hasPermission("tasks", task.direction);
@@ -273,7 +279,7 @@ const latestSubmissions = computed(() => {
 const selectedSubmission = computed(() => selected.value?.mySubmission);
 const eligibility = computed(() => {
   if (!isStudent.value || !selected.value) return "";
-  if (selected.value.canSubmit === false) return "可查看本任务；成果提交面向所属组别的成员。";
+  if (selected.value.assigned === false) return "这是其它组的学习内容，可浏览参考。报名并通过该组审核后，才能提交该组作业或参加考试。";
   if (!admitted.value)
     return "报名审核通过后，才能访问知识库、作业和考试。";
   if (
@@ -308,6 +314,7 @@ const eligibility = computed(() => {
     new Date(selected.value.dueAt).getTime() < currentTime.value
   )
     return "此任务已截止，仍可查看任务说明、提交历史与反馈。";
+  if (selected.value.canSubmit === false) return "当前无法提交此任务，请刷新确认本组录取资格与任务状态。";
   return "";
 });
 const kindOf = (value: string) =>
@@ -391,7 +398,7 @@ async function load(quiet = false) {
     if (version === loadVersion) loading.value = false;
   }
 }
-watch([section, selectedDirection, canViewTasks, canViewKnowledge, () => JSON.stringify([auth.user?.id, auth.user?.role, auth.user?.groupGrants, canAccessLearning.value])], () => {
+watch([section, selectedDirection, canViewTasks, canViewKnowledge, () => JSON.stringify([auth.user?.id, auth.user?.role, auth.user?.groupGrants, canAccessLearning.value, learningAccess.appliedDirections, learningAccess.enrolledDirections])], () => {
   selected.value = null; submissions.value = []; createOpen.value = false; reviewTarget.value = null; removingTask.value = null; search.value = "";
   void load();
 });
@@ -820,6 +827,13 @@ onUnmounted(() => clearInterval(timeTicker));
         ></v-alert
       >
       <v-alert v-if="!canAccessLearning" type="info" variant="tonal" density="compact" class="mb-5">当前开放已授权组别的管理功能。个人学习、成果提交与代码测评需取得成员学习资格。</v-alert>
+      <v-alert v-else-if="isStudent" :type="enrolledInDirection ? 'success' : 'info'" variant="tonal" density="compact" class="mb-5 group-access-note">
+        <template v-if="enrolledInDirection">🌟 已加入{{ groupName }}。请完成本组必做作业并按时参加考试，各组的阶段考核独立进行。</template>
+        <template v-else-if="appliedToDirection">🌟 已报名{{ groupName }}，等待审核。当前可浏览本组学习内容，录取后开放本组作业提交与考试。</template>
+        <template v-else-if="selectedDirection">你正在浏览{{ groupName }}的共享学习内容。这些任务不计入你的必做任务，报名并通过该组审核后可提交。</template>
+        <template v-else>各组学习内容均可浏览；标记“本组必做”的作业与考试需要完成，其它组内容可作为学习参考。</template>
+        <v-btn v-if="selectedDirection && !enrolledInDirection" :to="{ path: '/teams', query: { direction: selectedDirection } }" variant="text" size="small">{{ appliedToDirection ? '查看报名' : '报名本组' }}</v-btn>
+      </v-alert>
       <div v-if="loading" class="loading-panel">
         <v-progress-circular indeterminate color="primary" /><span
           >正在整理你的学习任务…</span
@@ -839,11 +853,11 @@ onUnmounted(() => clearInterval(timeTicker));
           </div>
           <div v-if="canViewTasks" class="group-home-grid">
             <v-card class="group-home-panel" elevation="1"><div class="home-panel-heading"><h2>近期作业</h2><v-btn variant="text" color="primary" size="small" @click="goSection('tasks')">全部作业</v-btn></div>
-              <button v-for="task in recentTasks" :key="task.id" class="home-task-row" @click="openTask(task)"><v-icon color="primary" size="21">{{ kindOf(task.kind).icon }}</v-icon><div><strong>{{ task.title }}</strong><span>{{ task.direction || '全组共享' }} · {{ task.dueAt ? formatDate(task.dueAt) + ' 截止' : '不限截止时间' }}</span></div><v-chip v-if="isStudent" size="x-small" :color="statusOf(task.mySubmission?.status).color" variant="tonal">{{ statusOf(task.mySubmission?.status).label }}</v-chip><v-icon v-else color="grey" size="18">mdi-chevron-right</v-icon></button>
+              <button v-for="task in recentTasks" :key="task.id" class="home-task-row" @click="openTask(task)"><v-icon color="primary" size="21">{{ kindOf(task.kind).icon }}</v-icon><div><strong>{{ task.title }}</strong><span>{{ isStudent ? taskRelation(task) : task.direction || '全组共享' }} · {{ task.dueAt ? formatDate(task.dueAt) + ' 截止' : '不限截止时间' }}</span></div><v-chip v-if="isStudent" size="x-small" :color="studentStatus(task).color" variant="tonal">{{ studentStatus(task).label }}</v-chip><v-icon v-else color="grey" size="18">mdi-chevron-right</v-icon></button>
               <p v-if="!recentTasks.length" class="home-empty">{{ canManage ? '发布作业后，成员将在这里查看最新的训练安排。' : '管理员发布作业后，将在这里展示最新安排。' }}</p>
             </v-card>
             <v-card class="group-home-panel" elevation="1"><div class="home-panel-heading"><h2>考试日程</h2><v-btn variant="text" color="primary" size="small" @click="goSection('exam')">全部考试</v-btn></div>
-              <button v-for="task in upcomingExams" :key="task.id" class="home-task-row" @click="openTask(task)"><v-icon color="deep-purple" size="21">mdi-calendar-clock-outline</v-icon><div><strong>{{ task.title }}</strong><span>{{ task.startsAt ? formatDate(task.startsAt) + ' 开始' : '等待安排' }}</span></div><v-chip size="x-small" :color="isFuture(task) ? 'blue-grey' : 'teal'" variant="tonal">{{ isFuture(task) ? '待开考' : '进行中' }}</v-chip></button>
+              <button v-for="task in upcomingExams" :key="task.id" class="home-task-row" @click="openTask(task)"><v-icon color="deep-purple" size="21">mdi-calendar-clock-outline</v-icon><div><strong>{{ task.title }}</strong><span>{{ isStudent ? taskRelation(task) + ' · ' : '' }}{{ task.startsAt ? formatDate(task.startsAt) + ' 开始' : '等待安排' }}</span></div><v-chip size="x-small" :color="isFuture(task) ? 'blue-grey' : 'teal'" variant="tonal">{{ isFuture(task) ? '待开考' : '进行中' }}</v-chip></button>
               <p v-if="!upcomingExams.length" class="home-empty">暂无即将开始或进行中的考试。</p>
             </v-card>
           </div>
@@ -854,7 +868,7 @@ onUnmounted(() => clearInterval(timeTicker));
         <div class="learning-overview" aria-label="任务数量概要">
           <div class="overview-stats">
             <div>
-              <span>{{ section === 'bank' ? '题库题目' : section === 'exam' ? '考试数量' : '全部作业' }}</span><strong>{{ listedTasks.length }}</strong>
+              <span>{{ section === 'bank' ? '题库题目' : isStudent ? '本组必做 / 全部' : section === 'exam' ? '考试数量' : '全部作业' }}</span><strong>{{ isStudent && section !== 'bank' ? assignedTasks.filter(task => task.required).length + ' / ' + listedTasks.length : listedTasks.length }}</strong>
             </div>
             <div>
               <span>{{ section === 'bank' ? '已通过题目' : isStudent ? "已完成" : "进行中" }}</span>
@@ -927,10 +941,10 @@ onUnmounted(() => clearInterval(timeTicker));
               </div>
               <v-chip
                 v-if="isStudent"
-                :color="statusOf(task.mySubmission?.status).color"
+                :color="studentStatus(task).color"
                 size="small"
                 variant="tonal"
-                >{{ statusOf(task.mySubmission?.status).label }}</v-chip
+                >{{ studentStatus(task).label }}</v-chip
               ><v-chip
                 v-else
                 :color="isExpired(task.dueAt) ? 'grey' : isFuture(task) ? 'blue-grey' : 'teal'"
@@ -943,11 +957,11 @@ onUnmounted(() => clearInterval(timeTicker));
               <span>{{ task.direction || "全方向" }}</span
               ><i>·</i><span>{{ task.difficulty }}</span
               ><v-chip
-                v-if="task.required"
+                v-if="isStudent || task.required"
                 size="x-small"
-                color="primary"
+                :color="isStudent && !isAssigned(task) ? 'blue-grey' : 'primary'"
                 variant="tonal"
-                >必修</v-chip
+                >{{ isStudent ? taskRelation(task) : '必修' }}</v-chip
               >
             </div>
             <h2>{{ task.title }}</h2>
@@ -1072,7 +1086,8 @@ onUnmounted(() => clearInterval(timeTicker));
                   >
                 </div>
                 <v-alert v-if="selected.locked" type="info" variant="tonal" class="mb-5">本场考试尚未开始，题目和附件将在开考时间开放。</v-alert>
-                <template v-else><div class="brief-description">{{ selected.description }}</div><AttachmentList :ids="selected.fileIds" /></template>
+                <v-alert v-if="isStudent" :type="isAssigned(selected) ? 'success' : 'info'" variant="tonal" density="compact" class="mb-5">{{ taskRelation(selected) }} · {{ isAssigned(selected) ? selected.required ? '此任务属于你的报名组，请按要求完成。' : '此任务属于你的报名组，可按学习需要选做。' : '可阅读任务要求，不计入你的必做任务。' }}</v-alert>
+                <template v-if="!selected.locked"><div class="brief-description">{{ selected.description }}</div><AttachmentList :ids="selected.fileIds" /></template>
                 <v-alert
                   v-if="selected.startsAt"
                   type="info"
@@ -1111,7 +1126,7 @@ onUnmounted(() => clearInterval(timeTicker));
                     eligibility
                   }}</v-alert
                   ><v-btn
-                    v-else-if="isStudent"
+                    v-else-if="canSubmitSelected"
                     color="primary"
                     append-icon="mdi-arrow-right"
                     @click="detailTab = 'submit'"

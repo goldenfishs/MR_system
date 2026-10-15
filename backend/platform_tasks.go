@@ -61,7 +61,7 @@ func (a *App) taskVisibleTo(t Task, u User) (bool, error) {
 	}
 	return a.learningAllowed(u)
 }
-func (a *App) requireTaskSubmission(t Task, u User) error {
+func (a *App) requireTaskEnrollment(t Task, u User) error {
 	if eliminated, err := trainingEliminated(a.store, u); err != nil {
 		return err
 	} else if eliminated {
@@ -83,16 +83,26 @@ func (a *App) requireTaskSubmission(t Task, u User) error {
 		if err != nil && err != sql.ErrNoRows {
 			return err
 		}
-		if err == sql.ErrNoRows {
-			if u.MemberType == "freshman" {
-				return fail(403, "加入对应团队后才可提交任务")
-			}
-		} else {
-			directions = []string{direction}
+		if err == sql.ErrNoRows || !includesID(directions, direction) {
+			return fail(403, "加入对应团队后才可提交任务")
 		}
+		progress, err := latestTrainingInScope(a.store, u.ID, t.TeamID, direction)
+		if err != nil {
+			return err
+		}
+		if progress != nil && progress.Status == "eliminated" {
+			return fail(403, "该组阶段考核已淘汰，重新录取后才可提交")
+		}
+		directions = []string{direction}
 	}
 	if t.Direction != "" && !includesID(directions, t.Direction) {
 		return fail(403, "请提交本人所属技术组的作业或考试")
+	}
+	return nil
+}
+func (a *App) requireTaskSubmission(t Task, u User) error {
+	if err := a.requireTaskEnrollment(t, u); err != nil {
+		return err
 	}
 	if t.StartsAt != "" {
 		start, err := time.Parse(time.RFC3339, t.StartsAt)
@@ -132,11 +142,14 @@ func (a *App) validateTaskPlatform(t *Task, u User, existing ...[]string) error 
 	}
 
 	if t.TeamID != "" {
-		var found string
-		if err := a.store.row("SELECT id FROM teams WHERE id=?", t.TeamID).Scan(&found); errors.Is(err, sql.ErrNoRows) {
+		team, err := readOne[Team](a.store, "SELECT payload FROM teams WHERE id=?", t.TeamID)
+		if errors.Is(err, sql.ErrNoRows) {
 			return fail(400, "请选择已发布的团队")
 		} else if err != nil {
 			return err
+		}
+		if t.Direction != "" && !includesID(team.Directions, t.Direction) {
+			return fail(400, "任务技术组须属于所选团队的招募方向")
 		}
 	}
 	if !validDate(t.StartsAt) {
