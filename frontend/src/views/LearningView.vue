@@ -937,7 +937,7 @@ onUnmounted(() => clearInterval(timeTicker));
         </div>
         <div class="task-toolbar">
           <div class="filter-summary">
-            {{ section === 'bank' ? '编程题目' : section === 'exam' ? '考试安排' : '作业与考核' }}<span>{{ filtered.length }} 项</span>
+            {{ section === 'bank' ? '题库练习' : section === 'exam' ? '考试安排' : '作业与考核' }}<span>{{ filtered.length }} 项</span>
           </div>
           <div class="task-filters">
             <v-text-field
