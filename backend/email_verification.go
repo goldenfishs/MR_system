@@ -62,7 +62,8 @@ func (a *App) sendVerificationCode(w http.ResponseWriter, r *http.Request, _ Use
 	if !valid {
 		return fail(400, "请填写有效邮箱")
 	}
-	if a.config.Mailer == nil {
+	mailer := a.currentMailService().verification
+	if mailer == nil {
 		return registrationUnavailable()
 	}
 	code, hash, err := a.prepareVerificationSend(r.Context(), email, tokenHash(rateKey(r, "")))
@@ -72,7 +73,7 @@ func (a *App) sendVerificationCode(w http.ResponseWriter, r *http.Request, _ Use
 	if code != "" {
 		// SMTP runs outside the mutation lock. A slow mail server must not block
 		// login, account management, or any other write request.
-		if err = a.config.Mailer.SendVerification(r.Context(), email, code); err != nil {
+		if err = mailer.SendVerification(r.Context(), email, code); err != nil {
 			// Do not log SMTP errors: a server may echo message content or credentials.
 			return fail(http.StatusServiceUnavailable, "验证码邮件发送失败，请稍后重试或联系管理员")
 		}
@@ -201,7 +202,7 @@ func (a *App) register(w http.ResponseWriter, r *http.Request, _ User) error {
 	if !valid || len(in.Password) < 10 || len(in.Password) > 72 {
 		return fail(400, "请填写有效邮箱和 10–72 字节密码")
 	}
-	if a.config.Mailer == nil {
+	if a.currentMailService().verification == nil {
 		return registrationUnavailable()
 	}
 	if !validVerificationCode(in.VerificationCode) {
@@ -285,6 +286,7 @@ func (a *App) emailSettings(w http.ResponseWriter, _ *http.Request, u User) erro
 	if u.Role != "admin" {
 		return fail(403, "只有管理员可查看邮箱服务配置")
 	}
-	respond(w, 200, map[string]any{"configured": a.config.Mailer != nil, "from": a.config.EmailFrom, "security": a.config.EmailSecurity, "supportsBulk": a.config.NoticeMailer != nil})
+	service := a.currentMailService()
+	respond(w, 200, map[string]any{"configured": service.verification != nil, "from": service.config.From, "security": service.config.Security, "supportsBulk": service.notice != nil})
 	return nil
 }

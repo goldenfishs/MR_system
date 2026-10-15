@@ -287,7 +287,7 @@ func (a *App) listMailCampaigns(w http.ResponseWriter, _ *http.Request, u User) 
 	if len(items) > 100 {
 		items = items[:100]
 	}
-	respond(w, 200, map[string]any{"items": items, "configured": a.config.NoticeMailer != nil})
+	respond(w, 200, map[string]any{"items": items, "configured": a.currentMailService().notice != nil})
 	return nil
 }
 func (a *App) createMailCampaign(w http.ResponseWriter, r *http.Request, u User) error {
@@ -363,7 +363,8 @@ func (a *App) beginMailCampaign(w http.ResponseWriter, r *http.Request, u User, 
 	if !hasAnyPermission(u, "mail") {
 		return fail(403, "没有批量邮件权限")
 	}
-	if a.config.NoticeMailer == nil {
+	mailer := a.currentMailService().notice
+	if mailer == nil {
 		return fail(503, "尚未配置 SMTP，无法发送邮件")
 	}
 	a.platformMu.Lock()
@@ -417,14 +418,14 @@ func (a *App) beginMailCampaign(w http.ResponseWriter, r *http.Request, u User, 
 	}
 	workerItem := item
 	workerItem.Recipients = append([]MailRecipient{}, item.Recipients...)
-	go a.deliverMailCampaign(workerItem, retry, u.ID)
+	go a.deliverMailCampaign(workerItem, retry, u.ID, mailer)
 	respond(w, 202, map[string]any{"item": item})
 	return nil
 }
 func (a *App) saveMailCampaign(item MailCampaign) error {
 	return a.store.exec("UPDATE mail_campaigns SET status=?,payload=? WHERE id=?", item.Status, encoded(item), item.ID)
 }
-func (a *App) deliverMailCampaign(item MailCampaign, retry bool, actorID string) {
+func (a *App) deliverMailCampaign(item MailCampaign, retry bool, actorID string, mailer NoticeMailer) {
 	for i := range item.Recipients {
 		recipient := &item.Recipients[i]
 		if !retry && recipient.Status != "pending" || retry && recipient.Status != "failed" {
@@ -448,7 +449,7 @@ func (a *App) deliverMailCampaign(item MailCampaign, retry bool, actorID string)
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		err = a.config.NoticeMailer.SendMessage(ctx, recipient.Email, item.Subject, item.Body)
+		err = mailer.SendMessage(ctx, recipient.Email, item.Subject, item.Body)
 		cancel()
 		if err != nil {
 			recipient.Status = "failed"

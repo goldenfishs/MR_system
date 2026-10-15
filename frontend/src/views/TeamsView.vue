@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useDisplay } from "vuetify";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { api } from "../lib/api";
 import { hasPermission, isParticipant, groupLabel } from "../lib/permissions";
 import { auth } from "../lib/auth";
@@ -18,7 +18,7 @@ import {
 import type { Settings } from "../lib/types";
 import FileUpload from "../components/FileUpload.vue";
 const { smAndDown } = useDisplay();
-const route = useRoute();
+const route = useRoute(), router = useRouter();
 const teams = ref<TeamSpace[]>([]),
   loading = ref(true),
   error = ref(""),
@@ -36,6 +36,8 @@ const teams = ref<TeamSpace[]>([]),
 const isAdmin = computed(() => auth.user?.role === "admin");
 const canApply = computed(() => isParticipant());
 const canReviewApplications = computed(() => hasPermission("recruitment"));
+const canReviewTeam = (team: TeamSpace) => team.directions.some(value => hasPermission("recruitment", value));
+const canReviewSelected = computed(() => Boolean(selected.value && canReviewTeam(selected.value)));
 const form = reactive({
   name: "",
   description: "",
@@ -152,6 +154,10 @@ async function saveTeam() {
   }
 }
 async function open(team: TeamSpace) {
+  if (canReviewTeam(team)) {
+    await router.push({ path: "/applications", query: { team: team.id } });
+    return;
+  }
   selected.value = team;
   application.direction =
     team.myApplication?.direction || team.directions[0] || "";
@@ -247,6 +253,8 @@ onMounted(load);
           {{ brand?.teamName || "沧溟" }} / {{ brand?.secondaryTeamName || "MOVE" }} 机器人战队 · {{ (brand?.competitions || ["RoboCon", "RoboMaster"]).join(" / ") }}。五个组别独立报名，可加入多个组；审核后完成对应组的作业与考试。
         </p>
       </div>
+      <div class="d-flex flex-wrap ga-2">
+      <v-btn v-if="canReviewApplications" to="/applications" color="primary" variant="tonal" prepend-icon="mdi-account-check-outline">报名审核</v-btn>
       <v-btn
         v-if="isAdmin"
         color="primary"
@@ -254,6 +262,7 @@ onMounted(load);
         @click="edit()"
         >发布团队</v-btn
       >
+      </div>
     </div>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4"
       >{{ error }}<v-btn variant="text" @click="load">重试</v-btn></v-alert
@@ -320,7 +329,7 @@ onMounted(load);
             variant="text"
             @click="open(team)"
             >{{
-              canReviewApplications
+              canReviewTeam(team)
                 ? "报名审核"
                 : team.myApplication
                   ? "查看报名"
@@ -345,7 +354,7 @@ onMounted(load);
       ><v-card v-if="selected"
         ><v-card-title class="dialog-head"
           ><span
-            >{{ selected.name }} · {{ canReviewApplications ? "报名审核" : "团队报名" }}</span
+            >{{ selected.name }} · {{ canReviewSelected ? "报名审核" : "团队报名" }}</span
           ><v-btn
             icon="mdi-close"
             variant="text"
@@ -357,13 +366,13 @@ onMounted(load);
           <v-alert v-if="detailError" type="error" variant="tonal" class="mb-4"
             >{{ detailError
             }}<v-btn
-              v-if="canReviewApplications"
+              v-if="canReviewSelected"
               variant="text"
               @click="loadApplications(selected.id)"
               >重试</v-btn
             ></v-alert
           ><v-progress-linear v-if="detailLoading" indeterminate />
-          <template v-else-if="canReviewApplications"
+          <template v-else-if="canReviewSelected"
             ><p class="mb-4 text-medium-emphasis">
               共
               {{ applications.length }}

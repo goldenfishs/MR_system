@@ -69,6 +69,8 @@ export interface Membership {
 }
 export interface UserWithProfile extends User {
   profile?: Profile;
+  /** Active groups this operator may issue a certificate for. */
+  eligibleDirections?: string[];
 }
 export interface PersonalRecord {
   id: string;

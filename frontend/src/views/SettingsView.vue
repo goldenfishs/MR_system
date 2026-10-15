@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { nextTick, onMounted, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import { api } from "../lib/api";
-import type { EmailServiceStatus, Settings } from "../lib/types";
+import type { MailServiceSettings, Settings } from "../lib/types";
+const route = useRoute();
 const form = reactive<Settings>({
+  description: "",
   organization: "",
   season: "",
   brandName: "QUT机器人战队",
@@ -23,9 +26,12 @@ const deadline = ref(""),
   error = ref(""),
   saved = ref(false),
   savedMessage = ref("设置已保存");
-const emailStatus = ref<EmailServiceStatus | null>(null),
+const emailStatus = ref<MailServiceSettings | null>(null),
   emailStatusLoading = ref(true),
   emailStatusError = ref("");
+const mailForm = reactive({ enabled: false, host: "", port: 587, username: "", from: "", fromName: "QUT机器人战队", security: "starttls", password: "" });
+const savingMail = ref(false), showPassword = ref(false), clearPassword = ref(false);
+const securityOptions = [{ title: "STARTTLS（通常 587）", value: "starttls" }, { title: "TLS（通常 465）", value: "tls" }];
 const logoFile = ref<File | null>(null),
   uploadingLogo = ref(false);
 async function uploadLogo() {
@@ -64,13 +70,41 @@ async function loadEmailStatus() {
   emailStatusLoading.value = true;
   emailStatusError.value = "";
   try {
-    emailStatus.value = await api.get<EmailServiceStatus>("/settings/email");
+    emailStatus.value = await api.get<MailServiceSettings>("/settings/mail-service");
+    const status = emailStatus.value;
+    Object.assign(mailForm, { enabled: status.enabled, host: status.host, port: status.port || 587, username: status.username, from: status.from, fromName: status.fromName, security: status.security || "starttls", password: "" });
+    clearPassword.value = false;
   } catch (e) {
     emailStatusError.value = (e as Error).message;
   } finally {
     emailStatusLoading.value = false;
   }
 }
+async function saveMail() {
+  if (savingMail.value || !emailStatus.value) return;
+  if ((mailForm.enabled || mailForm.host) && (!mailForm.host.trim() || !mailForm.from.trim() || !Number.isInteger(Number(mailForm.port)) || Number(mailForm.port) < 1 || Number(mailForm.port) > 65535)) {
+    emailStatusError.value = "请填写 SMTP 主机、有效端口和发件邮箱。";
+    return;
+  }
+  savingMail.value = true;
+  emailStatusError.value = "";
+  try {
+    emailStatus.value = await api.patch<MailServiceSettings>("/settings/mail-service", { ...mailForm, port: Number(mailForm.port), clearPassword: clearPassword.value });
+    mailForm.password = "";
+    clearPassword.value = false;
+    savedMessage.value = "邮件设置已保存并生效";
+    saved.value = true;
+  } catch (e) {
+    emailStatusError.value = (e as Error).message;
+  } finally {
+    savingMail.value = false;
+  }
+}
+async function scrollToSection() {
+  await nextTick();
+  if (["#branding", "#email", "#general"].includes(route.hash)) document.getElementById(route.hash.slice(1))?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+watch(() => route.hash, () => void scrollToSection());
 function localDateTime(value: string) {
   if (!value) return "";
   const d = new Date(value);
@@ -94,6 +128,7 @@ async function load() {
     form.competitions ||= ["RoboCon", "RoboMaster"];
     deadline.value = localDateTime(form.applicationDeadline);
     loaded.value = true;
+    void scrollToSection();
   } catch (e) {
     error.value = (e as Error).message;
   } finally {
@@ -103,7 +138,7 @@ async function load() {
 async function save() {
   if (!loaded.value || loading.value || saving.value || uploadingLogo.value) return;
   if (!form.organization.trim() || !form.season.trim()) {
-    error.value = "请填写空间名称和赛季。";
+    error.value = "请填写网站全称和赛季。";
     return;
   }
   if (!form.brandName?.trim() || !form.teamName?.trim() || !form.secondaryTeamName?.trim()) {
@@ -147,8 +182,14 @@ onMounted(() => {
 </script>
 <template>
   <div class="page-content">
-    <h1 class="page-title">空间设置<span class="text-secondary">.</span></h1>
-    <p class="page-subtitle">让协作空间，适应你的战队。</p>
+    <h1 class="page-title">系统设置</h1>
+    <p class="page-subtitle">管理网站名称、标志、招新安排与发信邮箱。修改后立即生效。</p>
+    <div class="settings-shortcuts mb-6">
+      <v-btn to="/admin" variant="tonal" prepend-icon="mdi-shield-crown-outline">系统管理</v-btn>
+      <v-btn to="/members" variant="tonal" prepend-icon="mdi-account-cog-outline">用户与权限</v-btn>
+      <v-btn href="#branding" variant="text" prepend-icon="mdi-palette-outline">网站外观</v-btn>
+      <v-btn href="#email" variant="text" prepend-icon="mdi-email-outline">邮件服务</v-btn>
+    </div>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-5"
       >{{ error
       }}<v-btn v-if="!loading && !loaded" @click="load" variant="text"
@@ -156,11 +197,11 @@ onMounted(() => {
       ></v-alert
     ><v-progress-linear v-if="loading" indeterminate color="primary" />
     <form v-else-if="loaded" @submit.prevent="save" class="settings-form">
-      <v-card class="settings-card"
+      <v-card id="branding" class="settings-card"
         ><div class="settings-heading">
           <v-icon color="primary">mdi-office-building-outline</v-icon>
           <div>
-            <h2>空间信息</h2>
+            <h2>网站信息与标志</h2>
             <p>这些信息将展示在工作台和登录页</p>
           </div>
         </div>
@@ -171,10 +212,13 @@ onMounted(() => {
           required />
         <v-text-field
           v-model="form.brandName"
-          label="平台展示名称"
+          label="网站简短名称"
           placeholder="QUT机器人战队"
-          maxlength="80"
+          maxlength="50"
+          hint="用于侧栏、登录页和浏览器标题。"
+          persistent-hint
           required />
+        <v-textarea v-model="form.description" label="网站简介" rows="2" maxlength="400" counter hint="显示在登录页；留空使用默认介绍。" persistent-hint />
         <v-row><v-col cols="12" sm="6"><v-text-field v-model="form.teamName" label="战队中文名称" maxlength="60" required /></v-col><v-col cols="12" sm="6"><v-text-field v-model="form.secondaryTeamName" label="战队英文名称" maxlength="60" required /></v-col></v-row>
         <v-alert type="info" variant="tonal" density="compact" class="mb-5">中文名称与英文名称属于同一支战队，成员、资料和报名统一管理。</v-alert>
         <v-select v-model="form.competitions" :items="['RoboCon', 'RoboMaster']" label="同时参与的赛事" multiple chips hint="可随战队实际参赛安排调整。" persistent-hint class="mb-5" />
@@ -195,7 +239,7 @@ onMounted(() => {
           rows="3"
           maxlength="2000"
           counter /></v-card
-      ><v-card class="settings-card"
+      ><v-card id="general" class="settings-card"
         ><div class="settings-heading">
           <v-icon color="secondary">mdi-account-multiple-plus-outline</v-icon>
           <div>
@@ -231,61 +275,6 @@ onMounted(() => {
           hint="当前版本提供外部入口，成绩与账号同步尚未接入。"
           persistent-hint
       /></v-card>
-      <v-card class="settings-card">
-        <div class="settings-heading">
-          <v-icon color="primary">mdi-email-check-outline</v-icon>
-          <div>
-            <h2>注册邮箱验证</h2>
-            <p>新账号需通过邮箱验证码验证后才能注册</p>
-          </div>
-        </div>
-        <v-progress-linear
-          v-if="emailStatusLoading"
-          indeterminate
-          color="primary"
-        />
-        <v-alert
-          v-else-if="emailStatusError"
-          type="warning"
-          variant="tonal"
-          density="compact"
-        >
-          邮件服务状态读取失败。
-          <v-btn
-            type="button"
-            variant="text"
-            size="small"
-            @click="loadEmailStatus"
-            >重试</v-btn
-          >
-        </v-alert>
-        <template v-else-if="emailStatus">
-          <v-chip
-            :color="emailStatus.configured ? 'success' : 'warning'"
-            size="small"
-            class="mb-3"
-            :prepend-icon="
-              emailStatus.configured
-                ? 'mdi-check-circle-outline'
-                : 'mdi-clock-outline'
-            "
-            >{{
-              emailStatus.configured ? "已配置发信服务" : "发信服务未配置"
-            }}</v-chip
-          >
-          <p v-if="emailStatus.configured" class="email-status-text">
-            发件邮箱：{{ emailStatus.from }}
-          </p>
-          <p class="email-status-text">
-            {{
-              emailStatus.configured
-                ? "账号注册已开放，验证码有效期为 10 分钟。"
-                : "暂不开放新账号注册，已有账号仍可登录。"
-            }}
-            如需调整发信服务，请联系部署管理员。
-          </p>
-        </template>
-      </v-card>
       <div class="d-flex align-center justify-space-between ga-4">
         <span class="save-hint">修改会写入操作记录</span
         ><v-btn
@@ -294,9 +283,41 @@ onMounted(() => {
           prepend-icon="mdi-check"
           :loading="saving"
           :disabled="uploadingLogo"
-          >保存设置</v-btn
+          >保存网站设置</v-btn
         >
       </div>
+    </form>
+    <form v-if="loaded" @submit.prevent="saveMail" class="settings-form">
+      <v-card id="email" class="settings-card">
+        <div class="settings-heading">
+          <v-icon color="primary">mdi-email-outline</v-icon>
+          <div><h2>邮件服务</h2><p>用于注册邮箱验证码和批量邮件，只有系统管理员可以查看与修改。</p></div>
+        </div>
+        <v-progress-linear v-if="emailStatusLoading" indeterminate color="primary" />
+        <v-alert v-if="emailStatusError" type="error" variant="tonal" density="compact" class="mb-4">
+          {{ emailStatusError }}
+          <v-btn v-if="!emailStatus" type="button" variant="text" size="small" @click="loadEmailStatus">重试</v-btn>
+        </v-alert>
+        <template v-if="emailStatus && !emailStatusLoading">
+          <div class="d-flex flex-wrap align-center ga-2 mb-4">
+            <v-chip :color="emailStatus.configured ? 'success' : 'warning'" size="small">{{ emailStatus.configured ? '发信已启用' : '发信已关闭' }}</v-chip>
+            <span class="email-status-text mb-0">{{ emailStatus.source === 'database' ? '使用后台保存的配置' : '使用服务器初始配置' }}</span>
+          </div>
+          <v-alert type="info" variant="tonal" density="compact" class="mb-4">保存仅更新设置，不会发送邮件。关闭发信后，新用户将无法获取注册验证码。</v-alert>
+          <v-switch v-model="mailForm.enabled" label="启用邮件服务" color="primary" inset hide-details class="mb-4" :disabled="savingMail" />
+          <v-row>
+            <v-col cols="12" sm="8"><v-text-field v-model="mailForm.host" label="SMTP 服务器" placeholder="smtp.163.com" maxlength="253" :disabled="savingMail" /></v-col>
+            <v-col cols="12" sm="4"><v-text-field v-model.number="mailForm.port" label="端口" type="number" min="1" max="65535" :disabled="savingMail" /></v-col>
+            <v-col cols="12" sm="6"><v-select v-model="mailForm.security" :items="securityOptions" label="连接加密方式" :disabled="savingMail" /></v-col>
+            <v-col cols="12" sm="6"><v-text-field v-model="mailForm.username" label="SMTP 账号" autocomplete="off" maxlength="254" :disabled="savingMail" /></v-col>
+            <v-col cols="12" sm="6"><v-text-field v-model="mailForm.from" label="发件邮箱" type="email" maxlength="254" :disabled="savingMail" /></v-col>
+            <v-col cols="12" sm="6"><v-text-field v-model="mailForm.fromName" label="发件人名称" maxlength="40" :disabled="savingMail" /></v-col>
+          </v-row>
+          <v-text-field v-model="mailForm.password" :type="showPassword ? 'text' : 'password'" label="SMTP 授权码 / 密码" autocomplete="new-password" :append-inner-icon="showPassword ? 'mdi-eye-off-outline' : 'mdi-eye-outline'" @click:append-inner="showPassword = !showPassword" :disabled="savingMail || clearPassword" :hint="emailStatus.passwordSet ? '已保存授权码，留空则保留；不会显示已保存的密钥。' : '尚未保存授权码。163 等邮箱请使用 SMTP 授权码。'" persistent-hint />
+          <v-checkbox v-if="emailStatus.passwordSet" v-model="clearPassword" label="清除已保存的授权码（仅供无需认证的邮件服务）" hide-details density="compact" :disabled="savingMail" class="mb-4" />
+          <div class="d-flex justify-end mt-4"><v-btn type="submit" color="primary" variant="tonal" prepend-icon="mdi-content-save-outline" :loading="savingMail">保存邮件设置</v-btn></div>
+        </template>
+      </v-card>
     </form>
     <v-snackbar v-model="saved" color="success">{{ savedMessage }}</v-snackbar>
   </div>
@@ -318,8 +339,11 @@ onMounted(() => {
 .logo-preview span { font-size: 13px; color: #757575; margin-top: 5px; }
 .settings-form {
   max-width: 850px;
+  margin-bottom: 22px;
 }
+.settings-shortcuts { display: flex; flex-wrap: wrap; gap: 8px; }
 .settings-card {
+  scroll-margin-top: 90px;
   padding: 27px 30px;
   margin-bottom: 22px;
 }

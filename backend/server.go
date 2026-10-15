@@ -29,29 +29,32 @@ import (
 )
 
 type Config struct {
-	Demo          bool
-	Secure        bool
-	PublicOrigin  string
-	WebDir        string
-	Mailer        VerificationMailer
-	EmailFrom     string
-	EmailSecurity string
-	UploadDir     string
-	NoticeMailer  NoticeMailer
-	JudgeURL      string
-	JudgeToken    string
+	Demo                bool
+	Secure              bool
+	PublicOrigin        string
+	WebDir              string
+	Mailer              VerificationMailer
+	EmailFrom           string
+	EmailSecurity       string
+	UploadDir           string
+	NoticeMailer        NoticeMailer
+	JudgeURL            string
+	JudgeToken          string
+	CertificateRenderer CertificateRenderer
 }
 type attempt struct {
 	count int
 	since time.Time
 }
 type App struct {
-	store      *Store
-	config     Config
-	attempts   map[string]attempt
-	rateMu     sync.Mutex
-	platformMu sync.Mutex
-	judgeSlots chan struct{}
+	store       *Store
+	config      Config
+	attempts    map[string]attempt
+	rateMu      sync.Mutex
+	platformMu  sync.Mutex
+	judgeSlots  chan struct{}
+	mailMu      sync.RWMutex
+	mailService *mailServiceSnapshot
 }
 type apiError struct {
 	status            int
@@ -249,6 +252,8 @@ func (a *App) Handler() http.Handler {
 	a.registerPlatformRoutes(m)
 	a.registerTaskPlatformRoutes(m)
 	a.registerLearningRoutes(m)
+	a.registerCertificateRoutes(m)
+	a.registerAdminSettingsRoutes(m)
 	m.HandleFunc("GET /api/workspace-summary", a.wrap(true, a.workspaceSummary))
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, 404, map[string]string{"error": "接口不存在"})
@@ -269,6 +274,14 @@ func (a *App) Handler() http.Handler {
 			p = "index.html"
 		}
 		f, err := root.Open(p)
+		if err != nil && a.config.UploadDir != "" && retainedAssetName(r.URL.Path) != "" {
+			// A tab from the previous release may still import its content-hashed
+			// chunks. Keep those immutable assets in the existing data volume.
+			if retained, openErr := os.OpenRoot(filepath.Join(a.config.UploadDir, "..", "web-assets")); openErr == nil {
+				defer retained.Close()
+				f, err = retained.Open(retainedAssetName(r.URL.Path))
+			}
+		}
 		if err != nil {
 			if filepath.Ext(p) != "" {
 				http.NotFound(w, r)
@@ -288,6 +301,8 @@ func (a *App) Handler() http.Handler {
 		}
 		if strings.HasSuffix(info.Name(), ".html") {
 			w.Header().Set("Cache-Control", "no-cache")
+		} else if retainedAssetName(r.URL.Path) != "" {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
 		http.ServeContent(w, r, info.Name(), info.ModTime(), f)
 	})
@@ -418,7 +433,7 @@ func (a *App) publicConfig(w http.ResponseWriter, r *http.Request, _ User) error
 	if err != nil {
 		return err
 	}
-	respond(w, 200, map[string]any{"organization": s.Organization, "season": s.Season, "demoMode": a.config.Demo, "applicationOpen": s.ApplicationOpen, "applicationDeadline": s.ApplicationDeadline, "emailVerificationRequired": true, "registrationEnabled": a.config.Mailer != nil, "brandName": s.BrandName, "logoUrl": s.LogoURL, "teamName": s.TeamName, "secondaryTeamName": s.SecondaryTeamName, "competitions": s.Competitions})
+	respond(w, 200, map[string]any{"organization": s.Organization, "season": s.Season, "demoMode": a.config.Demo, "applicationOpen": s.ApplicationOpen, "applicationDeadline": s.ApplicationDeadline, "emailVerificationRequired": true, "registrationEnabled": a.currentMailService().verification != nil, "brandName": s.BrandName, "logoUrl": s.LogoURL, "teamName": s.TeamName, "secondaryTeamName": s.SecondaryTeamName, "competitions": s.Competitions, "description": s.Description})
 	return nil
 }
 func (a *App) activity(u User, action, target string) {
@@ -717,6 +732,7 @@ func (a *App) updateSettings(w http.ResponseWriter, r *http.Request, u User) err
 	}
 	var in struct {
 		Organization        *string   `json:"organization"`
+		Description         *string   `json:"description"`
 		BrandName           *string   `json:"brandName"`
 		LogoURL             *string   `json:"logoUrl"`
 		TeamName            *string   `json:"teamName"`
@@ -730,6 +746,9 @@ func (a *App) updateSettings(w http.ResponseWriter, r *http.Request, u User) err
 	}
 	if err = decode(r, &in); err != nil {
 		return err
+	}
+	if in.Description != nil {
+		s.Description = strings.TrimSpace(*in.Description)
 	}
 	if in.Organization != nil {
 		s.Organization = strings.TrimSpace(*in.Organization)
@@ -770,7 +789,7 @@ func (a *App) updateSettings(w http.ResponseWriter, r *http.Request, u User) err
 	if err := validateBrand(s); err != nil {
 		return err
 	}
-	if s.Organization == "" || len(s.Organization) > 150 || s.Season == "" || len(s.Season) > 80 || !validDate(s.ApplicationDeadline) || !validURL(s.HydroURL) || len(s.Announcement) > 10000 {
+	if s.Organization == "" || len(s.Organization) > 150 || s.Season == "" || len(s.Season) > 80 || !validDate(s.ApplicationDeadline) || !validURL(s.HydroURL) || len(s.Announcement) > 10000 || len(s.Description) > 1500 {
 		return fail(400, "设置内容不合法，请检查名称、日期和链接")
 	}
 	if err = a.store.saveSettings(s); err != nil {
@@ -1141,6 +1160,9 @@ func (a *App) dashboard(w http.ResponseWriter, r *http.Request, u User) error {
 }
 
 func newApp(store *Store, config Config) *App {
+	if config.CertificateRenderer == nil {
+		config.CertificateRenderer = defaultCertificateRenderer
+	}
 	return &App{store: store, config: config, attempts: map[string]attempt{}, judgeSlots: make(chan struct{}, 2)}
 }
 func env(name, fallback string) string {
@@ -1160,15 +1182,26 @@ func main() {
 	if err = initialize(store, demo); err != nil {
 		log.Fatal(err)
 	}
-	mailer, emailConfig, err := smtpMailerFromEnv(demo)
-	if err != nil {
-		log.Fatal(err)
+	var mailer VerificationMailer
+	var emailConfig SMTPConfig
+	var storedMailCount int
+	if err = store.row("SELECT COUNT(*) FROM settings WHERE id='mail-service'").Scan(&storedMailCount); err != nil {
+		log.Fatal("cannot read mail configuration source")
+	}
+	if storedMailCount == 0 {
+		mailer, emailConfig, err = smtpMailerFromEnv(demo)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 	var noticeMailer NoticeMailer
 	if value, ok := mailer.(NoticeMailer); ok {
 		noticeMailer = value
 	}
 	app := newApp(store, Config{Mailer: mailer, NoticeMailer: noticeMailer, EmailFrom: emailConfig.From, EmailSecurity: emailConfig.Security, Demo: demo, Secure: os.Getenv("SESSION_SECURE") == "true", PublicOrigin: os.Getenv("PUBLIC_ORIGIN"), WebDir: env("WEB_DIR", "../frontend/dist"), UploadDir: env("UPLOAD_DIR", filepath.Join(env("DATA_DIR", "./data"), "uploads")), JudgeURL: os.Getenv("JUDGE_URL"), JudgeToken: os.Getenv("JUDGE_TOKEN")})
+	if err = app.loadStoredMailService(); err != nil {
+		log.Fatal(err)
+	}
 	if err = validateJudgeURL(app.config.JudgeURL); err != nil {
 		log.Fatal(err)
 	}

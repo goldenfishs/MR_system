@@ -7,6 +7,7 @@ import { auth } from "../lib/auth";
 import { downloadUrl, previewUrl, type FileAsset, type PersonalRecord, type UserWithProfile } from "../lib/platform";
 import FileUpload from "../components/FileUpload.vue";
 import AttachmentList from "../components/AttachmentList.vue";
+import CertificateStudio from "../components/CertificateStudio.vue";
 const props = defineProps<{ personalOnly?: boolean; embedded?: boolean }>();
 const { smAndDown } = useDisplay();
 const assets = ref<Record<string, FileAsset>>({});
@@ -20,6 +21,7 @@ const records = ref<PersonalRecord[]>([]),
   search = ref(""),
   kind = ref("all"),
   open = ref(false),
+  studioOpen = ref(false),
   saving = ref(false),
   uploading = ref(false);
 const admin = computed(() => hasPermission("records") && !props.personalOnly);
@@ -125,6 +127,8 @@ onUnmounted(() => { loadVersion++; });
           面试通过证书、获奖证书与荣誉按人归档，随时查找和下载。
         </p>
       </div>
+      <div v-if="admin" class="d-flex flex-wrap ga-2">
+      <v-btn color="primary" variant="tonal" prepend-icon="mdi-file-document-multiple-outline" @click="studioOpen=true">模板批量发放</v-btn>
       <v-btn
         v-if="admin"
         color="primary"
@@ -132,7 +136,9 @@ onUnmounted(() => { loadVersion++; });
         @click="create"
         >发放证书</v-btn
       >
+      </div>
     </div>
+    <CertificateStudio v-if="studioOpen" @close="studioOpen=false" @issued="studioOpen=false;notice=`已为 ${$event} 位成员生成并发放证书`;load()"/>
     <div class="record-filters">
       <v-text-field
         v-model="search"

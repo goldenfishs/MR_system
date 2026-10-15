@@ -123,6 +123,7 @@ export interface Activity {
   createdAt: string;
 }
 export interface Settings {
+  description?: string;
   organization: string;
   season: string;
   /** Optional branding fields supplied by newer servers. */
@@ -148,6 +149,7 @@ export interface Dashboard {
   upcomingInterviews: Applicant[];
 }
 export interface PublicConfig {
+  description?: string;
   organization: string;
   season: string;
   brandName?: string;
@@ -160,6 +162,19 @@ export interface PublicConfig {
   applicationDeadline: string;
   emailVerificationRequired: boolean;
   registrationEnabled: boolean;
+}
+export interface MailServiceSettings {
+  enabled: boolean;
+  configured: boolean;
+  supportsBulk: boolean;
+  host: string;
+  port: number;
+  username: string;
+  from: string;
+  fromName: string;
+  security: string;
+  passwordSet: boolean;
+  source: "environment" | "database";
 }
 export interface EmailServiceStatus {
   configured: boolean;

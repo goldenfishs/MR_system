@@ -185,7 +185,7 @@ async function submit() {
         </div>
         <h1>{{ config?.organization || "青岛理工大学机器人战队" }}</h1>
         <p class="team-name">{{ config?.teamName || "沧溟" }} <span>/</span> {{ config?.secondaryTeamName || "MOVE" }}</p>
-        <p>同一支战队，奔赴 {{ competitions.join(" 与 ") }}。</p>
+        <p>{{ config?.description || `同一支战队，奔赴 ${competitions.join(" 与 ")}。` }}</p>
       </div>
       <v-card class="login-card">
         <div class="login-tabs" role="tablist" aria-label="登录或注册">

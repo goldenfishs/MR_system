@@ -34,10 +34,10 @@ interface PhotoInput { name: string; contentBase64: string }
 - `GET /profile` → `{profile:Profile}`。仅当前用户；新注册账号的姓名及资料字段为空，`complete:false`。旧账号没有资料时返回原有姓名和 `complete:false`，不补造学校、学号或照片等资料。
 - `PATCH /profile`：`{name,...ProfileFields,avatar?:PhotoInput,photo?:PhotoInput}` → `{profile:Profile,user:User}`。头像选填、用于账号展示；`photo` 是本人证件照，用于报名审核且仍为必填。已有图片可省略对应字段以保留；两张图片可以一起提交。也可用 `PATCH /profile/avatar` 单独保存头像。
 - `PATCH /profile/avatar`：`PhotoInput` → `{profile:Profile}`。可在资料尚未补全时单独更新头像，不改变本人证件照或资料完整度。`PATCH /profile` 仅提交 `{avatar:PhotoInput}` 也返回 `{profile:Profile}`。头像预览仅本人及系统管理员可访问，组内报名审核继续读取 `photoFileId`。
-- `GET /users?permission=members|recruitment|records|mail` → `{items:(User & {profile:Profile})[]}`，默认用途 members，供审核、档案分配和邮件选人。管理员全部；组管理员必须有所选模块权限，并按接收人当前成员方向筛选。recruitment 也匹配报名方向和有同组报名权限的审核人员；mail 对尚无成员方向者匹配待审核的新报名或未拒绝的历史报名，用于招新联系。普通用户不能读取其他人员资料；不支持其他用途值。
+- `GET /users?permission=members|recruitment|records|mail` → `{items:(User & {profile:Profile,eligibleDirections?:string[]})[]}`，默认用途 members，供审核、档案分配和邮件选人。records 用途额外返回 `eligibleDirections`，仅包含接收人当前有效入组且操作人获荣誉权限的组别，供指定组别时筛选，不能用用户主方向推断多组资格。管理员全部；组管理员必须有所选模块权限，并按接收人当前成员方向筛选。recruitment 也匹配报名方向和有同组报名权限的审核人员；mail 对尚无成员方向者匹配待审核的新报名或未拒绝的历史报名，用于招新联系。普通用户不能读取其他人员资料；不支持其他用途值。
 
 mail／records 选人不会自动授予完整资料访问权：只有该用途权限时，返回姓名、邮箱和所属组，records 另保留学号；照片、电话、专业、班级、兴趣和考核确认字段清空。管理员、本人，或另有目标人员所在组 members／recruitment 权限者保留完整资料。响应仍采用相同 User／Profile 结构，受限字段为空。
-- `GET /public/config` → `{organization,season,demoMode,applicationOpen,applicationDeadline,emailVerificationRequired:true,registrationEnabled:boolean,brandName,logoUrl,teamName,secondaryTeamName,competitions:Competition[]}`，无需登录。`registrationEnabled` 表示已配置 SMTP，不保证外部邮件服务可用。
+- `GET /public/config` → `{organization,season,demoMode,applicationOpen,applicationDeadline,emailVerificationRequired:true,registrationEnabled:boolean,brandName,logoUrl,teamName,secondaryTeamName,competitions:Competition[],description}`，无需登录。`registrationEnabled` 表示 SMTP 已启用，不保证外部邮件服务可用。
 
 新注册记录 `emailVerifiedAt`。已有、引导和管理员创建的账号不会被追溯标记为已验证。密码最少 10 字节、最多 72 字节；工作人员初始密码最少 12 字节。
 
@@ -143,6 +143,36 @@ interface Record {
 - `GET /records` → `{items:Record[]}`，管理员全部；有 records 权限的组管理员可读对应组人员档案和本人档案；其余仅本人。
 - `POST /records`：`{userId,title,kind,description?,fileIds?,issuedAt?}` → 201 `{item:Record}`，管理员或有接收人所属组 records 权限的组管理员。接收人必须是已存在用户，默认发放时间为当前时间；档案和附件访问授权同一事务写入。档案通知不会自动发送邮件，邮件在批量邮件页面另行发出。
 
+### 证书模板与批量发放
+
+```ts
+interface CertificateField {
+  id: string;
+  key: 'name' | 'direction' | 'major' | 'className' | 'studentNumber' | 'date' | 'text';
+  text?: string; page: number; x: number; y: number; width: number;
+  fontSize: number; align: 'left' | 'center' | 'right'; color: string;
+}
+interface CertificateTemplate {
+  id: string; name: string; sourceFileId: string; pdfFileId: string;
+  pages: {width: number; height: number; previewFileId: string}[];
+  fields: CertificateField[]; createdAt: string; updatedAt: string; createdBy: string;
+}
+```
+
+模板源文件先通过 `POST /files` 上传，支持 PDF、PNG、JPEG、DOCX，单文件不超过 25 MiB、最多 5 页。导入生成静态 PDF 和每页 PNG，源文件与生成底稿都保持私有。页面宽高使用 PDF point；`page` 从 0 开始；`x/y/width` 为相对页面尺寸的 0–1 比例，`y` 表示文字区域顶部。每模板最多 40 个字段，字号 8–96 pt，颜色为 `#RRGGBB`；区域不得超出页面。`text` 字段使用固定文字，其余字段由收件人资料、有效组别和发放日期填写。长文字自动缩小适配区域，低于 6 pt 仍放不下时拒绝生成。
+
+- `GET /certificate-templates` → `{items:CertificateTemplate[]}`。管理员可管理全部；有 `records` 权限的组管理员只可管理自己创建的模板。
+- `POST /certificate-templates`：`{name,sourceFileId}` → 201 `{item:CertificateTemplate}`。源文件须属于本人，系统管理员可使用可管理的已有文件。初次导入 `fields=[]`。
+- `PATCH /certificate-templates/:id`：`{name,fields:CertificateField[]}` → `{item:CertificateTemplate}`。更新成功返回新的 `updatedAt`，用作发放版本。
+- `POST /certificate-templates/:id/preview`：`{userId,direction?,issuedAt?,fields?:CertificateField[],page?:number}` → `{previewDataUrl,values}`。`previewDataUrl` 为 PNG data URL，`values` 仅包含所用的自动字段；可传尚未保存的字段预览，不创建文件记录或荣誉记录。目标用户必须在当前荣誉发放范围内。
+- `POST /certificate-batches`：`{templateId,templateVersion,userIds,title,kind,description?,direction?,issuedAt?,requestId}` → 201 `{batchId,items:Record[],replayed:false}`；成功批次重试返回 200、相同记录和 `replayed:true`。`templateVersion` 必须等于预览后保存的模板 `updatedAt`；已过期返回 409，需重新预览。`kind` 沿用 `certificate|award|notice`。每批 1–50 位不同用户，模板须至少有一个填写区域。
+
+`direction` 留空时自动合并收件人当前有效且发放者获授权的组别；指定时，全部收件人须为该组有效成员且发放者有该组 `records` 权限。日期使用 RFC3339，显示为北京时间日期；省略时使用发放当日。资料缺少模板所需字段时明确报错，整批不发放。
+
+每位收件人生成完整 PDF 与首页 PNG，作为个人 `Record.fileIds` 保存，文件归属收件人；本人、系统管理员及仍有对应荣誉管理权限者可读，其他用户无法下载。所有收件人完成渲染后一次事务写入，失败回滚文件与记录。渲染期间模板、收件人资料或发放权限变化会阻止提交。导入与预览总超时 120 秒，批量发放 240 秒；调用方应相应设置超时。
+
+`requestId` 为调用方生成的 16–100 位字母、数字、`-` 或 `_` 字符串，以发放者为范围唯一。网络中断后保持原请求内容与编号重试，避免重复发放；同编号配合不同内容返回 409。源模板和字段版本、收件人或发放信息变更时使用新编号。此接口只归档证书，不发送邮件。
+
 ## 任务、成果与评分
 
 ```ts
@@ -230,18 +260,22 @@ interface MailCampaign {
 
 - `GET /health` → `{status:'ok'}`，验证数据库连接。
 - `GET /workspace-summary` → `{stats:{openTeams,applications,pendingApplications,members,records,files,activeTasks,pendingReviews},pipeline:{status,label,count}[],profileComplete}`。新团队统计按当前管理模块、方向或本人范围计算，文件数始终仅本人。培养任务按成员学习资格或 tasks 管理授权计算；两者均无时任务和待评阅统计为 0。
-- `GET /settings` → `{settings:{organization,season,applicationOpen,applicationDeadline,hydroUrl,announcement,brandName,logoUrl,teamName,secondaryTeamName,competitions}}`。
+- `GET /settings` → `{settings:{organization,season,applicationOpen,applicationDeadline,hydroUrl,announcement,brandName,logoUrl,teamName,secondaryTeamName,competitions,description}}`。
 - `PATCH /settings`：上述字段部分更新 → `{settings}`，仅管理员。
 - `POST /settings/logo`：`{name,contentBase64}` → `{settings}`，仅管理员；上传 PNG/JPEG，最大 2 MiB、单边 6000 像素且总像素不超过 2000 万，服务端清洗重编码并更新 logoUrl。
 - `GET /public/logo/:id`：匿名读取当前使用的品牌标志；更换标志后旧地址撤销公开，个人图片不通过此入口暴露。
 - `GET /settings/email` → `{configured,from,security,supportsBulk}`，仅管理员，不返回 SMTP 密钥或主机配置。
+- `GET /settings/mail-service` → `{enabled,configured,supportsBulk,host,port,username,from,fromName,security,passwordSet,source}`，仅系统管理员。`source` 为 `environment`（服务器初始配置）或 `database`（后台配置）。不会返回已保存密码／授权码。
+- `PATCH /settings/mail-service`：`{enabled?,host?,port?,username?,password?,clearPassword?,from?,fromName?,security?}` → 同 GET 响应。仅系统管理员；密码省略或空字符串保留现有值（包括初始环境变量值），显式 `clearPassword:true` 才清除。账号与密码必须成对存在，清除密码时需同时清空账号。生产只支持 `starttls` 或 `tls`；保存验证配置格式但不会建立 SMTP 连接或发送邮件。
+
+邮件配置更新后立即供后续注册验证码和批量邮件使用；已开始的批次继续使用开始时的配置。`enabled:false` 停止新的发信任务与验证码注册。后台配置单独存储于 `settings` 的 `mail-service` 记录，授权码采用 AES-GCM 加密，密钥为数据目录中的 `mail-settings.key`（权限 0600）。重启加载后台配置；尚未保存后台配置时继续使用 SMTP 环境变量。运维备份必须同时保留数据库与数据目录，缺失／损坏密钥时启动会明确失败，防止静默退回旧配置。
 - `GET /members` → `{items:(User & {teams:{id,name,competition,competitions,direction}[]})[]}`，管理员可见全部账号，包括未报名／待审核的新生，以便直接分配身份和权限。组管理员名册限于有 members 权限的组内管理者、正式／梯队队员及已通过报名的新生，附加有权查看的新团队归属列表。
 - `POST /members`：`{name,email,password,role,memberType?,groupGrants?,team?,direction?}` → 201 `{item:User}`，仅管理员。role 使用本契约的五类身份，后台密码为 12–72 字节。
 - `PATCH /members/:id`：`{role?,memberType?,groupGrants?,direction?,assessmentPassed?,assessmentNote?}` → `{item:User}`。角色、组授权和方向分配仅管理员可操作，不能降级最后一位管理员；groupGrants 为完整替换，不能包含重复方向、重复或未知权限，普通角色不能携带管理权限。有培养周期的新生须使用阶段考核接口，不能直接晋升或绕过淘汰；培养进行中改换方向返回 409。没有培养周期的存量新生可由管理员或其所属组有 assessment 权限者明确传 `assessmentPassed:true`，晋升为 reserve／formal，并填写最多 5000 字节的说明；组管理员仅可做该最终身份确认，不能同时修改方向、角色或组授权，也不能确认自己。后台创建既有正式／梯队账号不要求补新生考核。
 
 保留原有 `/dashboard`、`GET/POST /applicants`、`PATCH /applicants/:id` 以访问历史面试数据；它们不等同新团队报名。历史报名每用户一份，普通用户仅自己的，组管理员按 recruitment 权限及申请方向管理，管理员全部；内部评分和备注对普通人员隐藏。新功能应使用 `/teams`、`/team-applications`、`/memberships`。
 
-同源部署，不开放通配 CORS。生产设置 `SESSION_SECURE=true`，SMTP 与判题服务密钥通过环境注入。数据库迁移 v4 新增知识库与讨论表，并迁移默认品牌及团队多赛事字段；v5 持久化五类角色、人员身份与各组授权。旧 mentor 按原方向迁为有 tasks／knowledge／discussions／members 的组管理员，旧 interviewer 按原方向迁为有 recruitment／discussions 的组管理员，旧 student 均迁为新生（含已报名通过账号），不自动认定新生考核通过。v6 增加培养方案、周期及阶段决策持久化；assessment 为独立授权，旧组管理员不会自动获得。部署路径和实际边界见[架构说明](architecture.md)。
+同源部署，不开放通配 CORS。生产设置 `SESSION_SECURE=true`，SMTP 初始配置与判题服务密钥通过环境注入；管理员保存后的 SMTP 配置优先使用上述加密持久化记录。数据库迁移 v4 新增知识库与讨论表，并迁移默认品牌及团队多赛事字段；v5 持久化五类角色、人员身份与各组授权。旧 mentor 按原方向迁为有 tasks／knowledge／discussions／members 的组管理员，旧 interviewer 按原方向迁为有 recruitment／discussions 的组管理员，旧 student 均迁为新生（含已报名通过账号），不自动认定新生考核通过。v6 增加培养方案、周期及阶段决策持久化；assessment 为独立授权，旧组管理员不会自动获得。部署路径和实际边界见[架构说明](architecture.md)。
 
 
 ## 分组学习、题库与定时考试
@@ -295,4 +329,4 @@ interface Discussion {
 
 ## 品牌配置
 
-默认 brandName=QUT机器人战队、organization=青岛理工大学机器人战队、teamName=沧溟、secondaryTeamName=MOVE、competitions=[RoboCon,RoboMaster]、logoUrl=/mark.png。队名为同一战队的名称。管理员可通过设置更新这些字段；标志支持 HTTP(S) URL、本站静态资源路径及专用 /api/public/logo/:id 地址，不能使用私有附件 API 地址。公开配置不包含 SMTP/Judge 密钥或成员资料。旧默认 `/mark.svg` 会迁移到用户提供的 M 标志，自定义标志地址保留。
+默认 brandName=QUT机器人战队、organization=青岛理工大学机器人战队、teamName=沧溟、secondaryTeamName=MOVE、competitions=[RoboCon,RoboMaster]、logoUrl=/mark.png。队名为同一战队的名称。管理员可通过系统管理中的网站设置更新这些字段及 `description` 简介（最多 1500 字节，登录页展示，留空使用默认介绍）；标志支持 HTTP(S) URL、本站静态资源路径及专用 /api/public/logo/:id 地址，不能使用私有附件 API 地址。公开配置不包含 SMTP/Judge 密钥或成员资料。旧默认 `/mark.svg` 会迁移到用户提供的 M 标志，自定义标志地址保留。

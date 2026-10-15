@@ -922,7 +922,8 @@ func (a *App) listUsers(w http.ResponseWriter, r *http.Request, u User) error {
 	}
 	type userProfile struct {
 		User
-		Profile Profile `json:"profile"`
+		Profile            Profile  `json:"profile"`
+		EligibleDirections []string `json:"eligibleDirections,omitempty"`
 	}
 	items := []userProfile{}
 	for _, user := range users {
@@ -957,7 +958,19 @@ func (a *App) listUsers(w http.ResponseWriter, r *http.Request, u User) error {
 				user.AssessmentPassedAt, user.AssessmentConfirmedBy, user.AssessmentNote = "", "", ""
 			}
 		}
-		items = append(items, userProfile{User: user, Profile: p})
+		eligibleDirections := []string{}
+		if permission == "records" {
+			directions, e := a.memberDirections(user.ID)
+			if e != nil {
+				return e
+			}
+			for _, direction := range directions {
+				if hasPermission(u, direction, "records") {
+					eligibleDirections = append(eligibleDirections, direction)
+				}
+			}
+		}
+		items = append(items, userProfile{User: user, Profile: p, EligibleDirections: eligibleDirections})
 	}
 	respond(w, 200, map[string]any{"items": items})
 	return nil

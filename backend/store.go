@@ -78,6 +78,8 @@ func openStore(databaseURL, dataDir string) (*Store, error) {
 		`CREATE TABLE IF NOT EXISTS team_memberships (team_id TEXT NOT NULL REFERENCES teams(id), user_id TEXT NOT NULL REFERENCES users(id), direction TEXT NOT NULL, joined_at TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(team_id,user_id))`,
 		`CREATE TABLE IF NOT EXISTS records (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), payload TEXT NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS records_user ON records(user_id)`,
+		`CREATE TABLE IF NOT EXISTS certificate_templates (id TEXT PRIMARY KEY, created_by TEXT NOT NULL REFERENCES users(id), payload TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS certificate_batches (id TEXT PRIMARY KEY, created_by TEXT NOT NULL REFERENCES users(id), request_id TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(created_by,request_id))`,
 		`CREATE TABLE IF NOT EXISTS mail_campaigns(id TEXT PRIMARY KEY, status TEXT NOT NULL, created_by TEXT NOT NULL, payload TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS judge_runs(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, user_id TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS judge_runs_owner ON judge_runs(user_id,task_id)`,

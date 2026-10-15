@@ -96,6 +96,7 @@ type Activity struct {
 	UserID    string `json:"-"`
 }
 type Settings struct {
+	Description         string   `json:"description"`
 	BrandName           string   `json:"brandName"`
 	LogoURL             string   `json:"logoUrl"`
 	TeamName            string   `json:"teamName"`

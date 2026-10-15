@@ -8,6 +8,7 @@ import { api } from "./lib/api";
 import { groupOptions, groupLabel, hasPermission } from "./lib/permissions";
 import type { Permission, Settings } from "./lib/types";
 import type { Profile } from "./lib/platform";
+import { navigationError } from "./router";
 import ProfileCompletionReminder from "./components/ProfileCompletionReminder.vue";
 const route = useRoute(),
   router = useRouter();
@@ -43,28 +44,17 @@ const navigation = computed(() => [
     icon: "mdi-certificate-outline",
   },
   { path: "/profile", title: "个人中心", icon: "mdi-account-circle-outline" },
-  ...(hasPermission("mail")
-    ? [{ path: "/mail", title: "批量邮件", icon: "mdi-email-multiple-outline" }]
-    : []),
-  ...(hasPermission("members")
-    ? [
-        {
-          path: "/members",
-          title: "战队成员",
-          icon: "mdi-account-group-outline",
-        },
-      ]
-    : []),
-  ...(hasPermission("recruitment")
-    ? [
-        {
-          path: "/recruitment",
-          title: "面试记录",
-          icon: "mdi-account-clock-outline",
-        },
-      ]
-    : []),
 ]);
+const managementNavigation = computed(() => [
+  ...(hasPermission("recruitment") ? [{ path: "/applications", title: "报名审核", icon: "mdi-account-check-outline" }] : []),
+  ...(hasPermission("members") ? [{ path: "/members", title: auth.user?.role === "admin" ? "用户与权限" : "组内成员", icon: "mdi-account-group-outline" }] : []),
+  ...(hasPermission("mail") ? [{ path: "/mail", title: "批量邮件", icon: "mdi-email-multiple-outline" }] : []),
+  ...(hasPermission("recruitment") ? [{ path: "/recruitment", title: "面试记录", icon: "mdi-account-clock-outline" }] : []),
+]);
+function reopenPage() {
+  window.location.assign(navigationError.target || route.fullPath);
+}
+
 async function loadSettings() {
   if (!auth.user) return;
   try {
@@ -288,17 +278,24 @@ function directionLink(direction: string) {
             >
           </v-list-item>
         </v-list>
+        <template v-if="managementNavigation.length">
+          <v-divider class="mx-4 my-2" />
+          <div class="nav-caption">管理工作</div>
+          <v-list nav :prepend-gap="18" class="nav-list">
+            <v-list-item v-for="item in managementNavigation" :key="item.path" :to="item.path" :prepend-icon="item.icon" :title="item.title" color="primary" rounded="0" />
+          </v-list>
+        </template>
         <template #append>
           <div class="sidebar-bottom">
             <v-btn
               v-if="auth.user.role === 'admin'"
-              to="/settings"
+              to="/admin"
               variant="text"
               prepend-icon="mdi-cog-outline"
               block
               class="settings-link"
-              :color="route.path === '/settings' ? 'primary' : undefined"
-              >空间设置</v-btn
+              :color="['/admin', '/settings'].includes(route.path) ? 'primary' : undefined"
+              >系统管理</v-btn
             >
             <div class="sidebar-meta">
               <span>{{ settings?.season || "新赛季" }}</span
@@ -380,7 +377,13 @@ function directionLink(direction: string) {
         </template>
       </v-app-bar>
     </template>
-    <v-main><router-view :key="accessIdentity" /></v-main>
+    <v-main>
+      <v-alert v-if="navigationError.message" type="error" variant="tonal" class="ma-5" role="alert">
+        {{ navigationError.message }}
+        <div class="mt-3 d-flex flex-wrap ga-2"><v-btn color="error" variant="tonal" @click="reopenPage">重新打开页面</v-btn><v-btn variant="text" @click="navigationError.message = ''">暂时关闭</v-btn></div>
+      </v-alert>
+      <router-view :key="accessIdentity" />
+    </v-main>
     <ProfileCompletionReminder />
     <v-snackbar
       :model-value="!!logoutError"

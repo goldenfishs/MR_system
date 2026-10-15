@@ -36,7 +36,9 @@ async function request<T>(
   const requestSession = sessionGeneration;
   // Profile images are sent as base64 JSON. Allow the server enough time to
   // decode/store a 2 MiB image without changing the normal request timeout.
-  const timeoutMs = method === "PATCH" && (path === "/profile" || path === "/profile/avatar")
+  const timeoutMs = method === "POST" && path.startsWith("/certificate-")
+    ? 300000
+    : method === "PATCH" && (path === "/profile" || path === "/profile/avatar")
     ? 120000
     : body instanceof FormData
       ? 120000

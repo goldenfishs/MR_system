@@ -1,10 +1,32 @@
+import { reactive } from "vue";
 import { createRouter, createWebHistory } from "vue-router";
+import DiscussionView from "./views/DiscussionView.vue";
+import MailView from "./views/MailView.vue";
 import { auth, loadSession } from "./lib/auth";
 import { canAccessLearning, canOpenLearning, canAccessDirection, canAccessLearningModule, learningDirections, refreshLearningAccess } from "./lib/learning-access";
 import { hasPermission } from "./lib/permissions";
+export const navigationError = reactive({ message: "", target: "" });
+function waitForAnchor(hash: string): Promise<HTMLElement | null> {
+  const find = () => document.getElementById(hash.slice(1));
+  const existing = find();
+  if (existing) return Promise.resolve(existing);
+  return new Promise(resolve => {
+    const observer = new MutationObserver(() => {
+      const element = find();
+      if (element) { observer.disconnect(); window.clearTimeout(timeout); resolve(element); }
+    });
+    const timeout = window.setTimeout(() => { observer.disconnect(); resolve(null); }, 20000);
+    observer.observe(document.body, { childList: true, subtree: true });
+  });
+}
 const router = createRouter({
   history: createWebHistory(),
-  scrollBehavior: () => ({ top: 0 }),
+  async scrollBehavior(to) {
+    if (!to.hash) return { top: 0 };
+    const element = await waitForAnchor(to.hash);
+    if (router.currentRoute.value.fullPath !== to.fullPath) return false;
+    return element ? { el: element, top: 80, behavior: "smooth" } : { top: 0 };
+  },
   routes: [
     {
       path: "/login",
@@ -27,6 +49,16 @@ const router = createRouter({
       meta: { title: "团队报名" },
     },
     {
+      path: "/applications",
+      component: () => import("./views/ApplicationsView.vue"),
+      meta: { title: "报名审核", permission: "recruitment" },
+    },
+    {
+      path: "/admin",
+      component: () => import("./views/SystemAdminView.vue"),
+      meta: { title: "系统管理", admin: true },
+    },
+    {
       path: "/profile",
       component: () => import("./views/ProfileView.vue"),
       meta: { title: "个人中心" },
@@ -43,7 +75,7 @@ const router = createRouter({
     },
     {
       path: "/discussions",
-      component: () => import("./views/DiscussionView.vue"),
+      component: DiscussionView,
       meta: { title: "讨论区" },
     },
     {
@@ -53,7 +85,7 @@ const router = createRouter({
     },
     {
       path: "/mail",
-      component: () => import("./views/MailView.vue"),
+      component: MailView,
       meta: { title: "批量邮件", permission: "mail" },
     },
     {
@@ -82,13 +114,23 @@ const router = createRouter({
       path: "/settings",
       component: () => import("./views/SettingsView.vue"),
       meta: {
-        title: "设置",
+        title: "网站设置",
         subtitle: "为战队配置自己的协作空间。",
         admin: true,
       },
     },
     { path: "/:pathMatch(.*)*", redirect: "/" },
   ],
+});
+router.onError((error, to) => {
+  const message = error instanceof Error ? error.message : String(error);
+  navigationError.target = to.fullPath;
+  navigationError.message = /dynamically imported module|Importing a module script|Loading chunk|preload CSS|module script|Load failed/i.test(message)
+    ? "页面资源加载失败，可能是网站刚刚更新或网络暂时中断。重新打开可加载最新页面。"
+    : "暂时无法打开这个页面，请检查网络后重新打开。";
+});
+router.afterEach((_to, _from, failure) => {
+  if (!failure) Object.assign(navigationError, { message: "", target: "" });
 });
 router.beforeEach(async (to) => {
   await loadSession();

@@ -13,8 +13,8 @@ COPY backend/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mr-system .
 
 FROM alpine:3.23
-RUN apk add --no-cache ca-certificates tzdata \
-    && addgroup -S app && adduser -S app -G app \
+RUN addgroup -S -g 101 app && adduser -S -u 100 app -G app \
+    && apk add --no-cache ca-certificates tzdata python3 py3-reportlab py3-pillow poppler-utils libreoffice-writer font-wqy-zenhei \
     && mkdir -p /app/data && chown -R app:app /app
 WORKDIR /app
 COPY --from=backend /out/mr-system /app/mr-system
