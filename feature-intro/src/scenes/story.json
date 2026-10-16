@@ -1,0 +1,93 @@
+[
+  {
+    "id": "scene-01",
+    "title": "一支队伍\n两项赛事",
+    "kicker": "QUT ROBOT TEAM · INTRODUCTION",
+    "lead": "青岛理工大学机器人战队",
+    "body": "沧溟 / MOVE · RoboCon / RoboMaster",
+    "points": ["同一支队伍", "双赛事并行", "协作与培养一体化"],
+    "visual": "brand",
+    "narration": "一支队伍，同时面向 RoboCon 与 RoboMaster。青岛理工大学机器人战队，沧溟与 MOVE。"
+  },
+  {
+    "id": "scene-02",
+    "title": "报名与\n成员准入",
+    "kicker": "01 · ADMISSIONS",
+    "lead": "资料完善 · 简历提交 · 管理审核",
+    "body": "通过审核后，以新生身份进入培养流程",
+    "points": ["邮箱验证（需 SMTP）", "选择技术方向", "提交 PDF 简历"],
+    "visual": "signup",
+    "narration": "报名支持邮箱验证。成员完善资料、选择技术方向并提交 PDF 简历；审核通过后，以新生身份进入培养。"
+  },
+  {
+    "id": "scene-03",
+    "title": "分阶段\n新生培养",
+    "kicker": "02 · STAGED TRAINING",
+    "lead": "每一阶段，都有明确的考核结果",
+    "body": "中间阶段通过仍是新生 · 最终考核后晋升",
+    "points": ["按组配置阶段", "批量通过或淘汰", "完整保留考核记录"],
+    "visual": "screenshot",
+    "asset": "assets/screenshots/training-manager-stages.png",
+    "fit": "cover",
+    "position": "center 38%",
+    "narration": "新生考核按阶段推进。管理员或获本组考核权限的组管理员，确认通过或淘汰。中间阶段通过仍是新生；最终考核后才晋升正式或梯队队员。"
+  },
+  {
+    "id": "scene-04",
+    "title": "五组共享\n学习空间",
+    "kicker": "03 · LEARNING SPACES",
+    "lead": "机械 · 控制 · 硬件 · 算法 · 运营",
+    "body": "各组拥有独立主页，学习内容对队员开放",
+    "points": ["统一知识库", "文件 / 视频 / PDF", "作业与考试"],
+    "visual": "screenshot",
+    "asset": "assets/screenshots/roles-freshman-learning.png",
+    "fit": "contain",
+    "narration": "报名审核通过后，新生即可查看机械、控制、硬件、算法、运营五组的学习内容。文件、视频和 PDF 集中在知识库，作业与考试统一管理。"
+  },
+  {
+    "id": "scene-05",
+    "title": "作业与\n成果评阅",
+    "kicker": "04 · PROJECT WORK",
+    "lead": "适配不同小组的真实交付形式",
+    "body": "提交留版本 · 评分有反馈 · 题库可扩展",
+    "points": ["图纸 / 工程 / 图片 / 压缩包", "代码与项目提交", "Judge0 兼容服务需配置"],
+    "visual": "screenshot",
+    "asset": "assets/screenshots/qut-mechanical-home.png",
+    "fit": "contain",
+    "narration": "各组按任务要求提交图纸、工程、图片、压缩包或代码。管理员或获本组任务权限的组管理员评分并反馈；在线代码评测需配置 Judge0 兼容服务，当前演示环境未接入。"
+  },
+  {
+    "id": "scene-06",
+    "title": "讨论与\n个人荣誉",
+    "kicker": "05 · COMMUNITY & HONORS",
+    "lead": "经验可以共享，成果可以追溯",
+    "body": "面试通过、阶段认可、赛事获奖都能归档",
+    "points": ["向指定组提问", "精选解答公开", "证书预览与下载"],
+    "visual": "screenshot",
+    "asset": "assets/screenshots/qut-honor-preview.png",
+    "fit": "contain",
+    "narration": "向指定组提问，精选解答可公开。证书和获奖按人发放，在个人荣誉中心预览或下载。"
+  },
+  {
+    "id": "scene-07",
+    "title": "清晰的\n组别权限",
+    "kicker": "06 · ADMINISTRATION",
+    "lead": "全局管理 · 组别授权 · 管理者可兼任",
+    "body": "批量邮件可保存草稿；配置 SMTP 后才能发送",
+    "points": ["系统管理员", "各组管理员", "按组 / 模块分配"],
+    "visual": "screenshot",
+    "asset": "assets/screenshots/roles-permissions.png",
+    "fit": "contain",
+    "narration": "系统管理员拥有全局权限，各组管理员可兼任，并按组别和功能授权。批量邮件可留存草稿与逐人记录；未配置 SMTP 前，只能保存草稿。"
+  },
+  {
+    "id": "scene-08",
+    "title": "让每一步成长\n都有迹可循",
+    "kicker": "QUT ROBOT TEAM · GROW TOGETHER",
+    "lead": "沧溟 / MOVE",
+    "body": "青岛理工大学机器人战队 · RoboCon / RoboMaster",
+    "points": ["从报名到培养", "从学习到协作", "让成果持续留存"],
+    "visual": "brand",
+    "narration": "从报名、培养，到学习协作与荣誉留存，让成长全程可追溯。沧溟与 MOVE，同一支队伍，面向双赛事。"
+  }
+]

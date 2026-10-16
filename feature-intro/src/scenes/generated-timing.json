@@ -1,0 +1,64 @@
+{
+  "fps": 30,
+  "transitionFrames": 18,
+  "durationInFrames": 3301,
+  "durationSeconds": 110.03,
+  "scenes": [
+    {
+      "id": "scene-01",
+      "startFrame": 0,
+      "durationInFrames": 282,
+      "narrationDurationMs": 8235,
+      "audioDurationMs": 9345
+    },
+    {
+      "id": "scene-02",
+      "startFrame": 264,
+      "durationInFrames": 403,
+      "narrationDurationMs": 12283,
+      "audioDurationMs": 13393
+    },
+    {
+      "id": "scene-03",
+      "startFrame": 649,
+      "durationInFrames": 482,
+      "narrationDurationMs": 14921,
+      "audioDurationMs": 16032
+    },
+    {
+      "id": "scene-04",
+      "startFrame": 1113,
+      "durationInFrames": 509,
+      "narrationDurationMs": 15801,
+      "audioDurationMs": 16911
+    },
+    {
+      "id": "scene-05",
+      "startFrame": 1604,
+      "durationInFrames": 556,
+      "narrationDurationMs": 17379,
+      "audioDurationMs": 18489
+    },
+    {
+      "id": "scene-06",
+      "startFrame": 2142,
+      "durationInFrames": 303,
+      "narrationDurationMs": 8931,
+      "audioDurationMs": 10041
+    },
+    {
+      "id": "scene-07",
+      "startFrame": 2427,
+      "durationInFrames": 527,
+      "narrationDurationMs": 16419,
+      "audioDurationMs": 17529
+    },
+    {
+      "id": "scene-08",
+      "startFrame": 2936,
+      "durationInFrames": 365,
+      "narrationDurationMs": 11002,
+      "audioDurationMs": 12112
+    }
+  ]
+}

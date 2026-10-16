@@ -8,6 +8,7 @@ dist/
 .env
 .env.*
 !.env.example
+judge0.conf
 
 # Database, logs, local binaries, and test artifacts
 data/

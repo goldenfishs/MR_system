@@ -10,6 +10,8 @@
 
 另见 [机械组首页](docs/screenshots/qut-mechanical-home.png)、[PDF 知识库预览](docs/screenshots/qut-pdf-preview.png)、[荣誉中心](docs/screenshots/qut-honor-preview.png)、[电控题库](docs/screenshots/qut-code-bank.png)、[手机界面](docs/screenshots/qut-mobile-learning.png)和[界面参考说明](docs/ui-reference.md)。
 
+查看[功能介绍视频（MP4）](docs/media/cangming-move-feature-tour.mp4)、[中文字幕（SRT）](feature-intro/public/zh-CN.srt)和 [Remotion 视频源文件](feature-intro/README.md)。
+
 ## 当前功能
 
 - **邮箱注册与资料**：仅需邮箱、密码和 6 位邮箱验证码注册。登录后资料未完整时弹窗提醒，可稍后填写；在个人中心补全姓名、性别、学校、专业、班级、学号、联系电话和照片后才能报名，兴趣爱好选填。
@@ -98,7 +100,15 @@ docker compose logs -f app
 
 应用默认只绑定宿主机 `127.0.0.1:8080`，数据库不映射外部端口。将 HTTPS 反向代理转发到该地址，并保留原始 `Host`；如代理会改写 `Host`，设置 `PUBLIC_ORIGIN=https://你的域名`。`SESSION_SECURE=true` 要求浏览器通过 HTTPS 访问，直接用 HTTP 登录不能正常保持会话。
 
-此 Compose 定义不会部署邮件服务器或 Judge0。邮箱验证和批量邮件共用所配置的真实 SMTP 服务。启用在线编译时，另行部署独立的私有 Judge0 兼容服务，将应用容器可访问的地址填写到 `JUDGE_URL`，并按服务配置填写 `JUDGE_TOKEN`；服务地址与令牌仅供后端使用。容器中的 `localhost` 指应用容器自身，不能用它连接宿主机或另一个容器中的判题服务。当前本地验收只验证了 Judge0 协议，真实编译与沙箱部署尚需在该执行服务上验收，详见[验收记录](docs/verification.md)。
+基础 Compose 不会部署邮件服务器或 Judge0。邮箱验证和批量邮件共用所配置的真实 SMTP 服务。若需在同机启用私有 Judge0 CE，可复制 `judge0.conf.example` 为 `judge0.conf`，填写独立的 PostgreSQL、Redis 密码；在 `.env` 设置两个随机 Judge0 token，然后启动扩展：
+
+```sh
+docker compose -f compose.yaml -f compose.judge0.yaml up --build -d
+```
+
+该扩展基于 Judge0 1.13.1 构建本地镜像，仅修正 worker 启动脚本将环境变量输出到日志的问题，仍保留环境文件生成和原有信号处理。`judge0.conf` 通过 Compose `env_file` 注入，不挂载到容器内，可在宿主机保持 root 所有、`600` 权限。API 不发布到宿主机端口，只允许应用容器通过私有网络访问；代码沙箱网络关闭，worker 并发设为 2。
+
+Judge0 server 和 worker 均使用特权容器，同机部署仍与应用共享宿主机风险；更高隔离要求应把 worker 放到单独虚拟机。此版本自带的 isolate 1.8.1 不兼容 Ubuntu 24.04 默认的 cgroup v2，部署前需将宿主机切换为 cgroup v1 并重启，再验证真实编译和沙箱执行；只检查 API 或语言列表不能证明判题可用。容器中的 `localhost` 指当前容器，不能用它连接另一容器中的判题服务。部署后验收边界详见[验收记录](docs/verification.md)。
 
 Compose 强制关闭演示模式，要求显式提供管理员和数据库凭据。管理员变量用于首次引导，不能代替账号管理或密码轮换。首次登录后在「空间设置」配置品牌与赛事，在「团队报名」发布招募空间与截止时间，在成员管理中创建账号或修改已有账号的身份、组别与权限。在「新生考核」配置各组阶段，逐阶段确认名单；报名审核不直接晋升。只有管理员能分配权限，考核权限需独立授予，不能降级最后一位管理员。设置页的历史报名开关只控制旧面试流程。后台创建账号使用独立邮箱与 12–72 字节密码。数据库密码会嵌入连接 URI，因此此部署定义要求使用 URL 安全字符，推荐十六进制随机值。请勿提交 `.env`。
 

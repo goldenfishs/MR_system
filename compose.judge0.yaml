@@ -1,0 +1,128 @@
+# Optional private Judge0 CE deployment. Start with:
+# docker compose -f compose.yaml -f compose.judge0.yaml up --build -d
+# Keep judge0.conf out of source control; it contains database credentials.
+services:
+  app:
+    depends_on:
+      judge0-server:
+        condition: service_started
+    environment:
+      JUDGE_URL: http://judge0-server:2358
+      JUDGE_TOKEN: ${JUDGE0_AUTHN_TOKEN:?Set JUDGE0_AUTHN_TOKEN in .env}
+    networks:
+      - default
+      - judge0-api
+
+  judge0-server:
+    image: mr-system-judge0:1.13.1
+    build:
+      context: ./deploy/judge0
+    command: ["./scripts/server"]
+    restart: unless-stopped
+    privileged: true
+    env_file:
+      - judge0.conf
+    environment:
+      AUTHN_HEADER: X-Auth-Token
+      AUTHZ_HEADER: X-Auth-User
+      AUTHN_TOKEN: ${JUDGE0_AUTHN_TOKEN:?Set JUDGE0_AUTHN_TOKEN in .env}
+      AUTHZ_TOKEN: ${JUDGE0_AUTHZ_TOKEN:?Set JUDGE0_AUTHZ_TOKEN in .env}
+    depends_on:
+      judge0-db:
+        condition: service_healthy
+      judge0-redis:
+        condition: service_healthy
+    networks:
+      - judge0-backend
+      - judge0-api
+    cpus: 1.0
+    mem_limit: 1536m
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
+
+  judge0-workers:
+    image: mr-system-judge0:1.13.1
+    build:
+      context: ./deploy/judge0
+    command: ["./scripts/workers"]
+    restart: unless-stopped
+    privileged: true
+    env_file:
+      - judge0.conf
+    environment:
+      AUTHN_HEADER: X-Auth-Token
+      AUTHZ_HEADER: X-Auth-User
+      AUTHN_TOKEN: ${JUDGE0_AUTHN_TOKEN:?Set JUDGE0_AUTHN_TOKEN in .env}
+      AUTHZ_TOKEN: ${JUDGE0_AUTHZ_TOKEN:?Set JUDGE0_AUTHZ_TOKEN in .env}
+    depends_on:
+      judge0-db:
+        condition: service_healthy
+      judge0-redis:
+        condition: service_healthy
+    networks:
+      - judge0-backend
+    cpus: 2.0
+    mem_limit: 3072m
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
+
+  judge0-db:
+    image: postgres:16.2
+    restart: unless-stopped
+    env_file:
+      - judge0.conf
+    volumes:
+      - judge0_data:/var/lib/postgresql/data
+    networks:
+      - judge0-backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    cpus: 0.5
+    mem_limit: 768m
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
+
+  judge0-redis:
+    image: redis:7.2.4
+    restart: unless-stopped
+    command:
+      - bash
+      - -c
+      - 'docker-entrypoint.sh --appendonly no --requirepass "$$REDIS_PASSWORD"'
+    env_file:
+      - judge0.conf
+    networks:
+      - judge0-backend
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$${REDIS_PASSWORD} redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    cpus: 0.25
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
+
+networks:
+  judge0-api:
+    internal: true
+  judge0-backend:
+    internal: true
+
+volumes:
+  judge0_data:

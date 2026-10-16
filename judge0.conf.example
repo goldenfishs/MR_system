@@ -1,0 +1,38 @@
+# Copy to judge0.conf and replace the placeholders with long random secrets.
+# `openssl rand -hex 32` is a suitable password generator.
+JUDGE0_TELEMETRY_ENABLE=false
+
+# Judge0 is available only on private Docker networks. User code cannot access
+# the network, and callers cannot override that setting.
+ALLOW_ENABLE_NETWORK=false
+ENABLE_NETWORK=false
+
+# Keep concurrency aligned with the Go service's two active-run limit.
+COUNT=2
+MAX_QUEUE_SIZE=50
+RAILS_MAX_THREADS=2
+RAILS_SERVER_PROCESSES=1
+
+# Match the limits sent by backend/judge.go.
+MAX_CPU_TIME_LIMIT=5
+MAX_CPU_EXTRA_TIME=1
+MAX_WALL_TIME_LIMIT=10
+MAX_MEMORY_LIMIT=262144
+MAX_STACK_LIMIT=65536
+MAX_MAX_PROCESSES_AND_OR_THREADS=32
+MAX_MAX_FILE_SIZE=1024
+
+ENABLE_WAIT_RESULT=false
+ENABLE_COMPILER_OPTIONS=false
+ENABLE_COMMAND_LINE_ARGUMENTS=false
+ENABLE_SUBMISSION_DELETE=false
+ENABLE_BATCHED_SUBMISSIONS=false
+ENABLE_CALLBACKS=false
+ENABLE_ADDITIONAL_FILES=false
+
+POSTGRES_HOST=judge0-db
+POSTGRES_DB=judge0
+POSTGRES_USER=judge0
+POSTGRES_PASSWORD=REPLACE_WITH_RANDOM_HEX
+REDIS_HOST=judge0-redis
+REDIS_PASSWORD=REPLACE_WITH_RANDOM_HEX
