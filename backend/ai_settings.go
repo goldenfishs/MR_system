@@ -476,7 +476,7 @@ func (a *App) discoverAIModels(w http.ResponseWriter, r *http.Request, u User) e
 		return e
 	}
 	var draft *aiDiscoveryRequest
-	if r.Body != nil && r.Body != http.NoBody {
+	if r.ContentLength != 0 {
 		draft = &aiDiscoveryRequest{}
 		if e = decode(r, draft); e != nil {
 			return e

@@ -311,6 +311,17 @@ func TestAIDiscoveryBeforeApplicationBinding(t *testing.T) {
 	draft.Provider = nil
 	_, e = a.aiDiscoveryProvider(s, "deepseek", draft)
 	requireAIStatus(t, e, 400)
+	// Middleware replaces even an empty request body with a reader. Legacy
+	// clients without a JSON body must still use their saved provider.
+	s.Providers[0].Enabled = false
+	if e = a.store.exec("UPDATE settings SET payload=? WHERE id='ai-providers'", encoded(s)); e != nil {
+		t.Fatal(e)
+	}
+	r := httptest.NewRequest("POST", "/api/settings/ai/providers/deepseek/models", nil)
+	r.Body = io.NopCloser(strings.NewReader(""))
+	r.SetPathValue("id", "deepseek")
+	e = a.discoverAIModels(httptest.NewRecorder(), r, admin)
+	requireAIStatus(t, e, 409)
 }
 
 func TestAILegacyPartialAndCustomEndpointPreserved(t *testing.T) {
