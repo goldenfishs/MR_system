@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -557,10 +558,14 @@ func requestAITest(ctx context.Context, c *http.Client, p aiProvider, m aiModel,
 	return requestAICompletion(ctx, c, aiCompletionEndpoint(p), key, map[string]any{"model": m.ModelID, "max_tokens": 32, "messages": []any{map[string]any{"role": "user", "content": "This is a synthetic connection test. Reply with OK."}}})
 }
 
-// A migrated legacy service may use a nonstandard completion path. Preserve it
-// internally until the administrator explicitly changes the provider base URL.
+// Preserve custom legacy invocation paths, but interpret root and /v1 legacy
+// addresses as API bases, matching the provider form and model discovery.
 func aiCompletionEndpoint(p aiProvider) string {
 	if p.CompletionEndpoint != "" {
+		legacy := strings.TrimRight(strings.TrimSpace(p.CompletionEndpoint), "/")
+		if u, err := url.Parse(legacy); err == nil && (u.Path == "" || u.Path == "/v1") {
+			return legacy + "/chat/completions"
+		}
 		return p.CompletionEndpoint
 	}
 	return p.BaseURL + "/chat/completions"

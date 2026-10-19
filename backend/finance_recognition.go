@@ -43,10 +43,7 @@ func (a *App) registerFinanceRecognitionRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/finance/recognize", a.wrapWithMutationLock(true, false, a.recognizeFinanceInvoice))
 }
 func (a *App) financeRecognitionSettings() (financeRecognitionSettings, error) {
-	shared, err := a.storedAISettings()
-	if errors.Is(err, sql.ErrNoRows) {
-		return a.legacyFinanceRecognitionSettings()
-	}
+	shared, err := a.aiConfiguration()
 	if err != nil {
 		return financeRecognitionSettings{}, err
 	}

@@ -370,3 +370,51 @@ func TestAILegacyPartialAndCustomEndpointPreserved(t *testing.T) {
 		})
 	}
 }
+
+func TestAILegacyBaseAddressUsesCompletionPath(t *testing.T) {
+	for _, fixture := range []struct{ endpoint, expected string }{
+		{"https://api.example.com", "https://api.example.com/chat/completions"},
+		{"https://api.example.com/", "https://api.example.com/chat/completions"},
+		{"https://api.example.com/v1", "https://api.example.com/v1/chat/completions"},
+		{"https://api.example.com/v1/", "https://api.example.com/v1/chat/completions"},
+		{"https://api.example.com/v1/chat/completions", "https://api.example.com/v1/chat/completions"},
+		{"https://api.example.com/custom/invoke", "https://api.example.com/custom/invoke"},
+	} {
+		t.Run(fixture.endpoint, func(t *testing.T) {
+			a, _ := setup(t)
+			key, _ := a.mailSettingsKey(true)
+			cipher, e := encryptMailPassword(key, "legacy-path-fixture-key")
+			if e != nil {
+				t.Fatal(e)
+			}
+			old := financeRecognitionSettings{Endpoint: fixture.endpoint, Model: "test-model", InputMode: "text", Enabled: true, KeyCiphertext: cipher}
+			if e = a.store.exec("INSERT INTO settings(id,payload) VALUES('finance-recognition',?)", encoded(old)); e != nil {
+				t.Fatal(e)
+			}
+			for _, saved := range []bool{false, true} {
+				if saved {
+					if _, e = putAI(t, a, publicAI(t, a), User{ID: "legacy-admin", Role: "admin"}); e != nil {
+						t.Fatal(e)
+					}
+				}
+				resolved, e := a.resolveAIApplication("finance-invoice")
+				if e != nil {
+					t.Fatal(e)
+				}
+				client := &http.Client{Transport: financeRecognitionRoundTrip(func(r *http.Request) (*http.Response, error) {
+					if r.URL.String() != fixture.expected {
+						t.Fatalf("test sent to %s, expected %s", r.URL, fixture.expected)
+					}
+					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"OK"}}]}`))}, nil
+				})}
+				if _, e = requestAITest(context.Background(), client, resolved.Provider, resolved.Model, "fixture-key"); e != nil {
+					t.Fatal(e)
+				}
+				finance, e := a.financeRecognitionSettings()
+				if e != nil || !financeRecognitionAvailable(finance) || finance.Endpoint != fixture.expected || finance.KeyCiphertext != cipher {
+					t.Fatalf("finance endpoint differs from model test, saved=%v error=%v", saved, e)
+				}
+			}
+		})
+	}
+}
