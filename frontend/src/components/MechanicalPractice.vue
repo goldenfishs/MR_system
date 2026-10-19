@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { api } from "../lib/api";
-import { groupLabel, hasPermission } from "../lib/permissions";
+import { hasPermission } from "../lib/permissions";
 import type { MechanicalPracticeResult } from "../lib/learning";
 import type { Submission, Task } from "../lib/types";
 import AttachmentList from "./AttachmentList.vue";
@@ -28,8 +28,6 @@ const readOnlyNotice = computed(() => {
     return "本题尚未开放，请在开放时间后作答。";
   if (props.task.dueAt && Date.parse(props.task.dueAt) < now)
     return "本题已截止，可以继续浏览题目，暂不能提交答案。";
-  if (props.task.assigned === false)
-    return `当前为跨组浏览，可查看题目；加入${groupLabel(props.task.direction)}并通过报名审核后，可在开放时间内作答。`;
   return "当前账号可以浏览题目，暂不能提交练习答案。";
 });
 const optionLabel = (index: number) => String.fromCharCode(65 + index);
@@ -100,7 +98,13 @@ onBeforeUnmount(() => {
       <div class="practice-heading"><v-icon color="primary">mdi-pencil-box-outline</v-icon><h3>在线练习</h3><v-chip size="x-small">{{ problem.type === 'single_choice' ? '单选题' : problem.type === 'multiple_choice' ? '多选题' : '填空题' }}</v-chip></div>
       <p class="practice-help">{{ problem.type === 'fill_blank' ? '按顺序填写答案，忽略首尾空格，区分大小写。所有空均正确才判定通过。' : problem.type === 'multiple_choice' ? '选出所有正确选项，全部选对才判定通过。' : '选择一个正确选项，提交后查看判定结果与解析。' }}</p>
       <v-alert v-if="!canPractice" type="info" variant="tonal" density="compact" class="mb-4">{{ readOnlyNotice }}</v-alert>
-      <form @submit.prevent="submit">
+      <div v-if="!canPractice" class="readonly-problem">
+        <ol v-if="problem.type !== 'fill_blank'" class="readonly-options" aria-label="题目选项">
+          <li v-for="(option, index) in problem.options" :key="index"><span>{{ optionLabel(index) }}.</span><span>{{ option }}</span></li>
+        </ol>
+        <p v-else class="readonly-blanks">本题共 {{ problem.blankCount || 1 }} 空，请结合题面自行思考。</p>
+      </div>
+      <form v-else @submit.prevent="submit">
         <v-radio-group v-if="problem.type === 'single_choice'" v-model="singleChoice" :disabled="locked" aria-label="选择答案" hide-details class="practice-options">
           <v-radio v-for="(option, index) in problem.options" :key="index" :value="String(index)" :label="`${optionLabel(index)}. ${option}`" color="primary" />
         </v-radio-group>
@@ -132,6 +136,10 @@ onBeforeUnmount(() => {
 .practice-options { margin-bottom: 18px; }
 .practice-options :deep(.v-selection-control) { align-items: flex-start; }
 .practice-options :deep(.v-label) { white-space: normal; overflow-wrap: anywhere; line-height: 1.6; min-height: 40px; padding: 7px 0; opacity: 1; }
+.readonly-options { list-style: none; padding: 0; margin: 0; }
+.readonly-options li { display: flex; gap: 10px; padding: 10px 0; line-height: 1.7; overflow-wrap: anywhere; }
+.readonly-options li > span:first-child { flex-shrink: 0; }
+.readonly-blanks { margin: 0; line-height: 1.7; }
 .blank-answers { display: grid; gap: 14px; margin-bottom: 18px; }
 .practice-result { border-top: 1px solid #dce5ed; padding-top: 18px; margin-top: 20px; }
 .practice-result strong, .practice-result h4 { font-size: 14px; font-weight: 500; }

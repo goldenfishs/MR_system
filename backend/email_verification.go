@@ -23,6 +23,10 @@ type VerificationMailer interface {
 	SendVerification(context.Context, string, string) error
 }
 
+type PasswordResetMailer interface {
+	SendPasswordReset(context.Context, string, string) error
+}
+
 func rateLimit(message string, seconds int) error {
 	return &apiError{status: http.StatusTooManyRequests, message: message, retryAfterSeconds: max(1, seconds)}
 }
@@ -66,7 +70,7 @@ func (a *App) sendVerificationCode(w http.ResponseWriter, r *http.Request, _ Use
 	if mailer == nil {
 		return registrationUnavailable()
 	}
-	code, hash, err := a.prepareVerificationSend(r.Context(), email, tokenHash(rateKey(r, "")))
+	code, hash, err := a.prepareVerificationSend(r.Context(), email, tokenHash(a.rateKey(r, "")))
 	if err != nil {
 		return err
 	}
@@ -149,6 +153,23 @@ func (a *App) reserveVerificationSend(ctx context.Context, email, ipHash string,
 	if err = s.exec("DELETE FROM email_verifications WHERE expires_at<=? AND last_sent_at<=?", timestamp, timestamp-60); err != nil {
 		return err
 	}
+	if err = verificationSendLimit(s, email, ipHash, timestamp); err != nil {
+		return err
+	}
+	if err = s.exec("INSERT INTO verification_send_events(id,email,ip_hash,created_at) VALUES(?,?,?,?)", randomID(), email, ipHash, timestamp); err != nil {
+		return err
+	}
+	// Reserving a new send invalidates the previous code before contacting SMTP.
+	// If delivery or activation fails, delivered=0 prevents registration.
+	if err = s.exec(`INSERT INTO email_verifications(email,code_hash,expires_at,attempts,last_sent_at,delivered) VALUES(?,?,?,0,?,0) ON CONFLICT(email) DO UPDATE SET code_hash=excluded.code_hash, expires_at=excluded.expires_at, attempts=0, last_sent_at=excluded.last_sent_at, delivered=0`, email, "", timestamp+600, timestamp); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Read-only eligibility check shared with the transactional send reservation.
+func verificationSendLimit(s *Store, email, ipHash string, timestamp int64) error {
+	var err error
 	var lastSent int64
 	err = s.row("SELECT last_sent_at FROM email_verifications WHERE email=?", email).Scan(&lastSent)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -178,15 +199,35 @@ func (a *App) reserveVerificationSend(ctx context.Context, email, ipHash string,
 			return rateLimit(limit.message, int(oldest.Int64+limit.window-timestamp))
 		}
 	}
-	if err = s.exec("INSERT INTO verification_send_events(id,email,ip_hash,created_at) VALUES(?,?,?,?)", randomID(), email, ipHash, timestamp); err != nil {
+	return nil
+}
+
+func (a *App) verificationSendStatus(w http.ResponseWriter, r *http.Request, _ User) error {
+	var in struct {
+		Email string `json:"email"`
+	}
+	if err := decode(r, &in); err != nil {
 		return err
 	}
-	// Reserving a new send invalidates the previous code before contacting SMTP.
-	// If delivery or activation fails, delivered=0 prevents registration.
-	if err = s.exec(`INSERT INTO email_verifications(email,code_hash,expires_at,attempts,last_sent_at,delivered) VALUES(?,?,?,0,?,0) ON CONFLICT(email) DO UPDATE SET code_hash=excluded.code_hash, expires_at=excluded.expires_at, attempts=0, last_sent_at=excluded.last_sent_at, delivered=0`, email, "", timestamp+600, timestamp); err != nil {
-		return err
+	email, valid := normalizedEmail(in.Email)
+	if !valid {
+		return fail(400, "请填写有效邮箱")
 	}
-	return tx.Commit()
+	if a.currentMailService().verification == nil {
+		return registrationUnavailable()
+	}
+	err := verificationSendLimit(a.store, email, tokenHash(a.rateKey(r, "")), time.Now().Unix())
+	seconds, message := 0, "可以发送验证码，请点击发送验证码。"
+	if err != nil {
+		var limited *apiError
+		if !errors.As(err, &limited) || limited.status != http.StatusTooManyRequests {
+			return err
+		}
+		seconds, message = limited.retryAfterSeconds, limited.message
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	respond(w, 200, map[string]any{"cooldownSeconds": seconds, "message": message})
+	return nil
 }
 
 func (a *App) register(w http.ResponseWriter, r *http.Request, _ User) error {
@@ -199,8 +240,8 @@ func (a *App) register(w http.ResponseWriter, r *http.Request, _ User) error {
 		return err
 	}
 	email, valid := normalizedEmail(in.Email)
-	if !valid || len(in.Password) < 10 || len(in.Password) > 72 {
-		return fail(400, "请填写有效邮箱和 10–72 字节密码")
+	if !valid || !validNewPassword(in.Password) {
+		return fail(400, "请填写有效邮箱和至少 6 个字符的密码")
 	}
 	if a.currentMailService().verification == nil {
 		return registrationUnavailable()
@@ -252,7 +293,7 @@ func (a *App) register(w http.ResponseWriter, r *http.Request, _ User) error {
 	if count > 0 {
 		return fail(409, "该邮箱已注册，请直接登录")
 	}
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
+	passwordHash, err := hashPassword(in.Password)
 	if err != nil {
 		return err
 	}

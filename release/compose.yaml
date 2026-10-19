@@ -1,0 +1,60 @@
+name: mr-system
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mr_system
+      POSTGRES_USER: mr_system
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请先运行 install.sh 生成数据库密码}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mr_system -d mr_system"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  app:
+    image: ${MR_IMAGE:?请先运行 install.sh 生成配置}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ADDR: 0.0.0.0:8080
+      DATABASE_URL: postgres://mr_system:${POSTGRES_PASSWORD:?}@db:5432/mr_system?sslmode=disable
+      DATA_DIR: /app/data
+      UPLOAD_DIR: /app/data/uploads
+      WEB_DIR: /app/web
+      DEMO_MODE: "false"
+      SESSION_SECURE: ${SESSION_SECURE:-false}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:8080}
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?请填写管理员邮箱}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?请填写管理员初始密码}
+      ADMIN_NAME: ${ADMIN_NAME:-管理员}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURITY: ${SMTP_SECURITY:-starttls}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-MR 机器人战队}
+      JUDGE_URL: ${JUDGE_URL:-}
+      JUDGE_TOKEN: ${JUDGE_TOKEN:-}
+    ports:
+      - "${APP_BIND:-127.0.0.1:8080}:8080"
+    volumes:
+      - app_data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/api/health"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 12
+
+volumes:
+  postgres_data:
+  app_data:

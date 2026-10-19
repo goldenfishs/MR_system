@@ -53,7 +53,7 @@ func TestTechnicalBanksObjectivePracticeAndPermissions(t *testing.T) {
 					t.Fatal("fill blank question omitted answer fields")
 				}
 				path := "/api/tasks/" + problem.ID + "/practice"
-				outsider.request("POST", path, map[string]any{"answers": correct}, 403)
+				// Verify cross-group practice after checking answer privacy.
 				for index, input := range [][]string{incorrect, correct} {
 					response := student.request("POST", path, map[string]any{"answers": input}, 201)
 					result := unmarshal[MechanicalPracticeResult](t, response["result"])
@@ -71,12 +71,13 @@ func TestTechnicalBanksObjectivePracticeAndPermissions(t *testing.T) {
 					t.Fatalf("statistics or redaction incorrect: %+v", listed)
 				}
 				otherView := problemListedForTest(t, outsider, direction, problem.ID)
-				if otherView.CanSubmit || otherView.MyAccepted || otherView.MySubmission != nil || len(otherView.MechanicalProblem.Answers) != 0 {
+				if !otherView.CanSubmit || otherView.MyAccepted || otherView.MySubmission != nil || len(otherView.MechanicalProblem.Answers) != 0 {
 					t.Fatal("another group received submission rights or another user's answers")
 				}
 				if items := unmarshal[[]Submission](t, outsider.request("GET", "/api/tasks/"+problem.ID+"/submissions", nil, 200)["items"]); len(items) != 0 {
 					t.Fatal("another learner's submitted answers leaked")
 				}
+				outsider.request("POST", path, map[string]any{"answers": correct}, 201)
 				student.request("POST", "/api/tasks/"+problem.ID+"/submissions", map[string]string{"content": "bypass objective grading"}, 400)
 				admin.request("PATCH", "/api/tasks/"+problem.ID, map[string]string{"description": "change grading"}, 409)
 			}

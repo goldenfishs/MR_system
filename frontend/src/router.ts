@@ -40,8 +40,13 @@ const router = createRouter({
     },
     {
       path: "/recruitment",
+      component: () => import("./views/InterviewView.vue"),
+      meta: { title: "面试管理" },
+    },
+    {
+      path: "/recruitment-history",
       component: () => import("./views/RecruitmentView.vue"),
-      meta: { title: "招新管理", subtitle: "让每一份热爱，找到合适的位置。" },
+      meta: { title: "历史候选人", permission: "recruitment" },
     },
     {
       path: "/teams",
@@ -57,6 +62,11 @@ const router = createRouter({
       path: "/admin",
       component: () => import("./views/SystemAdminView.vue"),
       meta: { title: "系统管理", admin: true },
+    },
+    {
+      path: "/bank-management",
+      component: () => import("./views/BankManagementView.vue"),
+      meta: { title: "题库管理", admin: true },
     },
     {
       path: "/profile",
@@ -86,7 +96,7 @@ const router = createRouter({
     {
       path: "/mail",
       component: MailView,
-      meta: { title: "批量邮件", permission: "mail" },
+      meta: { title: "邮件管理", permission: "mail" },
     },
     {
       path: "/learning",
@@ -105,7 +115,7 @@ const router = createRouter({
       path: "/members",
       component: () => import("./views/MembersView.vue"),
       meta: {
-        title: "战队成员",
+        title: "用户管理",
         subtitle: "不同的专长，共同的目标。",
         permission: "members",
       },

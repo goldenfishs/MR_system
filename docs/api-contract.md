@@ -39,7 +39,7 @@ interface PhotoInput { name: string; contentBase64: string }
 mail／records 选人不会自动授予完整资料访问权：只有该用途权限时，返回姓名、邮箱和所属组，records 另保留学号；照片、电话、专业、班级、兴趣和考核确认字段清空。管理员、本人，或另有目标人员所在组 members／recruitment 权限者保留完整资料。响应仍采用相同 User／Profile 结构，受限字段为空。
 - `GET /public/config` → `{organization,season,demoMode,applicationOpen,applicationDeadline,emailVerificationRequired:true,registrationEnabled:boolean,brandName,logoUrl,teamName,secondaryTeamName,competitions:Competition[],description}`，无需登录。`registrationEnabled` 表示 SMTP 已启用，不保证外部邮件服务可用。
 
-新注册记录 `emailVerifiedAt`。已有、引导和管理员创建的账号不会被追溯标记为已验证。密码最少 10 字节、最多 72 字节；工作人员初始密码最少 12 字节。
+新注册记录 `emailVerifiedAt`。已有、引导和管理员创建的账号不会被追溯标记为已验证。所有新密码最少 6 个 Unicode 字符，不要求字母、数字或符号组合，不裁剪首尾空格。保留旧 bcrypt 密码兼容；超过 72 字节的新密码使用带版本标记的 SHA-256 + bcrypt 存储，避免截断。
 
 注册后在「个人中心 → 个人资料」填写姓名、性别、学校、专业、班级、学号、联系电话及本人证件照；这些项目仍为报名必填，兴趣爱好和个人头像选填。头像与证件照使用不带 data URL 前缀的 base64 JPEG/PNG，单张原文件不超过 2 MiB。登录后的资料提醒以 `Profile.complete` 为准，不以显示姓名或前端本地记录代替服务端校验；资料未完整仍可进入系统，提交团队报名须先补全。
 
@@ -120,7 +120,7 @@ interface TrainingProgress {
 ```
 
 - `GET /training-plans?teamId=&direction=` → `{items:TrainingPlan[]}`，已登录可查看阶段方案，不返回人员考核记录。
-- `POST /training-plans`：`{teamId?,direction,title,stages}` → 201 `{item:TrainingPlan}`；`PATCH /training-plans/:id`：`{title?,stages?}` → `{item:TrainingPlan}`。管理员或该组有 assessment 权限的组管理员可维护。同一团队、组别只有一份方案；teamId 为空时为该组通用方案，指定团队须开放该方向。配置 1–12 个阶段，阶段 ID 唯一，名称最多 200 字节，说明最多 5000 字节；顺序按数组保存，只有最后阶段为 final。方案编辑只影响新培养周期。
+- `POST /training-plans`：`{teamId?,direction,title,stages}` → 201 `{item:TrainingPlan}`；`PATCH /training-plans/:id`：`{title?,stages?}` → `{item:TrainingPlan}`。管理员或该组有 assessment 权限的组管理员可维护。同一团队、组别只有一份方案；teamId 为空时为该组通用方案，指定团队须开放该方向。配置 1–12 个阶段，阶段 ID 唯一，名称最多 200 字节，说明最多 5000 字节；顺序按数组保存，只有最后阶段为 final。方案编辑默认只影响新培养周期。POST/PATCH 可传 `applyToUnassessed: true`，在同一事务内同步当前团队与组别中仍有录取资格、处于首阶段且没有任何考核结果的最新培养周期；返回 `syncedCount`。已考核、通过、淘汰、被撤销录取的周期和其他组别均保持不变。
 - `GET /training-progress?teamId=&direction=&status=` → `{items:TrainingProgress[]}`，本人可查看自己全部周期，管理员全部，组管理员只可查看有 assessment 权限组的人员进度与反馈；跨组学习权限不开放他人记录。
 - `POST /training-progress/decisions`：`{progressIds:string[],stageId,status:'passed'|'eliminated',note?,targetMemberType?:'reserve'|'formal'}` → `{items:TrainingProgress[]}`，管理员或该组有 assessment 权限者。每批 1–100 个唯一记录，必须均为该用户在相应团队／方向的最新培养周期当前阶段，并仍具备该周期团队／方向的有效录取关系；任一记录越权、录取撤销、过期、已处理或缺少前置通过记录时整批失败。同一批不能混合最终阶段与普通阶段，避免方案版本调整后部分人员意外晋升。组管理员不能确认自己的考核。反馈最多 5000 字节，成员本人可查看。
 
@@ -207,10 +207,14 @@ interface Submission {
 ```
 
 - `GET /tasks` → `{items:Task[]}`。未取得学习访问权限的用户只返回其 tasks 管理授权范围内的任务，无管理授权则为空列表；已取得学习资格的人员可查看各组学习任务。`assigned` 表示任务属于本人的有效录取团队／方向，与开考和截止时间无关；作业／考试据此区分本组必做、选做和跨组参考。`canSubmit` 进一步校验时间窗口，表示当前是否可提交；录取、淘汰、团队和方向条件均由服务端判断。submissionCount 仅为有该任务管理权限者计算，其他人员返回 0，并仅获得自己的 mySubmission。题库 acceptedCount／attemptCount 为公开汇总，myAccepted 为本人是否通过；没有该任务管理权限的响应隐藏 `hidden:true` 的输入和预期输出，保留 `totalCases`。
-- `POST /tasks`：Task 的非服务器管理字段 → 201 `{item:Task}`，管理员或对应组有 tasks 权限的组管理员。`fileIds` 为教材或题目附件；`submissionType` 区分一般文件、工程项目和单文件代码；四个技术组题库均通过兼容字段 `mechanicalProblem` 设置选择／填空题；机械组还支持图纸练习。`teamId` 指定发布团队，`team` 为兼容旧数据的赛事字段。
+- `POST /tasks`：Task 的非服务器管理字段 → 201 `{item:Task}`，管理员或对应组有 tasks 权限的组管理员。`fileIds` 为教材或题目附件；`submissionType` 区分一般文件、工程项目和单文件代码；四个技术组题库均通过兼容字段 `mechanicalProblem` 设置选择／填空题；机械组还支持图纸练习。`teamId` 指定发布团队，`team` 为兼容旧数据的赛事字段。新建机械组多题作业可传 `status:'draft'` 和 `questions:[{id,title,description,fileIds,maxScore}]`；各题分值之和必须等于 `maxScore`。旧任务缺少状态时按 `published` 兼容读取。
+- `POST /tasks/:id/publish`：空 JSON → `{item:Task}`，仅对应组有 tasks 权限者可用。仅允许发布至少含一道题、且每题有说明或附件的机械组作业草稿；写入 `publishedAt` 后，组员才能看见作业与题目附件。
 - `GET /tasks/:id/submissions` → `{items:Submission[]}`，普通人员必须仍有该任务的访问权限，且仅返回本人记录；管理员或对应组有 tasks 权限的组管理员可评阅。入队资格撤销后，不再凭历史提交获得任务记录访问权。
 - `POST /tasks/:id/submissions`：`{content,repoUrl?,artifactUrl?,fileIds?,judgeRunId?}` → 201 `{item:Submission}`。必须符合下述成员方向与团队规则，在开始与截止时间内；每次创建新版本。声明提交形式的任务必须上传文件，启用判题时必须引用本任务、本人、完成状态的判题记录以及对应代码文件；源代码哈希须一致。配置了 `mechanicalProblem` 的题库题目不使用此接口：选择／填空题通过 `/tasks/:id/practice` 作答，图纸题无需提交。
-- `PATCH /submissions/:id`：`{status:'approved'|'changes_requested',score,feedback}` → `{item:Submission}`，管理员或对应组有 tasks 权限的组管理员，只可审核最新版本，分值范围为 0 至 task.maxScore。题库的自动答题成绩不允许通过此接口人工改分。
+- `POST /tasks/:id/submission-draft`：`{answers:[{questionId,fileIds}]}` → `{item:Submission}`，用于机械组多题作业逐题保存进度。每题最多关联 20 个本人上传的文件；可反复保存并替换文件。
+- `POST /tasks/:id/submission-finalize`：空 JSON → `{item:Submission}`，要求每题均至少有一个文件；最终提交后锁定答案，管理员请求修改后可再次保存并创建新版本。
+- `GET /tasks/:id/submissions/export` → ZIP 下载，管理员或对应组有 tasks 权限的组管理员可用。只导出每名成员最新且已最终提交的答案，按姓名、作业、题号和题目分目录整理；不包含未提交草稿。
+- `PATCH /submissions/:id`：一般任务接受 `{status:'approved'|'changes_requested',score,feedback}`；机械组多题作业接受 `{questionReviews:[{questionId,status:'approved'|'changes_requested',score,feedback}]}` → `{item:Submission}`。只可审核最新已提交版本，逐题分数分别校验并自动汇总；未评阅题保持待评阅。题库的自动答题成绩不允许通过此接口人工改分。
 
 任务浏览跨组开放；带 teamId 的任务须有该团队／方向有效成员关系才会分配并允许提交，人员身份或另一组的录取不能绕过本组要求。本组最新周期淘汰后不再分配该任务，其他组任务不受影响。新作业／考试应指定 teamId；题库可留空表示本组共享练习，按有效成员方向校验，不限制到某个报名团队。不含 teamId 的历史任务也按有效成员方向兼容校验。机械说明书、工程 ZIP、PCB、运营图片统一使用附件；这些文件由人工评分，工程 ZIP 不自动编译。
 
@@ -271,7 +275,7 @@ interface MailCampaign {
 
 邮件配置更新后立即供后续注册验证码和批量邮件使用；已开始的批次继续使用开始时的配置。`enabled:false` 停止新的发信任务与验证码注册。后台配置单独存储于 `settings` 的 `mail-service` 记录，授权码采用 AES-GCM 加密，密钥为数据目录中的 `mail-settings.key`（权限 0600）。重启加载后台配置；尚未保存后台配置时继续使用 SMTP 环境变量。运维备份必须同时保留数据库与数据目录，缺失／损坏密钥时启动会明确失败，防止静默退回旧配置。
 - `GET /members` → `{items:(User & {teams:{id,name,competition,competitions,direction}[]})[]}`，管理员可见全部账号，包括未报名／待审核的新生，以便直接分配身份和权限。组管理员名册限于有 members 权限的组内管理者、正式／梯队队员及已通过报名的新生，附加有权查看的新团队归属列表。
-- `POST /members`：`{name,email,password,role,memberType?,groupGrants?,team?,direction?}` → 201 `{item:User}`，仅管理员。role 使用本契约的五类身份，后台密码为 12–72 字节。
+- `POST /members`：`{name,email,password,role,memberType?,groupGrants?,team?,direction?}` → 201 `{item:User}`，仅管理员。role 使用本契约的五类身份，密码至少 6 个字符，无复杂度要求。
 - `PATCH /members/:id`：`{role?,memberType?,groupGrants?,direction?,assessmentPassed?,assessmentNote?}` → `{item:User}`。角色、组授权和方向分配仅管理员可操作，不能降级最后一位管理员；groupGrants 为完整替换，不能包含重复方向、重复或未知权限，普通角色不能携带管理权限。有培养周期的新生须使用阶段考核接口，不能直接晋升或绕过淘汰；培养进行中改换方向返回 409。没有培养周期的存量新生可由管理员或其所属组有 assessment 权限者明确传 `assessmentPassed:true`，晋升为 reserve／formal，并填写最多 5000 字节的说明；组管理员仅可做该最终身份确认，不能同时修改方向、角色或组授权，也不能确认自己。后台创建既有正式／梯队账号不要求补新生考核。
 
 保留原有 `/dashboard`、`GET/POST /applicants`、`PATCH /applicants/:id` 以访问历史面试数据；它们不等同新团队报名。历史报名每用户一份，普通用户仅自己的，组管理员按 recruitment 权限及申请方向管理，管理员全部；内部评分和备注对普通人员隐藏。新功能应使用 `/teams`、`/team-applications`、`/memberships`。
@@ -320,13 +324,14 @@ interface KnowledgeResource {
 interface DiscussionReply { id: string; content: string; userId: string; userName: string; createdAt: string }
 interface Discussion {
   id: string; title: string; content: string; direction: string;
+  fileIds: string[];
   status: 'open' | 'resolved'; published: boolean; createdBy: string; authorName: string;
   createdAt: string; updatedAt: string; replies: DiscussionReply[];
 }
 ```
 
 - `GET /discussions?direction=&status=&published=true&search=` → `{discussions}`，只返回当前用户有权查看的问题。
-- `POST /discussions`：`{title,content,direction?}` → 201 `{discussion}`；默认私问，仅本人、管理员和对应组有 discussions 权限者可见。
+- `POST /discussions`：`{title,content,direction?,fileIds?}` → 201 `{discussion}`；附件必须是本人上传的文件，最多 20 个。默认私问，仅本人、管理员和对应组有 discussions 权限者可见；附件下载继承问题的可见范围，精选公开后对所有已登录用户开放，取消公开后立即收回。
 - `POST /discussions/:id/replies`：`{content}` → 201 `{discussion}`；仅作者、管理员、对应组有 discussions 权限者可回复，最多 200 条；公开精选在取消公开前禁止新增回复。
 - `PATCH /discussions/:id`：`{status?,published?}` → `{discussion}`。管理员或对应组有 discussions 权限者可标记解答（必须已有回复）及公开已解答的问题。公开指所有已登录用户可查阅，匿名访问仍需登录。
 
@@ -337,6 +342,44 @@ interface Discussion {
 ## 内置基础题库
 
 - `GET /question-banks`：需要 `tasks` 管理权限，仅返回授权组的 `{items:[{id,name,direction,count,topics}]}`。不返回答案或隐藏测试用例。
-- `POST /question-banks/:id/import`：需要对应组 `tasks` 权限，无请求字段；返回 `{imported,skipped,total}`。全量校验后事务导入，稳定题目 ID 使重试幂等；已有题目只跳过，不覆盖管理员修改或作答记录。
+- `POST /question-banks/:id/import`：需要对应组 `tasks` 权限，请求可选 `{syncCourseTags:true}`；返回 `{imported,skipped,grouped,total}`。全量校验后事务导入，稳定题目 ID 使重试幂等；已有题目默认只跳过，不覆盖管理员修改或作答记录。启用 `syncCourseTags` 时，仅向尚无课程分组、未改方向且标签未满的已有电控题补充课程标签；保留题面、答案、自定义标签、发布状态和作答记录。
 - 当前目录：`algorithm-basics-v1`（算法 32 题）、`mcu-basics-v1`（电控 24 题）、`hardware-basics-v1`（硬件 24 题）。题目均为 `category=problem, required=false`，不影响阶段考核。
 - 资料、来源和编程样例复核方式见 [题库来源说明](question-bank-sources.md)。
+
+## 用户管理补充（2026-10-17）
+
+- `GET /api/members` 返回每位成员的 `directions`（当前有效所属组），兼容原 `direction` 主组字段与 `teams`。
+- `POST /api/members`、`PATCH /api/members/{id}` 支持 `directions: string[]`，最多五组。系统管理员可兼组分配；各组对应独立团队成员关系，新生新增组别会创建独立培养周期。不能在同一团队中用另一方向覆盖原成员关系。
+- 系统管理员可直接通过 `directions` 增减正在培养的组别，整个调组操作在同一事务中执行。移除组别会删除该组成员关系并撤销对应 accepted 报名，暂停作业提交与考核，保留历史培养周期和成绩；重新加入未淘汰的组可继续原进度。其他组不受影响。已淘汰组仍须在报名审核中明确重新录取，普通成员身份调整不会恢复淘汰资格。
+- 系统管理员可用 `forcePromotion: true`、`memberType` 与非空 `assessmentNote` 直接晋升，返回 `promotionOverrideAt`、`promotionOverrideBy`、`promotionOverrideNote`。此操作不改写各组阶段考核历史，也不伪造 `assessmentPassedAt`。组管理员不可使用该方式越权修改身份或所属组。
+
+### 多题作业标准答案
+
+`TaskQuestion`新增`autoGrade?:boolean`、`answers?:string[]`、`explanation?:string`。仅单选、多选、填空支持自动评分：选项使用0开始的索引字符串，单选恰好一个答案，多选必须集合完全一致；填空数组为可接受的完整响应，首尾空白忽略，内部换行和大小写保留。未配置自动评分的旧题继续人工评阅。学生及无该组任务权限的管理者不会收到`answers`或`explanation`。
+
+编程作业题使用`type=code`和题目级`judge`配置（1–10 个测试用例、允许语言 ID、0.1–5 秒时限）。请求`POST /tasks/:id/judge`时附带`questionId`，判题记录与题目绑定；学生仅能看到公开用例和隐藏用例的状态。答案草稿可带`judgeRunId`，保存时验证记录的用户、作业、题目和源码归属；正式提交时必须有已完成判题，后端按通过用例比例计算该题得分。未判题、失败或跨题引用的运行记录不能结算成绩。机械组和运营组不接受代码题。
+
+正式提交`POST /tasks/:id/submission-finalize`后生成客观题分数，`SubmissionAnswer.autoGraded`标识自动评阅。`approved`在此表示已评阅，不代表答案正确或培训通过；错误答案可为0分。混合作业总体为`pending`直到人工题评完。人工修改某题后`autoGraded=false`，总分重新汇总。答案暂存接口禁止客户端伪造评分字段。简答题可填写文字或上传本人文件，填空必须文字。
+
+### 作业附件格式（2026-10-18）
+
+作业答题附件与题目附件使用后台统一格式校验，不再由页面窄化文件选择范围。支持常见源代码/头文件、嵌入式工程、SolidWorks 零件/装配/工程图、STEP、IGES、DWG/DXF、Parasolid、Creo（含 `.prt.12` 等版本后缀）、Inventor、FreeCAD、常见电路工程、文档及压缩包。图片专用入口继续限制 JPEG/PNG。其他工程格式可打包为 ZIP。单文件 25 MiB、个人空间 250 MiB；工程文件以下载附件提供，不执行或尝试预览。
+
+
+### 密码重置与管理员改密
+
+- `POST /auth/password-reset/request`：`{email}` → `{message,cooldownSeconds:60,expiresInSeconds:600}`。不需要登录，所有有效邮箱返回相同提示；仅已注册邮箱收到专用重置邮件，使用当前后台配置的 SMTP。邮件在有界后台任务内发送，HTTP 不等待 SMTP；失败不激活验证码、不返回或记录邮件原始错误。服务未配置返回 503，繁忙或发送限速返回 429。
+- `POST /auth/password-reset/confirm`：`{email,verificationCode,password}` → `{message}`。验证码独立于注册流程，10 分钟有效、一次性使用、错误 5 次锁定；发送冷却 60 秒，每邮箱每小时 5 次，每 IP 每 15 分钟 10 次。成功时在同一事务内更新密码、消费验证码、撤销该账号全部登录会话，不自动登录，不修改注销状态及权限。
+- `PUT /members/{id}/password`：`{password,currentPassword?}` → `{message}`。仅系统管理员可用，组管理员无权调用。修改自己密码必须提供正确的 `currentPassword`；修改其他成员无需旧密码。密码更新、全部会话撤销及未用重置码删除在同一事务内完成。记录操作人和目标姓名，不记录密码。
+
+重置邮件后台任务不持久化；进程重启可能中断待发送邮件，用户可在冷却结束后重新获取验证码。未配置 SMTP 时管理员仍能手动设置其他账号密码。
+
+## GitHub 题库同步（系统管理员）
+
+- `GET /api/bank-sync`：设置、课程目录、最后同步结果与本地题目摘要，不返回答案/隐藏用例。
+- `PUT /api/bank-sync/settings`：`repository`（owner/repo）、`branch`、`catalogs`、`defaultVisibility`（public/internal）。保存会使旧预览失效。
+- `POST /api/bank-sync/preview`：只读下载固定 GitHub commit 并保存校验后的预览；返回 commit、目录、各题 add/unchanged/update/conflict 与数量。
+- `POST /api/bank-sync/apply`：`{commit}`；仅应用已保存的有效预览，事务导入、更新或绑定旧题。保留本地修改和历史作答，不删除题目。
+- `POST /api/bank-sync/visibility`：`{ids,visibility}`；事务批量设置题库可见范围，保留原内容和提交。
+
+公开仓库无需 Token。远程请求时间上限 90 秒，前端同步请求超时为 120 秒。所有写入要求登录、系统管理员权限及既有同源校验；个人组管理权限不能调用这些同步接口。

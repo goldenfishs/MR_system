@@ -28,6 +28,7 @@ services:
       WEB_DIR: /app/web
       DEMO_MODE: "false"
       SESSION_SECURE: ${SESSION_SECURE:-true}
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
       PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-}
       ADMIN_EMAIL: ${ADMIN_EMAIL:?Set ADMIN_EMAIL in .env}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}

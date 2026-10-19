@@ -7,8 +7,6 @@ import (
 	"os"
 	"strconv"
 	"time"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 func createUser(s *Store, name, email, password, role, team, direction string) (User, error) {
@@ -17,7 +15,7 @@ func createUser(s *Store, name, email, password, role, team, direction string) (
 		u.ID = roleID
 	}
 	normalizeUser(&u)
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := hashPassword(password)
 	if err != nil {
 		return u, err
 	}
@@ -86,15 +84,15 @@ func initialize(s *Store, demo bool) error {
 		return err
 	}
 	for _, u := range users {
-		if u.Role == "admin" {
+		if u.Role == "admin" && u.DeactivatedAt == "" {
 			return nil
 		}
 	}
 	email, valid := normalizedEmail(os.Getenv("ADMIN_EMAIL"))
 	password := os.Getenv("ADMIN_PASSWORD")
 	name := env("ADMIN_NAME", "管理员")
-	if !valid || len(password) < 12 || len(password) > 72 || len(name) > 100 {
-		return fmt.Errorf("first production startup requires ADMIN_EMAIL and ADMIN_PASSWORD (12–72 bytes); ADMIN_NAME is optional")
+	if !valid || !validNewPassword(password) || len(name) > 100 {
+		return fmt.Errorf("first production startup requires ADMIN_EMAIL and ADMIN_PASSWORD (at least 6 characters); ADMIN_NAME is optional")
 	}
 	_, err = createUser(s, name, email, password, "admin", "", "")
 	return err

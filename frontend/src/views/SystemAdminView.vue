@@ -7,17 +7,18 @@ const error = ref("");
 const loading = ref(true);
 const stats = ref<Record<string, number>>({});
 const cards = [
+  { title: "AI 答疑", description: "设置聊天助手的服务地址、密钥、模型与回答规则。", icon: "mdi-robot-outline", to: "/settings#ai", color: "primary" },
   { title: "网站外观", description: "修改网站标志、简洁名称、战队名称与赛季信息。", icon: "mdi-palette-outline", to: "/settings#branding", color: "primary" },
   { title: "邮箱设置", description: "配置发件邮箱与邮件服务，用于注册验证和通知。", icon: "mdi-email-edit-outline", to: "/settings#email", color: "teal" },
-  { title: "用户与权限", description: "管理用户账号、成员身份，按组分配管理权限。", icon: "mdi-account-key-outline", to: "/members", color: "purple" },
+  { title: "用户管理", description: "管理用户账号、成员身份，按组分配管理权限。", icon: "mdi-account-key-outline", to: "/members", color: "purple" },
   { title: "报名审核", description: "集中查看各组报名，预览证件照与简历，快速审核。", icon: "mdi-account-check-outline", to: "/applications", color: "primary" },
   { title: "团队与招募", description: "维护各组报名入口、介绍、招募状态与截止时间。", icon: "mdi-account-multiple-plus-outline", to: "/teams", color: "teal" },
-  { title: "阶段考核", description: "安排新生阶段考核，记录通过、淘汰与最终晋升。", icon: "mdi-account-school-outline", to: "/training", color: "purple" },
+  { title: "考核阶段配置", description: "按组设置阶段数量、名称、说明与顺序，同步尚未考核的新生。", icon: "mdi-account-school-outline", to: "/training?section=plans", color: "purple" },
   { title: "荣誉与证书", description: "管理证书与荣誉，按用户资料生成并批量发放。", icon: "mdi-certificate-outline", to: "/records", color: "orange-darken-2" },
-  { title: "批量邮件", description: "选择收件人、编辑通知，查看发送进度与结果。", icon: "mdi-email-multiple-outline", to: "/mail", color: "primary" },
+  { title: "邮件管理", description: "选择收件人、编辑通知，查看发送进度与结果。", icon: "mdi-email-multiple-outline", to: "/mail", color: "primary" },
   { title: "学习内容", description: "发布知识库、作业、考试和题库，查看作答与评阅。", icon: "mdi-book-open-page-variant-outline", to: "/learning", color: "teal" },
   { title: "讨论区管理", description: "解答各组问题，将重要解答公开给全队查阅。", icon: "mdi-forum-outline", to: "/discussions", color: "purple" },
-  { title: "面试记录", description: "维护面试安排、评分与审核记录。", icon: "mdi-account-clock-outline", to: "/recruitment", color: "orange-darken-2" },
+  { title: "面试管理", description: "报名自动进入面试，安排教室和顺序，发送通知并确认录取。", icon: "mdi-account-clock-outline", to: "/recruitment", color: "orange-darken-2" },
   { title: "通用设置", description: "管理网站公告、报名设置和在线测评服务入口。", icon: "mdi-cog-outline", to: "/settings#general", color: "blue-grey" },
 ];
 const summary = computed(() => [

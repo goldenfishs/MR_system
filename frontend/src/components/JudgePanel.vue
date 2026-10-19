@@ -3,12 +3,16 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { api } from "../lib/api";
 import type { Task } from "../lib/types";
 import type { JudgeRun, JudgeService } from "../lib/platform";
-import FileUpload from "./FileUpload.vue";
+import CodeEditor from "./CodeEditor.vue";
+import { auth } from "../lib/auth";
+import type { FileAsset } from "../lib/platform";
 const props = defineProps<{
   task: Task;
   modelValue?: string;
+  questionId?: string;
   disabled?: boolean;
   readonly?: boolean;
+  preview?: boolean;
 }>();
 const emit = defineEmits<{
   "update:modelValue": [string];
@@ -35,12 +39,28 @@ watch(
 );
 const languages = computed(
   () =>
-    service.value?.languages.filter(
+    (service.value?.configured ? service.value.languages : [{ id: 50, name: "C (GCC 9.2.0)" }, { id: 54, name: "C++ (GCC 9.2.0)" }, { id: 71, name: "Python 3" }]).filter(
       (l) =>
-        !props.task.judge?.languageIds.length ||
-        props.task.judge.languageIds.includes(l.id),
+        (/^(?:C(?:\+\+)?(?:\s|$)|Python(?:\s|$))/i.test(l.name)) && (!props.task.judge?.languageIds.length ||
+        props.task.judge.languageIds.includes(l.id)),
     ) || [],
 );
+const code = ref("");
+const languageName = computed(() => languages.value.find(l => l.id === language.value)?.name || "");
+const pythonLanguage = computed(() => /^python/i.test(languageName.value));
+const cLanguage = computed(() => /^C(?:\s|$)/i.test(languageName.value));
+const defaultCode = computed(() => pythonLanguage.value ? "# Python 3\n" : cLanguage.value
+  ? "#include <stdio.h>\n\nint main(void) {\n    return 0;\n}\n"
+  : "#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n    return 0;\n}\n");
+const draftKey = () => `code-draft:${auth.user?.id}:${props.task.id}:${props.questionId || "task"}:${props.preview ? "preview" : "answer"}:${language.value}`;
+function restoreDraft() {
+  try { code.value = localStorage.getItem(draftKey()) ?? defaultCode.value; } catch { code.value = defaultCode.value; }
+}
+watch(language, restoreDraft, { flush: "sync" });
+watch(code, () => {
+  try { localStorage.setItem(draftKey(), code.value); } catch { /* Optional local draft. */ }
+  if (!submitting.value && !loading.value && run.value) { stop(); run.value = null; emit("update:modelValue", ""); }
+}, { flush: "sync" });
 const resultLabel = (status: string) =>
   ({
     Accepted: "通过",
@@ -86,6 +106,9 @@ async function load() {
   error.value = "";
   run.value = null;
   source.value = [];
+  service.value = null;
+  language.value = languages.value[0]?.id;
+  restoreDraft();
   try {
     if (!props.readonly) {
       try {
@@ -105,7 +128,14 @@ async function load() {
       run.value = data.item;
       source.value = [run.value.sourceFileId];
       language.value = run.value.languageId;
-      if (!props.readonly) emit("run", run.value);
+      if (!props.readonly) {
+        const response = await fetch(`/api/files/${encodeURIComponent(run.value.sourceFileId)}/download`, { credentials: "same-origin" });
+        if (!response.ok) throw new Error("无法读取上次运行的源码，请重新编辑。");
+        const text = await response.text();
+        if (current !== token) return;
+        code.value = text;
+        emit("run", run.value);
+      }
       if (run.value.status === "queued" || run.value.status === "running")
         timer = setTimeout(refresh, 1000);
     }
@@ -116,8 +146,9 @@ async function load() {
   }
 }
 async function start() {
-  if (!source.value[0] || !language.value) {
-    error.value = "请选择编程语言并上传一个源码文件。";
+  if (props.disabled || working.value) return;
+  if (!code.value.trim() || !language.value || new TextEncoder().encode(code.value).length > 65536) {
+    error.value = "请选择语言并输入 64 KB 以内的代码。";
     return;
   }
   submitting.value = true;
@@ -125,9 +156,14 @@ async function start() {
   stop();
   const current = token;
   try {
+    const form = new FormData();
+    form.append("file", new File([code.value], pythonLanguage.value ? "main.py" : cLanguage.value ? "main.c" : "main.cpp", { type: "text/plain" }));
+    const uploaded = await api.upload<{ item: FileAsset }>("/files", form);
+    if (current !== token) return;
+    source.value = [uploaded.item.id];
     const { item } = await api.post<{ item: JudgeRun }>(
       `/tasks/${props.task.id}/judge`,
-      { sourceFileId: source.value[0], languageId: language.value },
+      { sourceFileId: source.value[0], languageId: language.value, ...(props.preview ? { preview: true } : {}), ...(props.questionId ? { questionId: props.questionId } : {}) },
     );
     if (current !== token) return;
     run.value = item;
@@ -143,7 +179,7 @@ async function start() {
 }
 watch([() => source.value[0], language], () => {
   if (
-    run.value &&
+    !submitting.value && !loading.value && run.value &&
     (source.value[0] !== run.value.sourceFileId ||
       language.value !== run.value.languageId)
   ) {
@@ -162,7 +198,7 @@ onBeforeUnmount(() => {
   <section class="judge-panel">
     <div class="judge-heading">
       <v-icon color="primary">mdi-code-braces</v-icon>
-      <h3>代码自动评测</h3>
+      <h3>在线编程</h3>
       <v-chip size="x-small"
         >{{
           task.judge?.totalCases || task.judge?.testCases.length || 0
@@ -171,7 +207,7 @@ onBeforeUnmount(() => {
       >
     </div>
     <p class="text-caption text-medium-emphasis mb-4">
-      按指定测试用例编译运行。自动评测分数供验收参考，最终成绩由管理员审核。
+      选择语言，直接编写代码并运行题目测试用例。代码草稿会保存在当前浏览器。
     </p>
     <v-alert
       v-if="error"
@@ -189,7 +225,7 @@ onBeforeUnmount(() => {
         type="info"
         variant="tonal"
         class="mb-4"
-        >在线编译服务尚未配置，暂不能完成本题的自动评测。请联系管理员配置服务；可以先准备源码和完成说明。</v-alert
+        >在线编译服务暂不可用，可以先编辑代码，恢复后再运行。</v-alert
       ><template v-if="!readonly"
         ><details v-if="task.judge?.testCases.length" class="mb-4">
           <summary class="text-body-2 text-primary">查看公开测试用例</summary>
@@ -213,28 +249,21 @@ onBeforeUnmount(() => {
           item-title="name"
           item-value="id"
           label="编程语言"
-          :disabled="disabled || working || !service?.configured"
-        /><FileUpload
-          v-model="source"
-          label="源码文件（UTF-8）"
-          :max-bytes="65536"
-          accept=".c,.cpp,.cc,.cxx,.py,.java,.js,.ts,.go,.rs,.cs,.kt,.rb,.swift,.php,.h,.hpp,.lua,.pas,.hs,.scala,.m,.ml,.pl,.sh,.txt"
-          single
-          :disabled="disabled || working || !service?.configured"
-          @busy="uploading = $event"
-        /><v-btn
+          :disabled="disabled || working"
+        /><CodeEditor v-model="code" :python="pythonLanguage" :disabled="disabled || working" />
+        <v-btn
           color="primary"
           variant="tonal"
           prepend-icon="mdi-play"
           :loading="working"
           :disabled="
-            disabled || uploading || !service?.configured || !source.length
+            disabled || uploading || !service?.configured || !code.trim() || !language
           "
           @click="start"
           >编译并运行测试</v-btn
         ></template
       >
-      <div v-if="run" class="judge-result">
+      <div v-if="run" class="judge-result" aria-live="polite"><h3 class="mb-3">编译与运行结果</h3>
         <div class="d-flex align-center flex-wrap ga-3">
           <v-chip
             :color="
@@ -250,6 +279,7 @@ onBeforeUnmount(() => {
             >{{ run.passed }} / {{ run.total }} 通过 · 自动评测
             {{ run.score }} / {{ task.maxScore }} 分</strong
           >
+          <v-btn v-if="readonly && run.sourceFileId" size="small" variant="tonal" prepend-icon="mdi-download" :href="'/api/files/' + encodeURIComponent(run.sourceFileId) + '/download'">下载提交源码</v-btn>
         </div>
         <v-progress-linear v-if="working" indeterminate class="my-3" />
         <p v-if="run.error" class="text-error text-body-2 mt-3">

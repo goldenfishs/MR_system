@@ -103,3 +103,58 @@ func TestQuestionBankImportRollsBackOnFailure(t *testing.T) {
 	}
 	c.request("POST", "/api/question-banks/algorithm-basics-v1/import", json.RawMessage(`{}`), 200)
 }
+
+func TestCourseTagSyncPreservesAuthoredContentAndAttempts(t *testing.T) {
+	a, admin := setup(t)
+	admin.login("admin")
+	path := "/api/question-banks/mcu-basics-v1/import"
+	admin.request("POST", path, map[string]any{}, 200)
+	id := tokenHash("mr-system-question-bank/mcu-001")
+	original, err := a.store.task(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original.Title = "管理员修改的题目"
+	original.Tags = []string{"自定义标签", "GPIO"}
+	original.Status = "draft"
+	if err = a.store.exec("UPDATE tasks SET payload=? WHERE id=?", encoded(original), id); err != nil {
+		t.Fatal(err)
+	}
+	// A preexisting result must remain untouched even when metadata is grouped.
+	result := Submission{ID: "preserved-course-attempt", TaskID: id, UserID: "demo-student", Version: 1, Status: "approved"}
+	if err = a.store.exec("INSERT INTO submissions(id,task_id,user_id,version,payload) VALUES(?,?,?,?,?)", result.ID, id, result.UserID, 1, encoded(result)); err != nil {
+		t.Fatal(err)
+	}
+	admin.request("POST", path, map[string]any{}, 200)
+	unchanged, _ := a.store.task(id)
+	if encoded(unchanged) != encoded(original) {
+		t.Fatal("default import changed an existing task")
+	}
+	response := admin.request("POST", path, map[string]any{"syncCourseTags": true}, 200)
+	if unmarshal[int](t, response["grouped"]) != 1 {
+		t.Fatal("expected one legacy course tag")
+	}
+	grouped, _ := a.store.task(id)
+	expected := original
+	expected.Tags = append([]string{"单片机通用基础"}, original.Tags...)
+	if encoded(grouped) != encoded(expected) {
+		t.Fatal("course sync changed authored content")
+	}
+	attempts, err := a.store.submissions(id)
+	if err != nil || len(attempts) != 1 || encoded(attempts[0]) != encoded(result) {
+		t.Fatal("attempt was changed")
+	}
+	response = admin.request("POST", path, map[string]any{"syncCourseTags": true}, 200)
+	if unmarshal[int](t, response["grouped"]) != 0 {
+		t.Fatal("course sync not idempotent")
+	}
+	grouped.Tags = []string{"C语言进阶", "教师分类"}
+	if addCourseTag(&grouped, expected) {
+		t.Fatal("overrode teacher classification")
+	}
+	grouped.Direction = "硬件"
+	grouped.Tags = nil
+	if addCourseTag(&grouped, expected) {
+		t.Fatal("classified a moved question")
+	}
+}

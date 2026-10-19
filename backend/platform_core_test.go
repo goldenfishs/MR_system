@@ -286,7 +286,8 @@ func TestTeamAdmissionAndRecordPrivacy(t *testing.T) {
 	if len(apps) != 1 || apps[0].Profile == nil || apps[0].Profile.StudentNumber == "" {
 		t.Fatal("admin lacks review profile")
 	}
-	c.request("PATCH", "/api/team-applications/"+application.ID, map[string]string{"status": "accepted", "feedback": "欢迎加入"}, 200)
+	c.request("PATCH", "/api/team-applications/"+application.ID, map[string]string{"status": "accepted"}, 409)
+	c.request("POST", "/api/interviews/"+application.ID+"/decision", map[string]string{"status": "passed", "note": "欢迎加入"}, 200)
 	c.request("PATCH", "/api/team-applications/"+application.ID, map[string]string{"status": "accepted"}, 200)
 	var members int
 	if err := a.store.row("SELECT COUNT(*) FROM team_memberships WHERE team_id=?", team.ID).Scan(&members); err != nil || members != 1 {
@@ -354,7 +355,7 @@ func TestPlatformMigrationPreservesLegacyAccounts(t *testing.T) {
 		t.Fatal("legacy profile should require explicit completion")
 	}
 	var version int
-	if err = s.row("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil || version != 6 {
+	if err = s.row("SELECT COUNT(*) FROM schema_migrations WHERE version=3").Scan(&version); err != nil || version != 1 {
 		t.Fatal("platform migration missing")
 	}
 }

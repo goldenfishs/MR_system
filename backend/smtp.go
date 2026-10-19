@@ -83,6 +83,13 @@ func (m *smtpMailer) SendVerification(ctx context.Context, recipient, code strin
 	return m.send(ctx, recipient, verificationMessage(m.config, recipient, code))
 }
 
+func (m *smtpMailer) SendPasswordReset(ctx context.Context, recipient, code string) error {
+	if _, valid := normalizedEmail(recipient); !valid || !validVerificationCode(code) {
+		return errors.New("invalid password reset email")
+	}
+	return m.send(ctx, recipient, passwordResetMessage(m.config, recipient, code))
+}
+
 // A failed final DATA response can mean the server accepted the message but the
 // acknowledgement was lost. Bulk retry must not silently duplicate that mail.
 type uncertainDeliveryError struct{ cause error }
@@ -172,6 +179,10 @@ func (m *smtpMailer) send(ctx context.Context, recipient string, message []byte)
 func verificationMessage(cfg SMTPConfig, recipient, code string) []byte {
 	body := fmt.Sprintf("你正在注册%s。\r\n\r\n邮箱验证码：%s\r\n\r\n验证码 10 分钟内有效，仅限本次邮箱注册使用。请勿将验证码告诉他人。\r\n如非本人操作，请忽略此邮件。\r\n", cfg.FromName, code)
 	return mailMessage(cfg, recipient, cfg.FromName+" · 邮箱注册验证码", body)
+}
+func passwordResetMessage(cfg SMTPConfig, recipient, code string) []byte {
+	body := fmt.Sprintf("你正在重置%s账号密码。\r\n\r\n邮箱验证码：%s\r\n\r\n验证码 10 分钟内有效，仅限本次密码重置使用。请勿将验证码告诉他人。\r\n如非本人操作，请忽略此邮件。\r\n", cfg.FromName, code)
+	return mailMessage(cfg, recipient, cfg.FromName+" · 密码重置验证码", body)
 }
 func mailMessage(cfg SMTPConfig, recipient, subject, body string) []byte {
 	from := (&mail.Address{Name: cfg.FromName, Address: cfg.From}).String()

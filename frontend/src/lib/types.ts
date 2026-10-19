@@ -18,6 +18,8 @@ export interface Discussion {
   title: string;
   content: string;
   direction: string;
+  categoryId?: string;
+  fileIds?: string[];
   status: "open" | "resolved";
   published: boolean;
   createdBy: string;
@@ -25,6 +27,16 @@ export interface Discussion {
   createdAt: string;
   updatedAt: string;
   replies: DiscussionReply[];
+}
+export interface DiscussionCategory {
+  id: string;
+  name: string;
+  description: string;
+  direction: string;
+  sortOrder: number;
+  archived: boolean;
+  questionCount: number;
+  canManage: boolean;
 }
 export type Direction = "机械" | "电控" | "视觉算法" | "硬件" | "运营";
 export type ApplicantStatus =
@@ -37,11 +49,17 @@ export interface User {
   memberType?: MemberType;
   assessmentPassedAt?: string;
   assessmentConfirmedBy?: string;
+  promotionOverrideAt?: string;
+  promotionOverrideBy?: string;
+  promotionOverrideNote?: string;
   groupGrants?: GroupGrant[];
   team: string;
   direction: string;
   joinedAt: string;
   emailVerifiedAt?: string;
+  deactivatedAt?: string;
+  deactivatedBy?: string;
+  deactivationReason?: string;
 }
 export interface Applicant {
   id: string;
@@ -71,6 +89,7 @@ export interface Task {
   canSubmit?: boolean;
   category?: "assignment" | "exam" | "problem";
   tags?: string[];
+  bankVisibility?: "public" | "internal";
   acceptedCount?: number;
   attemptCount?: number;
   locked?: boolean;
@@ -81,6 +100,10 @@ export interface Task {
   startsAt?: string;
   judge?: JudgeConfig;
   mechanicalProblem?: MechanicalProblem;
+  /** Mechanical multi-question assignments are authored and graded per question. */
+  status?: "draft" | "published";
+  publishedAt?: string;
+  questions?: AssignmentQuestion[];
   illustrationUrl?: string;
   illustrationAlt?: string;
   id: string;
@@ -101,6 +124,8 @@ export interface Task {
 }
 export interface Submission {
   fileIds?: string[];
+  answers?: AssignmentAnswer[];
+  finalizedAt?: string;
   judgeRunId?: string;
   id: string;
   taskId: string;
@@ -110,12 +135,42 @@ export interface Submission {
   repoUrl: string;
   artifactUrl: string;
   version: number;
-  status: "pending" | "approved" | "changes_requested";
+  status: "draft" | "pending" | "approved" | "changes_requested";
   score: number | null;
   feedback: string;
   reviewedBy: string;
   createdAt: string;
   reviewedAt: string;
+}
+export interface AssignmentQuestion {
+  id: string;
+  groupId?: string;
+  groupTitle?: string;
+  groupDescription?: string;
+  sourceProblemId?: string;
+  illustrationUrl?: string;
+  illustrationAlt?: string;
+  title: string;
+  description: string;
+  type?: AssignmentQuestionType;
+  options?: string[];
+  autoGrade?: boolean;
+  answers?: string[];
+  explanation?: string;
+  judge?: JudgeConfig;
+  fileIds: string[];
+  maxScore: number;
+}
+export type AssignmentQuestionType = "single_choice" | "multiple_choice" | "fill_blank" | "short_answer" | "drawing" | "code";
+export interface AssignmentAnswer {
+  autoGraded?: boolean;
+  judgeRunId?: string;
+  questionId: string;
+  fileIds: string[];
+  response?: string;
+  score?: number;
+  feedback?: string;
+  status?: "pending" | "approved" | "changes_requested";
 }
 export interface Activity {
   id: string;

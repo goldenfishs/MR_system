@@ -46,8 +46,10 @@ type JudgeResult struct {
 	Hidden        bool   `json:"hidden"`
 }
 type JudgeRun struct {
+	Preview      bool          `json:"preview,omitempty"`
 	ID           string        `json:"id"`
 	TaskID       string        `json:"taskId"`
+	QuestionID   string        `json:"questionId,omitempty"`
 	UserID       string        `json:"userId"`
 	SourceFileID string        `json:"sourceFileId"`
 	SourceHash   string        `json:"sourceHash"`
@@ -99,15 +101,36 @@ func validateJudgeConfig(t *Task) error {
 	return nil
 }
 func publicTask(t Task, u User) Task {
+	// Copy before normalization/redaction: Task is a value, but Questions is a shared slice.
+	t.Questions = append([]TaskQuestion(nil), t.Questions...)
 	normalizeTask(&t)
 	if taskLocked(t, u) {
 		t.Locked = true
 		t.Description, t.ResourcesURL = "", ""
 		t.IllustrationURL, t.IllustrationAlt = "", ""
 		t.FileIDs = []string{}
+		t.Questions = nil
 		t.Judge = nil
 		t.MechanicalProblem = nil
 		return t
+	}
+	if !hasPermission(u, t.Direction, "tasks") {
+		for i := range t.Questions {
+			t.Questions[i].Answers = nil
+			t.Questions[i].Explanation = ""
+			if t.Questions[i].Judge != nil {
+				config := *t.Questions[i].Judge
+				config.TestCases = []JudgeCase{}
+				for _, c := range t.Questions[i].Judge.TestCases {
+					if !c.Hidden {
+						config.TestCases = append(config.TestCases, c)
+					}
+				}
+				config.Enabled = true
+				config.TotalCases = len(t.Questions[i].Judge.TestCases)
+				t.Questions[i].Judge = &config
+			}
+		}
 	}
 	if t.MechanicalProblem != nil && !hasPermission(u, t.Direction, "tasks") {
 		problem := *t.MechanicalProblem
@@ -250,6 +273,19 @@ func (a *App) readJudgeSource(id string, u User) ([]byte, error) {
 	}
 	return source, nil
 }
+
+// Managers may validate bank questions without enrolling as students.
+func (a *App) requireJudgeExecution(t Task, u User, preview ...bool) error {
+	if len(preview) > 0 && preview[0] {
+		return requirePermission(u, t.Direction, "tasks")
+	}
+	normalizeTask(&t)
+	if t.Category == "problem" && hasPermission(u, t.Direction, "tasks") {
+		return nil
+	}
+	return a.requireTaskSubmission(t, u)
+}
+
 func (a *App) startJudge(w http.ResponseWriter, r *http.Request, u User) error {
 	if a.config.JudgeURL == "" {
 		return fail(503, "尚未配置独立判题服务，请联系管理员")
@@ -258,21 +294,24 @@ func (a *App) startJudge(w http.ResponseWriter, r *http.Request, u User) error {
 	if err != nil {
 		return err
 	}
-	if err = a.requireTaskSubmission(task, u); err != nil {
-		return err
-	}
-	if task.Judge == nil || !task.Judge.Enabled {
-		return fail(400, "此任务未启用在线判题")
-	}
 	var in struct {
 		LanguageID   int    `json:"languageId"`
 		SourceFileID string `json:"sourceFileId"`
+		QuestionID   string `json:"questionId"`
+		Preview      bool   `json:"preview"`
 	}
 	if err = decode(r, &in); err != nil {
 		return err
 	}
+	if err = a.requireJudgeExecution(task, u, in.Preview); err != nil {
+		return err
+	}
+	judgeConfig, questionMaxScore, err := taskJudgeConfig(task, in.QuestionID)
+	if err != nil {
+		return err
+	}
 	allowed := false
-	for _, id := range task.Judge.LanguageIDs {
+	for _, id := range judgeConfig.LanguageIDs {
 		if id == in.LanguageID {
 			allowed = true
 		}
@@ -296,10 +335,16 @@ func (a *App) startJudge(w http.ResponseWriter, r *http.Request, u User) error {
 		return err
 	}
 	if task.Judge == nil || !task.Judge.Enabled {
-		return fail(409, "任务判题配置已变更，请重新打开任务")
+		if in.QuestionID == "" {
+			return fail(409, "任务判题配置已变更，请重新打开任务")
+		}
+	}
+	judgeConfig, questionMaxScore, err = taskJudgeConfig(task, in.QuestionID)
+	if err != nil {
+		return fail(409, "作业题判题配置已变更，请重新打开任务")
 	}
 	languageAllowed := false
-	for _, id := range task.Judge.LanguageIDs {
+	for _, id := range judgeConfig.LanguageIDs {
 		if id == in.LanguageID {
 			languageAllowed = true
 		}
@@ -307,7 +352,7 @@ func (a *App) startJudge(w http.ResponseWriter, r *http.Request, u User) error {
 	if !languageAllowed {
 		return fail(409, "任务编程语言已变更，请重新选择")
 	}
-	if err = a.requireTaskSubmission(task, u); err != nil {
+	if err = a.requireJudgeExecution(task, u, in.Preview); err != nil {
 		return err
 	}
 	a.platformMu.Lock()
@@ -348,16 +393,93 @@ func (a *App) startJudge(w http.ResponseWriter, r *http.Request, u User) error {
 		a.platformMu.Unlock()
 		return &apiError{status: 429, message: "每分钟最多提交 5 次编译测试", retryAfterSeconds: 60}
 	}
-	run := JudgeRun{ID: randomID(), TaskID: task.ID, UserID: u.ID, SourceFileID: in.SourceFileID, SourceHash: tokenHash(string(source)), LanguageID: in.LanguageID, Status: "queued", Total: len(task.Judge.TestCases), Results: []JudgeResult{}, CreatedAt: now()}
+	run := JudgeRun{Preview: in.Preview, ID: randomID(), TaskID: task.ID, QuestionID: in.QuestionID, UserID: u.ID, SourceFileID: in.SourceFileID, SourceHash: tokenHash(string(source)), LanguageID: in.LanguageID, Status: "queued", Total: len(judgeConfig.TestCases), Results: []JudgeResult{}, CreatedAt: now()}
 	err = a.store.exec("INSERT INTO judge_runs(id,task_id,user_id,status,payload) VALUES(?,?,?,?,?)", run.ID, task.ID, u.ID, run.Status, encoded(run))
 	a.platformMu.Unlock()
 	if err != nil {
 		return err
 	}
 	reserved = false
-	go func() { defer func() { <-slots }(); a.executeJudge(run, task, source) }()
+	judgeTask := task
+	judgeTask.Judge = judgeConfig
+	judgeTask.MaxScore = questionMaxScore
+	go func() { defer func() { <-slots }(); a.executeJudge(run, judgeTask, source) }()
 	respond(w, 202, map[string]any{"item": publicJudgeRun(run, u)})
 	return nil
+}
+
+func taskJudgeConfig(task Task, questionID string) (*JudgeConfig, float64, error) {
+	if questionID == "" {
+		if task.Judge == nil || !task.Judge.Enabled {
+			return nil, 0, fail(400, "此任务未启用在线判题")
+		}
+		return task.Judge, task.MaxScore, nil
+	}
+	if task.Category != "assignment" {
+		return nil, 0, fail(400, "只有多题作业支持逐题代码判题")
+	}
+	for _, question := range task.Questions {
+		if question.ID != questionID {
+			continue
+		}
+		if question.Type != "code" || question.Judge == nil || !question.Judge.Enabled {
+			return nil, 0, fail(400, "此作业题未启用在线判题")
+		}
+		return question.Judge, question.MaxScore, nil
+	}
+	return nil, 0, fail(404, "作业题目不存在")
+}
+
+func (a *App) validateQuestionJudgeRun(task Task, question TaskQuestion, u User, runID string, requireComplete bool) (JudgeRun, error) {
+	if runID == "" {
+		return JudgeRun{}, fail(400, "请先运行并提交代码题")
+	}
+	run, err := readOne[JudgeRun](a.store, "SELECT payload FROM judge_runs WHERE id=?", runID)
+	if err != nil {
+		return JudgeRun{}, fail(400, "在线判题记录不存在，请重新运行代码")
+	}
+	if run.Preview {
+		return JudgeRun{}, fail(400, "管理测试记录不能用于提交作业")
+	}
+	if run.TaskID != task.ID || run.QuestionID != question.ID || run.UserID != u.ID {
+		return JudgeRun{}, fail(403, "此判题记录不属于当前用户和作业题目")
+	}
+	if question.Judge == nil || !question.Judge.Enabled {
+		return JudgeRun{}, fail(409, "代码题判题配置已变更，请联系管理员")
+	}
+	allowed := false
+	for _, languageID := range question.Judge.LanguageIDs {
+		if languageID == run.LanguageID {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return JudgeRun{}, fail(409, "判题使用的语言已不再受支持，请重新运行代码")
+	}
+	source, err := a.readJudgeSource(run.SourceFileID, u)
+	if err != nil || tokenHash(string(source)) != run.SourceHash {
+		return JudgeRun{}, fail(409, "判题源码已失效，请重新运行代码")
+	}
+	if requireComplete {
+		if run.Status != "completed" {
+			return JudgeRun{}, fail(409, "代码仍在评测或评测失败，请等待完成后再提交")
+		}
+		if run.Total != len(question.Judge.TestCases) || run.Total == 0 || run.Passed < 0 || run.Passed > run.Total || len(run.Results) != run.Total {
+			return JudgeRun{}, fail(409, "判题结果与当前题目配置不一致，请重新运行代码")
+		}
+		accepted := 0
+		for _, result := range run.Results {
+			if result.StatusID == 3 {
+				accepted++
+			}
+		}
+		if accepted != run.Passed {
+			return JudgeRun{}, fail(409, "判题用例统计不一致，请重新运行代码")
+		}
+		run.Score = float64(run.Passed) / float64(run.Total) * question.MaxScore
+	}
+	return run, nil
 }
 func (a *App) getJudgeRun(w http.ResponseWriter, r *http.Request, u User) error {
 	run, err := readOne[JudgeRun](a.store, "SELECT payload FROM judge_runs WHERE id=?", r.PathValue("id"))

@@ -69,35 +69,37 @@ type storedFile struct {
 	CleanImage bool `json:"cleanImage"`
 }
 type Team struct {
-	ID            string           `json:"id"`
-	Name          string           `json:"name"`
-	Description   string           `json:"description"`
-	Competition   string           `json:"competition"`
-	Competitions  []string         `json:"competitions"`
-	Directions    []string         `json:"directions"`
-	Status        string           `json:"status"`
-	Deadline      string           `json:"deadline"`
-	CreatedAt     string           `json:"createdAt"`
-	CreatedBy     string           `json:"createdBy"`
-	MemberCount   int              `json:"memberCount"`
-	MyApplication *TeamApplication `json:"myApplication,omitempty"`
+	InterviewExemptDirections []string         `json:"interviewExemptDirections,omitempty"`
+	ID                        string           `json:"id"`
+	Name                      string           `json:"name"`
+	Description               string           `json:"description"`
+	Competition               string           `json:"competition"`
+	Competitions              []string         `json:"competitions"`
+	Directions                []string         `json:"directions"`
+	Status                    string           `json:"status"`
+	Deadline                  string           `json:"deadline"`
+	CreatedAt                 string           `json:"createdAt"`
+	CreatedBy                 string           `json:"createdBy"`
+	MemberCount               int              `json:"memberCount"`
+	MyApplication             *TeamApplication `json:"myApplication,omitempty"`
 }
 type TeamApplication struct {
-	TrainingStatus     string   `json:"trainingStatus,omitempty"`
-	TrainingStageTitle string   `json:"trainingStageTitle,omitempty"`
-	TrainingCycle      int      `json:"trainingCycle,omitempty"`
-	ID                 string   `json:"id"`
-	TeamID             string   `json:"teamId"`
-	UserID             string   `json:"userId"`
-	UserName           string   `json:"userName"`
-	Direction          string   `json:"direction"`
-	ResumeFileID       string   `json:"resumeFileId"`
-	Motivation         string   `json:"motivation"`
-	Status             string   `json:"status"`
-	Feedback           string   `json:"feedback"`
-	CreatedAt          string   `json:"createdAt"`
-	UpdatedAt          string   `json:"updatedAt"`
-	Profile            *Profile `json:"profile,omitempty"`
+	Interview          *TeamInterview `json:"interview,omitempty"`
+	TrainingStatus     string         `json:"trainingStatus,omitempty"`
+	TrainingStageTitle string         `json:"trainingStageTitle,omitempty"`
+	TrainingCycle      int            `json:"trainingCycle,omitempty"`
+	ID                 string         `json:"id"`
+	TeamID             string         `json:"teamId"`
+	UserID             string         `json:"userId"`
+	UserName           string         `json:"userName"`
+	Direction          string         `json:"direction"`
+	ResumeFileID       string         `json:"resumeFileId"`
+	Motivation         string         `json:"motivation"`
+	Status             string         `json:"status"`
+	Feedback           string         `json:"feedback"`
+	CreatedAt          string         `json:"createdAt"`
+	UpdatedAt          string         `json:"updatedAt"`
+	Profile            *Profile       `json:"profile,omitempty"`
 }
 type Membership struct {
 	TeamID    string `json:"teamId"`
@@ -135,9 +137,12 @@ func (a *App) registerPlatformRoutes(m *http.ServeMux) {
 	m.HandleFunc("PATCH /api/team-applications/{id}", a.wrap(true, a.reviewTeamApplication))
 	m.HandleFunc("GET /api/memberships", a.wrap(true, a.listMemberships))
 	m.HandleFunc("GET /api/users", a.wrap(true, a.listUsers))
+	m.HandleFunc("POST /api/users/{id}/deactivate", a.wrap(true, a.deactivateUser))
+	m.HandleFunc("POST /api/users/{id}/reactivate", a.wrap(true, a.reactivateUser))
 	m.HandleFunc("GET /api/records", a.wrap(true, a.listRecords))
 	m.HandleFunc("POST /api/records", a.wrap(true, a.createRecord))
 	a.registerTrainingRoutes(m)
+	a.registerInterviewRoutes(m)
 }
 func trimProfile(p *Profile) {
 	p.Name = strings.TrimSpace(p.Name)
@@ -525,8 +530,19 @@ func validAssetName(name string) bool {
 	return true
 }
 func allowedExtension(name string) bool {
-	ext := strings.ToLower(filepath.Ext(name))
-	return slices.Contains([]string{".pdf", ".mp4", ".webm", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".md", ".zip", ".7z", ".rar", ".c", ".cpp", ".cc", ".cxx", ".cs", ".rb", ".php", ".kt", ".swift", ".lua", ".pas", ".hs", ".scala", ".m", ".ml", ".pl", ".sh", ".h", ".hpp", ".py", ".js", ".ts", ".java", ".go", ".rs", ".json", ".yaml", ".yml", ".png", ".jpg", ".jpeg", ".webp", ".svg", ".pcb", ".kicad_pcb", ".sch", ".kicad_sch", ".gerber", ".gbr", ".dxf", ".step", ".stp", ".sldprt", ".sldasm", ".ino", ".hex", ".bin", ".stl", ".f3d", ".pro", ".ioc", ".ipynb", ".csv", ".toml", ".cmake", ".epro", ".eprj"}, ext)
+	name = strings.ToLower(filepath.Base(name))
+	if slices.Contains([]string{"makefile", "gnumakefile", "dockerfile"}, name) {
+		return true
+	}
+	// Creo appends numeric revision suffixes, e.g. bracket.prt.12.
+	ext := filepath.Ext(name)
+	if len(ext) > 1 && strings.Trim(ext[1:], "0123456789") == "" {
+		return slices.Contains([]string{".prt", ".asm", ".drw"}, filepath.Ext(strings.TrimSuffix(name, ext)))
+	}
+	return slices.Contains([]string{".pdf", ".mp4", ".webm", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".md", ".zip", ".7z", ".rar", ".c", ".cpp", ".cc", ".cxx", ".cs", ".rb", ".php", ".kt", ".swift", ".lua", ".pas", ".hs", ".scala", ".m", ".ml", ".pl", ".sh", ".h", ".hpp", ".py", ".js", ".ts", ".java", ".go", ".rs", ".json", ".yaml", ".yml", ".png", ".jpg", ".jpeg", ".webp", ".svg", ".pcb", ".kicad_pcb", ".sch", ".kicad_sch", ".gerber", ".gbr", ".dxf", ".step", ".stp", ".sldprt", ".sldasm", ".ino", ".hex", ".bin", ".stl", ".f3d", ".pro", ".ioc", ".ipynb", ".csv", ".toml", ".cmake", ".epro", ".eprj",
+		".slddrw", ".dwg", ".dwt", ".dwf", ".dws", ".iges", ".igs", ".x_t", ".x_b", ".xmt_txt", ".xmt_bin", ".prt", ".asm", ".drw", ".ipt", ".iam", ".idw", ".ipn", ".sat", ".sab", ".obj", ".mtl", ".3mf", ".ply", ".stpz", ".f3z", ".fcstd", ".catpart", ".catproduct", ".catdrawing", ".3dxml", ".jt",
+		".hh", ".hxx", ".ipp", ".tpp", ".inl", ".s", ".asm", ".cu", ".cuh", ".pyi", ".pyw", ".jsx", ".tsx", ".html", ".css", ".scss", ".vue", ".r", ".jl", ".f", ".f90", ".v", ".sv", ".vh", ".svh", ".vhd", ".vhdl", ".ino", ".pde", ".ld", ".map", ".elf", ".axf", ".uvproj", ".uvprojx", ".uvopt", ".uvoptx", ".ewp", ".eww", ".ewd", ".cproject", ".project", ".sln", ".vcxproj", ".vcxproj.filters", ".mk", ".bat", ".ps1", ".xml", ".ini", ".cfg", ".conf", ".log", ".dat", ".npz", ".npy", ".mat", ".tar", ".gz", ".bz2", ".xz", ".tgz", ".schdoc", ".pcbdoc", ".prjpcb", ".pcblib", ".schlib", ".brd", ".drl", ".lbr", ".kicad_pro", ".kicad_sym", ".kicad_mod",
+	}, ext)
 }
 func (a *App) uploadFile(w http.ResponseWriter, r *http.Request, u User) error {
 	if err := r.ParseMultipartForm(1 << 20); err != nil {
@@ -545,7 +561,7 @@ func (a *App) uploadFile(w http.ResponseWriter, r *http.Request, u User) error {
 	defer file.Close()
 	name := strings.TrimSpace(header.Filename)
 	if !validAssetName(name) || !allowedExtension(name) {
-		return fail(400, "不支持该文件名称或类型")
+		return fail(400, "不支持该文件名称或类型，请将其他工程格式打包为 ZIP 后上传")
 	}
 	data, err := io.ReadAll(io.LimitReader(file, maxAssetSize+1))
 	if err != nil {
@@ -725,13 +741,14 @@ func (a *App) updateTeam(w http.ResponseWriter, r *http.Request, u User) error {
 		return err
 	}
 	var in struct {
-		Name         *string   `json:"name"`
-		Description  *string   `json:"description"`
-		Competition  *string   `json:"competition"`
-		Competitions *[]string `json:"competitions"`
-		Directions   *[]string `json:"directions"`
-		Status       *string   `json:"status"`
-		Deadline     *string   `json:"deadline"`
+		Name                      *string   `json:"name"`
+		Description               *string   `json:"description"`
+		Competition               *string   `json:"competition"`
+		Competitions              *[]string `json:"competitions"`
+		Directions                *[]string `json:"directions"`
+		Status                    *string   `json:"status"`
+		Deadline                  *string   `json:"deadline"`
+		InterviewExemptDirections *[]string `json:"interviewExemptDirections"`
 	}
 	if err = decode(r, &in); err != nil {
 		return err
@@ -758,6 +775,14 @@ func (a *App) updateTeam(w http.ResponseWriter, r *http.Request, u User) error {
 	}
 	if in.Deadline != nil {
 		t.Deadline = *in.Deadline
+	}
+	if in.InterviewExemptDirections != nil {
+		for _, d := range *in.InterviewExemptDirections {
+			if !slices.Contains(t.Directions, d) {
+				return fail(400, "面试特例必须属于团队开放组别")
+			}
+		}
+		t.InterviewExemptDirections = normalizedIDs(*in.InterviewExemptDirections)
 	}
 	if err = validateTeam(t); err != nil {
 		return err
@@ -817,10 +842,17 @@ func (a *App) applyToTeam(w http.ResponseWriter, r *http.Request, u User) error 
 	if ap.ID == "" {
 		ap = TeamApplication{ID: randomID(), TeamID: t.ID, UserID: u.ID, CreatedAt: now()}
 	}
+	if ap.Interview != nil && ap.Interview.At != "" {
+		return fail(409, "已安排面试，请联系组管理员修改报名")
+	}
 	ap.UserName = u.Name
 	ap.Direction = in.Direction
 	ap.ResumeFileID = in.ResumeFileID
 	ap.Motivation = strings.TrimSpace(in.Motivation)
+	ap.Interview = &TeamInterview{Status: "pending"}
+	if slices.Contains(t.InterviewExemptDirections, ap.Direction) {
+		ap.Interview = &TeamInterview{Status: "exempt", Note: "本轮已完成线下面试（历史招募特例）", DecidedBy: t.CreatedBy, DecidedAt: now()}
+	}
 	ap.Status = "pending"
 	ap.Feedback = ""
 	ap.UpdatedAt = now()
@@ -868,6 +900,9 @@ func (a *App) reviewTeamApplication(w http.ResponseWriter, r *http.Request, u Us
 	}
 	if err = requirePermission(u, ap.Direction, "recruitment"); err != nil {
 		return err
+	}
+	if in.Status == "accepted" && ap.Status != "accepted" && ap.Interview != nil && ap.Interview.Status != "passed" && ap.Interview.Status != "exempt" {
+		return fail(409, "请先在面试管理中确认面试通过，再录取入队")
 	}
 	ap.Status = in.Status
 	ap.Feedback = strings.TrimSpace(in.Feedback)
@@ -956,6 +991,7 @@ func (a *App) listUsers(w http.ResponseWriter, r *http.Request, u User) error {
 				}
 				p = Profile{UserID: user.ID, Name: user.Name, StudentNumber: studentNumber}
 				user.AssessmentPassedAt, user.AssessmentConfirmedBy, user.AssessmentNote = "", "", ""
+				user.PromotionOverrideAt, user.PromotionOverrideBy, user.PromotionOverrideNote = "", "", ""
 			}
 		}
 		eligibleDirections := []string{}

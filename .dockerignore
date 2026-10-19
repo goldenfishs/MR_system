@@ -17,3 +17,13 @@ scripts
 bin
 backend/server
 backend/mr-system
+
+tmp
+output
+content
+feature-intro
+judge0.conf
+release
+**/__pycache__
+
+dist-release

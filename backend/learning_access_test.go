@@ -108,7 +108,7 @@ func TestLearningTeamAdmissionGatesContentAndRevokesWithoutNewLogin(t *testing.T
 	checkBlocked()
 	staff := &testClient{t: t, handler: c.handler}
 	staff.login("admin")
-	staff.request("PATCH", "/api/team-applications/"+application.ID, map[string]string{"status": "accepted"}, 200)
+	staff.request("POST", "/api/interviews/"+application.ID+"/decision", map[string]string{"status": "passed"}, 200)
 	if !unmarshal[bool](t, c.request("GET", "/api/learning-access", nil, 200)["allowed"]) {
 		t.Fatal("approved modern member did not gain learning access")
 	}

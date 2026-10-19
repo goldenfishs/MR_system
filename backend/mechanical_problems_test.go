@@ -113,11 +113,10 @@ func TestMechanicalObjectivePracticeAndAnswerPrivacy(t *testing.T) {
 	}
 	outsider := &testClient{t: t, handler: admin.handler}
 	outsider.login("student")
-	if mechanicalListedForTest(t, outsider, problem.ID).CanSubmit {
-		t.Fatal("another group may not answer mechanical questions")
+	if !mechanicalListedForTest(t, outsider, problem.ID).CanSubmit {
+		t.Fatal("another group should be able to practice mechanical questions")
 	}
 	path := "/api/tasks/" + problem.ID + "/practice"
-	outsider.request("POST", path, map[string]any{"answers": []string{"1"}}, 403)
 	student.request("POST", "/api/tasks/"+problem.ID+"/submissions", map[string]string{"content": "bypass"}, 400)
 	student.request("POST", path, map[string]any{"answers": []string{"99"}}, 400)
 	student.request("POST", path, map[string]any{"answers": []string{"1"}, "score": 100}, 400)
@@ -145,6 +144,7 @@ func TestMechanicalObjectivePracticeAndAnswerPrivacy(t *testing.T) {
 	if submissions := unmarshal[[]Submission](t, outsider.request("GET", "/api/tasks/"+problem.ID+"/submissions", nil, 200)["items"]); len(submissions) != 0 {
 		t.Fatal("another group's user can read private answers")
 	}
+	outsider.request("POST", path, map[string]any{"answers": []string{"1"}}, 201)
 	admin.request("PATCH", "/api/tasks/"+problem.ID, map[string]string{"description": "change grading"}, 409)
 	admin.request("DELETE", "/api/tasks/"+problem.ID, nil, 409)
 	trainingDecisionForTest(admin, progress, "foundation", "eliminated", 200)

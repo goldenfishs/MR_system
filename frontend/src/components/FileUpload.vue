@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from "vue";
-import { api } from "../lib/api";
+import { ApiError, api } from "../lib/api";
+import { readUploadFile } from "../lib/upload-file";
 import { auth } from "../lib/auth";
 import { fileSize, type FileAsset } from "../lib/platform";
 import AttachmentList from "./AttachmentList.vue";
@@ -8,17 +9,20 @@ const props = withDefaults(
   defineProps<{
     modelValue: string[];
     label?: string;
+    buttonLabel?: string;
+    hideAttachments?: boolean;
     accept?: string;
     single?: boolean;
     disabled?: boolean;
     maxBytes?: number;
   }>(),
-  { label: "上传附件", accept: "", maxBytes: 25 * 1024 * 1024 },
+  { label: "上传附件", buttonLabel: "选择文件上传", accept: "", maxBytes: 25 * 1024 * 1024 },
 );
 const emit = defineEmits<{
   "update:modelValue": [string[]];
   busy: [boolean];
 }>();
+const phase = ref("");
 const busy = ref(false),
   error = ref(""),
   picker = ref(false),
@@ -52,7 +56,6 @@ async function upload(event: Event) {
   if (props.disabled || busy.value || disposed) return;
   const input = event.target as HTMLInputElement;
   const chosen = [...(input.files || [])];
-  input.value = "";
   if (!chosen.length) return;
   error.value = "";
   busy.value = true;
@@ -68,8 +71,13 @@ async function upload(event: Event) {
         );
       if (!valid(file))
         throw new Error(`不支持 ${file.name}，请选择 ${props.accept}。`);
+      if (!file.size) throw new Error("文件为空或尚未下载完成，请先保存到本地后重新选择。");
+      phase.value = "正在读取文件…";
+      const contents = await readUploadFile(file, controller.signal);
+      if (disposed) return;
+      phase.value = "正在上传…";
       const form = new FormData();
-      form.append("file", file);
+      form.append("file", contents, file.name);
       const { item } = await api.upload<{ item: FileAsset }>(
         "/files",
         form,
@@ -80,8 +88,13 @@ async function upload(event: Event) {
       emit("update:modelValue", current);
     }
   } catch (e) {
-    if (!disposed) error.value = (e as Error).message;
+    if (!disposed) error.value = e instanceof ApiError && e.status === 0
+      ? "上传连接中断，尚未确认上传成功。可先点‘从我的文件选择’检查；没有文件时，请将文件保存到手机本地后重新选择上传，或切换网络再试。"
+      : (e as Error).message;
   } finally {
+    // Keep the picker alive until the selected file has been consumed.
+    input.value = "";
+    phase.value = "";
     uploadController = undefined;
     if (!disposed) {
       busy.value = false;
@@ -113,10 +126,11 @@ async function openLibrary() {
       <strong>{{ label }}</strong
       ><span>单个文件最多 {{ fileSize(maxBytes) }}</span>
     </div>
+    <p v-if="!accept" class="text-caption text-medium-emphasis mb-2">支持代码源文件、SolidWorks（SLDPRT / SLDASM / SLDDRW）、STEP、CAD（DWG / DXF）、常见文档和压缩包；多文件工程建议打包为 ZIP。</p>
     <div class="upload-actions">
       <label :class="['upload-button', { disabled: disabled || busy }]"
         ><v-icon size="18">mdi-upload</v-icon
-        >{{ busy ? "正在上传…" : "选择文件上传"
+        >{{ busy ? phase || "正在上传…" : buttonLabel
         }}<input
           type="file"
           :accept="accept"
@@ -145,6 +159,7 @@ async function openLibrary() {
       class="mt-2"
       >{{ error }}</v-alert
     ><AttachmentList
+      v-if="!hideAttachments"
       :ids="modelValue"
       :removable="!disabled && !busy"
       @remove="

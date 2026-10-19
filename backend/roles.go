@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"sort"
 	"strings"
 )
 
@@ -60,6 +61,9 @@ func memberRole(t string) string {
 	}
 }
 func hasPermission(u User, direction, permission string) bool {
+	if u.DeactivatedAt != "" {
+		return false
+	}
 	if u.Role == "admin" {
 		return true
 	}
@@ -74,6 +78,9 @@ func hasPermission(u User, direction, permission string) bool {
 	return false
 }
 func hasAnyPermission(u User, permission string) bool {
+	if u.DeactivatedAt != "" {
+		return false
+	}
 	if u.Role == "admin" {
 		return true
 	}
@@ -120,6 +127,146 @@ func validateUserAccess(u *User) error {
 	}
 	if u.GroupGrants == nil {
 		u.GroupGrants = []GroupGrant{}
+	}
+	return nil
+}
+
+func canonicalMemberDirections(input []string) ([]string, error) {
+	if len(input) > len(technicalDirections) {
+		return nil, fail(400, "最多选择 5 个技术组")
+	}
+	selected := map[string]bool{}
+	for _, direction := range input {
+		direction = strings.TrimSpace(direction)
+		if !validDirection(direction) || selected[direction] {
+			return nil, fail(400, "所属技术组无效或重复")
+		}
+		selected[direction] = true
+	}
+	out := []string{}
+	for _, direction := range technicalDirections {
+		if selected[direction] {
+			out = append(out, direction)
+		}
+	}
+	return out, nil
+}
+
+// syncMemberDirections updates explicit team memberships without conflating a
+// member's parallel training cycles. Removing membership suspends enrollment;
+// its assessment history is preserved and can resume if the group is restored.
+func syncMemberDirections(s *Store, actor, member User, directions []string) error {
+	memberships, err := readAll[Membership](s, "SELECT payload FROM team_memberships WHERE user_id=?", member.ID)
+	if err != nil {
+		return err
+	}
+	selected := map[string]bool{}
+	for _, direction := range directions {
+		selected[direction] = true
+	}
+	removed := map[string][]Membership{}
+	preserved := map[string]bool{}
+	occupied := map[string]bool{}
+	previous, err := memberDirectionsAt(s, member.ID)
+	if err != nil {
+		return err
+	}
+	for _, direction := range previous {
+		if !selected[direction] {
+			removed[direction] = []Membership{}
+		}
+	}
+	for _, membership := range memberships {
+		if selected[membership.Direction] {
+			preserved[membership.Direction] = true
+			occupied[membership.TeamID] = true
+		} else {
+			removed[membership.Direction] = append(removed[membership.Direction], membership)
+		}
+	}
+	for direction, groupMemberships := range removed {
+		for _, membership := range groupMemberships {
+			if err := s.exec("DELETE FROM team_memberships WHERE team_id=? AND user_id=?", membership.TeamID, member.ID); err != nil {
+				return err
+			}
+		}
+		apps, err := readAll[TeamApplication](s, "SELECT payload FROM team_applications WHERE user_id=?", member.ID)
+		if err != nil {
+			return err
+		}
+		for _, application := range apps {
+			if application.Status != "accepted" || application.Direction != direction {
+				continue
+			}
+			application.Status = "rejected"
+			application.Feedback = "管理员已从用户管理中移除该组别，可重新报名加入。"
+			application.UpdatedAt = now()
+			if err := s.exec("UPDATE team_applications SET payload=? WHERE id=?", encoded(application), application.ID); err != nil {
+				return err
+			}
+		}
+		legacy, err := readAll[Applicant](s, "SELECT payload FROM applicants WHERE user_id=?", member.ID)
+		if err != nil {
+			return err
+		}
+		for _, application := range legacy {
+			if application.Status != "accepted" || application.Direction != direction {
+				continue
+			}
+			application.Status, application.Notes, application.UpdatedAt = "rejected", "管理员已从用户管理中移除该组别，可重新报名加入。", now()
+			if err := s.exec("UPDATE applicants SET payload=? WHERE id=?", encoded(application), application.ID); err != nil {
+				return err
+			}
+		}
+	}
+	if len(directions) == 0 {
+		return nil
+	}
+	teams, err := readAll[Team](s, "SELECT payload FROM teams")
+	if err != nil {
+		return err
+	}
+	for _, direction := range directions {
+		if preserved[direction] {
+			continue
+		}
+		candidates := []Team{}
+		for _, team := range teams {
+			normalizeTeam(&team)
+			if includesID(team.Directions, direction) && !occupied[team.ID] {
+				candidates = append(candidates, team)
+			}
+		}
+		if len(candidates) == 0 {
+			return fail(400, "该组没有可用的独立团队，请先创建该组团队；同一团队不能重复分配两个组别")
+		}
+		sort.Slice(candidates, func(i, j int) bool {
+			if len(candidates[i].Directions) != len(candidates[j].Directions) {
+				return len(candidates[i].Directions) < len(candidates[j].Directions)
+			}
+			if candidates[i].CreatedAt == candidates[j].CreatedAt {
+				return candidates[i].ID < candidates[j].ID
+			}
+			return candidates[i].CreatedAt < candidates[j].CreatedAt
+		})
+		team := candidates[0]
+		prior, err := latestTrainingInScope(s, member.ID, team.ID, direction)
+		if err != nil {
+			return err
+		}
+		if prior != nil && prior.Status == "eliminated" {
+			return fail(409, "该组已被淘汰，请在报名审核中重新录取并开启新的培养周期")
+		}
+		if member.MemberType == "freshman" {
+			if err := admitTraining(s, actor, member.ID, team.ID, direction, false); err != nil {
+				return err
+			}
+		}
+		membership := Membership{TeamID: team.ID, UserID: member.ID, Direction: direction, JoinedAt: now()}
+		if err := s.exec("INSERT INTO team_memberships(team_id,user_id,direction,joined_at,payload) VALUES(?,?,?,?,?)", membership.TeamID, membership.UserID, membership.Direction, membership.JoinedAt, encoded(membership)); err != nil {
+			return err
+		}
+		occupied[team.ID] = true
 	}
 	return nil
 }
@@ -302,11 +449,16 @@ func (a *App) updateMember(w http.ResponseWriter, r *http.Request, u User) error
 		MemberType       *string       `json:"memberType"`
 		GroupGrants      *[]GroupGrant `json:"groupGrants"`
 		Direction        *string       `json:"direction"`
+		Directions       *[]string     `json:"directions"`
 		AssessmentPassed bool          `json:"assessmentPassed"`
 		AssessmentNote   string        `json:"assessmentNote"`
+		ForcePromotion   bool          `json:"forcePromotion"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
+	}
+	if in.Directions != nil && in.Direction != nil {
+		return fail(400, "direction 与 directions 不能同时提交")
 	}
 	tx, err := a.store.db.BeginTx(r.Context(), nil)
 	if err != nil {
@@ -318,9 +470,12 @@ func (a *App) updateMember(w http.ResponseWriter, r *http.Request, u User) error
 	if err != nil {
 		return err
 	}
+	if member.DeactivatedAt != "" {
+		return fail(409, "该账号已注销，请先恢复后再调整权限或身份")
+	}
 	oldRole, oldType := member.Role, member.MemberType
 	if u.Role != "admin" {
-		if in.Role != nil || in.GroupGrants != nil || in.Direction != nil || in.MemberType == nil || !slices.Contains([]string{"reserve", "formal"}, *in.MemberType) || !in.AssessmentPassed || oldType != "freshman" || member.ID == u.ID {
+		if in.Role != nil || in.GroupGrants != nil || in.Direction != nil || in.Directions != nil || in.ForcePromotion || in.MemberType == nil || !slices.Contains([]string{"reserve", "formal"}, *in.MemberType) || !in.AssessmentPassed || oldType != "freshman" || member.ID == u.ID {
 			return fail(403, "组考核管理员仅可确认本组其他新生的最终考核，不能调整角色、所属组或授权")
 		}
 		dirs, err := memberDirectionsAt(s, member.ID)
@@ -349,6 +504,14 @@ func (a *App) updateMember(w http.ResponseWriter, r *http.Request, u User) error
 			return fail(409, "成员仍有组别在阶段培养中，请通过各组报名和考核管理所属组")
 		}
 	}
+	if in.ForcePromotion {
+		if u.Role != "admin" {
+			return fail(403, "只有系统管理员可以直接调整成员身份")
+		}
+		if in.MemberType == nil || *in.MemberType == oldType || strings.TrimSpace(in.AssessmentNote) == "" {
+			return fail(400, "请指定新的成员身份并填写直接晋升说明")
+		}
+	}
 	if in.MemberType != nil {
 		member.MemberType = *in.MemberType
 		if member.Role != "admin" && member.Role != "group_admin" {
@@ -374,7 +537,20 @@ func (a *App) updateMember(w http.ResponseWriter, r *http.Request, u User) error
 		member.GroupGrants = []GroupGrant{}
 	}
 	previousDirections := []string{}
-	if in.Direction != nil {
+	if in.Directions != nil {
+		selected, err := canonicalMemberDirections(*in.Directions)
+		if err != nil {
+			return err
+		}
+		in.Directions = &selected
+		if slices.Contains(selected, member.Direction) {
+			// Keep the established primary group when it remains selected.
+		} else if len(selected) > 0 {
+			member.Direction = selected[0]
+		} else {
+			member.Direction = ""
+		}
+	} else if in.Direction != nil {
 		previousDirections, err = memberDirectionsAt(s, member.ID)
 		if err != nil {
 			return err
@@ -388,15 +564,22 @@ func (a *App) updateMember(w http.ResponseWriter, r *http.Request, u User) error
 		return fail(400, "考核说明过长")
 	}
 	if oldType == "freshman" && member.MemberType != "freshman" {
-		if progress != nil {
+		if progress != nil && !in.ForcePromotion {
 			return fail(409, "该新生已有培养周期，请在新生阶段考核中逐阶段完成晋升")
 		}
-		if !in.AssessmentPassed {
+		if !in.AssessmentPassed && !in.ForcePromotion {
 			return fail(409, "请先明确确认新生最终考核通过")
 		}
-		member.AssessmentPassedAt = now()
-		member.AssessmentConfirmedBy = u.ID
-		member.AssessmentNote = strings.TrimSpace(in.AssessmentNote)
+		if !in.ForcePromotion {
+			member.AssessmentPassedAt = now()
+			member.AssessmentConfirmedBy = u.ID
+			member.AssessmentNote = strings.TrimSpace(in.AssessmentNote)
+		}
+	}
+	if in.ForcePromotion {
+		member.PromotionOverrideAt = now()
+		member.PromotionOverrideBy = u.ID
+		member.PromotionOverrideNote = strings.TrimSpace(in.AssessmentNote)
 	}
 	if oldRole == "admin" && member.Role != "admin" {
 		users, err := readAll[User](s, "SELECT payload FROM users")
@@ -405,7 +588,7 @@ func (a *App) updateMember(w http.ResponseWriter, r *http.Request, u User) error
 		}
 		admins := 0
 		for _, v := range users {
-			if v.Role == "admin" {
+			if v.Role == "admin" && v.DeactivatedAt == "" {
 				admins++
 			}
 		}
@@ -413,10 +596,11 @@ func (a *App) updateMember(w http.ResponseWriter, r *http.Request, u User) error
 			return fail(409, "不能移除最后一位管理员")
 		}
 	}
-	if err = s.exec("UPDATE users SET payload=? WHERE id=?", encoded(member), member.ID); err != nil {
-		return err
-	}
-	if in.Direction != nil {
+	if in.Directions != nil {
+		if err = syncMemberDirections(s, u, member, *in.Directions); err != nil {
+			return err
+		}
+	} else if in.Direction != nil {
 		memberships, err := readAll[Membership](s, "SELECT payload FROM team_memberships WHERE user_id=?", member.ID)
 		if err != nil {
 			return err
@@ -468,10 +652,18 @@ func (a *App) updateMember(w http.ResponseWriter, r *http.Request, u User) error
 			}
 		}
 	}
+	if err = s.exec("UPDATE users SET payload=? WHERE id=?", encoded(member), member.ID); err != nil {
+		return err
+	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	if oldType == "freshman" && member.MemberType != "freshman" {
+	if in.Directions != nil {
+		a.activity(u, "调整成员所属组别", member.Name+" · "+strings.Join(*in.Directions, "、"))
+	}
+	if in.ForcePromotion {
+		a.activity(u, "管理员直接调整成员身份", member.Name+" · "+member.MemberType)
+	} else if oldType == "freshman" && member.MemberType != "freshman" {
 		a.activity(u, "确认新生考核通过并晋升", member.Name)
 	} else {
 		a.activity(u, "调整成员身份与权限", member.Name)
@@ -580,6 +772,15 @@ func (a *App) contextualFileAccess(u User, id string) (bool, error) {
 			return a.recipientAllowed(u, profile.UserID, "recruitment")
 		}
 	}
+	discussions, err := readAll[Discussion](a.store, "SELECT payload FROM discussions")
+	if err != nil {
+		return false, err
+	}
+	for _, discussion := range discussions {
+		if discussionVisible(discussion, u) && includesID(discussion.FileIDs, id) {
+			return true, nil
+		}
+	}
 	return false, nil
 }
 func (a *App) campaignAllowed(u User, item MailCampaign) (bool, error) {
@@ -590,7 +791,7 @@ func (a *App) campaignAllowed(u User, item MailCampaign) (bool, error) {
 		return false, nil
 	}
 	for _, recipient := range item.Recipients {
-		ok, err := a.recipientAllowed(u, recipient.UserID, "mail")
+		ok, err := a.mailRecipientAllowed(u, recipient)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				return false, nil

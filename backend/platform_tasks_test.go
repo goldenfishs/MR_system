@@ -430,3 +430,45 @@ func TestNotificationSMTPUsesSingleRecipientAndSafeHeaders(t *testing.T) {
 		t.Fatal("header injection allowed")
 	}
 }
+
+func TestJudgeManagerBankExecutionScope(t *testing.T) {
+	a, c := setup(t)
+	fixture := &judgeFixture{token: "fixture-auth-token"}
+	task, _ := configuredJudgeTask(t, a, c, fixture)
+	c.login("admin")
+	task.Category = "problem"
+	task.Status = "draft"
+	task.Direction = "视觉算法"
+	if err := a.store.exec("UPDATE tasks SET payload=? WHERE id=?", encoded(task), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	source := uploadForTest(t, c, "main.py", []byte("print(input())\n"), 201)
+	run := unmarshal[JudgeRun](t, c.request("POST", "/api/tasks/"+task.ID+"/judge", map[string]any{"languageId": 71, "sourceFileId": source.ID}, 202)["item"])
+	if waitJudge(t, c, run.ID).Passed != 2 {
+		t.Fatal("manager bank validation failed")
+	}
+	c.login("mentor")
+	c.request("POST", "/api/tasks/"+task.ID+"/judge", map[string]any{"languageId": 71, "sourceFileId": source.ID}, 409)
+	c.login("student")
+	c.request("POST", "/api/tasks/"+task.ID+"/judge", map[string]any{"languageId": 71, "sourceFileId": source.ID}, 409)
+}
+
+func TestCrossGroupBankJudgeKeepsAssignmentBoundary(t *testing.T) {
+	a, c := setup(t)
+	task, source := configuredJudgeTask(t, a, c, &judgeFixture{token: "cross-group-fixture"})
+	task.Direction = "视觉算法"
+	task.Category = "problem"
+	if err := a.store.exec("UPDATE tasks SET payload=? WHERE id=?", encoded(task), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	run := unmarshal[JudgeRun](t, c.request("POST", "/api/tasks/"+task.ID+"/judge", map[string]any{"languageId": 71, "sourceFileId": source.ID}, 202)["item"])
+	if waitJudge(t, c, run.ID).Passed != 2 {
+		t.Fatal("cross-group judge failed")
+	}
+	task.Category = "assignment"
+	if err := a.store.exec("UPDATE tasks SET payload=? WHERE id=?", encoded(task), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	c.request("POST", "/api/tasks/"+task.ID+"/judge", map[string]any{"languageId": 71, "sourceFileId": source.ID}, 403)
+	c.request("POST", "/api/tasks/"+task.ID+"/submissions", map[string]any{"content": "cross-group"}, 403)
+}

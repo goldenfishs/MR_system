@@ -1,0 +1,960 @@
+[
+  {
+    "id": "c-basic-001",
+    "direction": "电控",
+    "title": "变量声明与初始化",
+    "description": "要声明一个名为 count 的 int 变量并初始化为 0，哪一项语句正确？",
+    "tags": [
+      "C语言基础",
+      "变量"
+    ],
+    "difficulty": "入门",
+    "type": "single_choice",
+    "options": [
+      "int count = 0;",
+      "count int = 0;",
+      "int = count 0;",
+      "int count == 0;"
+    ],
+    "answers": [
+      "0"
+    ],
+    "explanation": "声明语法为类型、变量名和可选的初始化器。== 是比较运算符，不能替代初始化中的 =。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/declarations.html"
+    ]
+  },
+  {
+    "id": "c-basic-002",
+    "direction": "电控",
+    "title": "整数与浮点类型",
+    "description": "需要保存带小数的电压值 3.25，以下声明哪一个适合？",
+    "tags": [
+      "C语言基础",
+      "数据类型"
+    ],
+    "difficulty": "入门",
+    "type": "single_choice",
+    "options": [
+      "int voltage = 3.25;",
+      "double voltage = 3.25;",
+      "char voltage = 3.25;",
+      "int voltage = 325 / 100;"
+    ],
+    "answers": [
+      "1"
+    ],
+    "explanation": "double 可保存该小数值；将 3.25 转成 int 或 char 会丢弃小数部分，整数除法 325/100 也得到整数 3。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/arithmetic_types.html"
+    ]
+  },
+  {
+    "id": "c-basic-003",
+    "direction": "电控",
+    "title": "整数除法的结果",
+    "description": "执行 int a = 7, b = 2; int result = a / b; 后，result 的值是多少？填一个十进制整数。",
+    "tags": [
+      "C语言基础",
+      "算术运算"
+    ],
+    "difficulty": "入门",
+    "type": "fill_blank",
+    "options": [],
+    "answers": [
+      "3"
+    ],
+    "explanation": "两个操作数都是 int，执行整数除法，结果的小数部分被截去。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/operator_arithmetic.html"
+    ]
+  },
+  {
+    "id": "c-basic-004",
+    "direction": "电控",
+    "title": "先转换再相除",
+    "description": "已有 int total = 7, count = 2;，哪个表达式的值是 3.5？",
+    "tags": [
+      "C语言基础",
+      "类型转换"
+    ],
+    "difficulty": "入门",
+    "type": "single_choice",
+    "options": [
+      "total / count",
+      "(double)(total / count)",
+      "(double)total / count",
+      "total % count"
+    ],
+    "answers": [
+      "2"
+    ],
+    "explanation": "转换必须在除法前发生。(double)total 使除法按浮点运算进行；除完再转换只能把 3 转成 3.0。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/conversion.html"
+    ]
+  },
+  {
+    "id": "c-basic-005",
+    "direction": "电控",
+    "title": "const 局部变量",
+    "description": "函数内声明 const int limit = 10;，后续哪条语句符合该变量的只读约束？",
+    "tags": [
+      "C语言基础",
+      "const"
+    ],
+    "difficulty": "入门",
+    "type": "single_choice",
+    "options": [
+      "limit = 12;",
+      "limit++;",
+      "int copy = limit;",
+      "limit += 1;"
+    ],
+    "answers": [
+      "2"
+    ],
+    "explanation": "读取 const 对象并初始化另一个变量是合法的；直接赋值、递增或复合赋值修改它不符合约束。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/const.html"
+    ]
+  },
+  {
+    "id": "c-basic-006",
+    "direction": "电控",
+    "title": "运算优先级",
+    "description": "表达式 2 + 3 * 4 的值是多少？填一个十进制整数。",
+    "tags": [
+      "C语言基础",
+      "算术运算"
+    ],
+    "difficulty": "入门",
+    "type": "fill_blank",
+    "options": [],
+    "answers": [
+      "14"
+    ],
+    "explanation": "乘法优先于加法，先计算 3*4，再加 2。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/operator_precedence.html"
+    ]
+  },
+  {
+    "id": "c-basic-007",
+    "direction": "电控",
+    "title": "正整数取余",
+    "description": "执行 int rest = 17 % 5; 后 rest 等于多少？填一个十进制整数。",
+    "tags": [
+      "C语言基础",
+      "取余"
+    ],
+    "difficulty": "入门",
+    "type": "fill_blank",
+    "options": [],
+    "answers": [
+      "2"
+    ],
+    "explanation": "17 = 3×5+2，因此余数为 2。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/operator_arithmetic.html"
+    ]
+  },
+  {
+    "id": "c-basic-008",
+    "direction": "电控",
+    "title": "printf 输出整数",
+    "description": "已经包含 <stdio.h>，int speed = 120;。哪条语句正确输出 speed 的十进制值？",
+    "tags": [
+      "C语言基础",
+      "标准输出"
+    ],
+    "difficulty": "入门",
+    "type": "single_choice",
+    "options": [
+      "printf(\"%f\", speed);",
+      "printf(\"%d\", speed);",
+      "printf(\"%s\", speed);",
+      "printf(\"%c\", &speed);"
+    ],
+    "answers": [
+      "1"
+    ],
+    "explanation": "int 对应 %d。printf 的格式与实参类型必须匹配；不能因为输出内容是数字就任意替换格式。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/io/fprintf.html"
+    ]
+  },
+  {
+    "id": "c-basic-009",
+    "direction": "电控",
+    "title": "保留两位小数",
+    "description": "已经包含 <stdio.h>，执行 printf(\"%.2f\", 3.5);，输出什么？只填输出文字。",
+    "tags": [
+      "C语言基础",
+      "标准输出"
+    ],
+    "difficulty": "入门",
+    "type": "fill_blank",
+    "options": [],
+    "answers": [
+      "3.50"
+    ],
+    "explanation": "%.2f 按定点小数形式输出，并在小数点后保留两位；不足的位补零。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/io/fprintf.html"
+    ]
+  },
+  {
+    "id": "c-basic-010",
+    "direction": "电控",
+    "title": "scanf 读取整数",
+    "description": "已经包含 <stdio.h>，int age = 0;。输入保证是一个可由 int 表示的十进制整数，哪个调用将它读入 age？",
+    "tags": [
+      "C语言基础",
+      "标准输入"
+    ],
+    "difficulty": "入门",
+    "type": "single_choice",
+    "options": [
+      "scanf(\"%d\", age);",
+      "scanf(\"%f\", &age);",
+      "scanf(\"%d\", &age);",
+      "scanf(\"%s\", age);"
+    ],
+    "answers": [
+      "2"
+    ],
+    "explanation": "scanf 的 %d 需要 int*，因此传入 &age。还应检查调用返回值以确认转换成功。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/io/fscanf.html"
+    ]
+  },
+  {
+    "id": "c-basic-011",
+    "direction": "电控",
+    "title": "检查输入是否成功",
+    "description": "int x, y;，希望确认 scanf(\"%d %d\", &x, &y) 已成功读取两个整数，应检查返回值等于多少？",
+    "tags": [
+      "C语言基础",
+      "标准输入"
+    ],
+    "difficulty": "入门",
+    "type": "single_choice",
+    "options": [
+      "0",
+      "1",
+      "2",
+      "EOF"
+    ],
+    "answers": [
+      "2"
+    ],
+    "explanation": "scanf 返回成功匹配并赋值的项目数。两个 %d 都成功赋值时返回 2。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/io/fscanf.html"
+    ]
+  },
+  {
+    "id": "c-basic-012",
+    "direction": "电控",
+    "title": "比较与赋值",
+    "description": "需要在 if 中判断 int 变量 mode 是否等于 2，正确的条件是？",
+    "tags": [
+      "C语言基础",
+      "条件分支"
+    ],
+    "difficulty": "入门",
+    "type": "single_choice",
+    "options": [
+      "mode = 2",
+      "mode == 2",
+      "mode := 2",
+      "mode => 2"
+    ],
+    "answers": [
+      "1"
+    ],
+    "explanation": "== 判断相等，= 是赋值。赋值表达式虽可用作条件，但不实现这里的比较要求。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/operator_comparison.html"
+    ]
+  },
+  {
+    "id": "c-basic-013",
+    "direction": "电控",
+    "title": "区间条件",
+    "description": "需要判断整数 score 是否处于闭区间 [60, 100]，正确的 C 表达式是？",
+    "tags": [
+      "C语言基础",
+      "逻辑运算"
+    ],
+    "difficulty": "入门",
+    "type": "single_choice",
+    "options": [
+      "60 <= score <= 100",
+      "score >= 60 || score <= 100",
+      "score >= 60 && score <= 100",
+      "score > 60 && score < 100"
+    ],
+    "answers": [
+      "2"
+    ],
+    "explanation": "闭区间包含两个端点，两个比较需通过 && 同时满足。C 的链式比较不具备数学不等式的含义。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/operator_logical.html"
+    ]
+  },
+  {
+    "id": "c-basic-014",
+    "direction": "电控",
+    "title": "if 与 else 的选择",
+    "description": "int x = 0; int y = 8; if (x != 0) { y = 1; } else { y = 2; } 执行后 y 是多少？填一个十进制整数。",
+    "tags": [
+      "C语言基础",
+      "条件分支"
+    ],
+    "difficulty": "入门",
+    "type": "fill_blank",
+    "options": [],
+    "answers": [
+      "2"
+    ],
+    "explanation": "x!=0 为假，执行 else 分支，将 y 赋为 2。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/if.html"
+    ]
+  },
+  {
+    "id": "c-basic-015",
+    "direction": "电控",
+    "title": "编程：两次采样求和",
+    "description": "输入：一行两个整数 a、b，满足 -10000≤a,b≤10000。\n输出：它们的和，并换行。\n示例输入：\n12 -5\n示例输出：\n7\n\n使用 C 语言，通过标准输入读入，向标准输出写结果。不要输出输入提示或其他文字。",
+    "tags": [
+      "C语言基础",
+      "输入输出"
+    ],
+    "difficulty": "入门",
+    "type": "code",
+    "options": [],
+    "answers": [],
+    "explanation": "",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/io/fscanf.html"
+    ],
+    "judge": {
+      "enabled": true,
+      "languageIds": [
+        50
+      ],
+      "timeLimitSeconds": 2,
+      "testCases": [
+        {
+          "input": "12 -5\n",
+          "expectedOutput": "7\n",
+          "hidden": false
+        },
+        {
+          "input": "0 0\n",
+          "expectedOutput": "0\n",
+          "hidden": true
+        },
+        {
+          "input": "-10000 -10000\n",
+          "expectedOutput": "-20000\n",
+          "hidden": true
+        },
+        {
+          "input": "10000 10000\n",
+          "expectedOutput": "20000\n",
+          "hidden": true
+        },
+        {
+          "input": "-3 8\n",
+          "expectedOutput": "5\n",
+          "hidden": true
+        }
+      ]
+    }
+  },
+  {
+    "id": "c-basic-016",
+    "direction": "电控",
+    "title": "编程：电量状态分类",
+    "description": "输入：一个整数 p（0≤p≤100），表示电量百分比。\n输出：p<20 时输出 LOW；20≤p<80 时输出 NORMAL；80≤p≤100 时输出 HIGH。末尾换行，区分大小写。\n示例输入：\n20\n示例输出：\nNORMAL\n\n使用 C 语言，通过标准输入读入，向标准输出写结果。不要输出输入提示或其他文字。",
+    "tags": [
+      "C语言基础",
+      "条件分支"
+    ],
+    "difficulty": "入门",
+    "type": "code",
+    "options": [],
+    "answers": [],
+    "explanation": "",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/if.html"
+    ],
+    "judge": {
+      "enabled": true,
+      "languageIds": [
+        50
+      ],
+      "timeLimitSeconds": 2,
+      "testCases": [
+        {
+          "input": "20\n",
+          "expectedOutput": "NORMAL\n",
+          "hidden": false
+        },
+        {
+          "input": "0\n",
+          "expectedOutput": "LOW\n",
+          "hidden": true
+        },
+        {
+          "input": "19\n",
+          "expectedOutput": "LOW\n",
+          "hidden": true
+        },
+        {
+          "input": "79\n",
+          "expectedOutput": "NORMAL\n",
+          "hidden": true
+        },
+        {
+          "input": "80\n",
+          "expectedOutput": "HIGH\n",
+          "hidden": true
+        },
+        {
+          "input": "100\n",
+          "expectedOutput": "HIGH\n",
+          "hidden": true
+        }
+      ]
+    }
+  },
+  {
+    "id": "c-advanced-001",
+    "direction": "电控",
+    "title": "for 循环累加",
+    "description": "int sum = 0; for (int i = 1; i <= 4; ++i) { sum += i; } 执行后 sum 是多少？填一个十进制整数。",
+    "tags": [
+      "C语言进阶",
+      "循环"
+    ],
+    "difficulty": "进阶",
+    "type": "fill_blank",
+    "options": [],
+    "answers": [
+      "10"
+    ],
+    "explanation": "循环依次加上 1、2、3、4，结果为 10。C99 及以后允许在 for 初始化部分声明变量。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/for.html"
+    ]
+  },
+  {
+    "id": "c-advanced-002",
+    "direction": "电控",
+    "title": "数组有效下标",
+    "description": "已声明 int samples[5] = {0};，哪个下标范围可以访问该数组的元素？",
+    "tags": [
+      "C语言进阶",
+      "数组"
+    ],
+    "difficulty": "进阶",
+    "type": "single_choice",
+    "options": [
+      "1 到 5",
+      "0 到 5",
+      "0 到 4",
+      "-1 到 3"
+    ],
+    "answers": [
+      "2"
+    ],
+    "explanation": "长度为 5 的数组具有下标 0、1、2、3、4。下标 5 的地址可以作为尾后指针，但不能解引用访问数组元素。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/array.html"
+    ]
+  },
+  {
+    "id": "c-advanced-003",
+    "direction": "电控",
+    "title": "函数参数按值传递",
+    "description": "void set(int x) { x = 9; }\n调用者执行 int a = 3; set(a); 后，a 是多少？填一个十进制整数。",
+    "tags": [
+      "C语言进阶",
+      "函数"
+    ],
+    "difficulty": "进阶",
+    "type": "fill_blank",
+    "options": [],
+    "answers": [
+      "3"
+    ],
+    "explanation": "普通参数接收实参值的副本。修改形参 x 不会修改调用者的 a。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/operator_other.html"
+    ]
+  },
+  {
+    "id": "c-advanced-004",
+    "direction": "电控",
+    "title": "通过指针修改对象",
+    "description": "int value = 5; int *p = &value; *p = 8; 执行后 value 是多少？填一个十进制整数。",
+    "tags": [
+      "C语言进阶",
+      "指针"
+    ],
+    "difficulty": "进阶",
+    "type": "fill_blank",
+    "options": [],
+    "answers": [
+      "8"
+    ],
+    "explanation": "p 保存 value 的地址，*p 指代 value，对 *p 赋值会修改 value。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/pointer.html"
+    ]
+  },
+  {
+    "id": "c-advanced-005",
+    "direction": "电控",
+    "title": "C 字符串的终止符",
+    "description": "声明 char name[] = \"MOVE\";，该数组包含几个 char 元素？",
+    "tags": [
+      "C语言进阶",
+      "字符串"
+    ],
+    "difficulty": "进阶",
+    "type": "single_choice",
+    "options": [
+      "3",
+      "4",
+      "5",
+      "由 strlen(name) 决定"
+    ],
+    "answers": [
+      "2"
+    ],
+    "explanation": "字符串字面量初始化数组时还包含末尾的空字符 \\0，总共 5 个元素。strlen 不计终止空字符，所以字符串长度为 4。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/string_literal.html"
+    ]
+  },
+  {
+    "id": "c-advanced-006",
+    "direction": "电控",
+    "title": "读取结构体成员",
+    "description": "已有 struct Motor { int rpm; }; struct Motor m = {120}; struct Motor *p = &m;，哪一个表达式可通过 p 读取 rpm？",
+    "tags": [
+      "C语言进阶",
+      "结构体"
+    ],
+    "difficulty": "进阶",
+    "type": "single_choice",
+    "options": [
+      "p.rpm",
+      "p->rpm",
+      "p::rpm",
+      "p[rpm]"
+    ],
+    "answers": [
+      "1"
+    ],
+    "explanation": "通过指向结构体的指针访问成员使用 ->；p->rpm 等价于 (*p).rpm。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/operator_member_access.html"
+    ]
+  },
+  {
+    "id": "c-advanced-007",
+    "direction": "电控",
+    "title": "按位与提取低四位",
+    "description": "unsigned int flags = 0xABu; unsigned int low = flags & 0x0Fu; low 的十进制值是多少？",
+    "tags": [
+      "C语言进阶",
+      "位运算"
+    ],
+    "difficulty": "进阶",
+    "type": "fill_blank",
+    "options": [],
+    "answers": [
+      "11"
+    ],
+    "explanation": "掩码 0x0F 仅保留低四位，结果 0x0B，即十进制 11。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/operator_arithmetic.html"
+    ]
+  },
+  {
+    "id": "c-advanced-008",
+    "direction": "电控",
+    "title": "设置一个普通变量的位",
+    "description": "unsigned int flags = 0x12u;，要把最低位编号为 0 的第 3 位置 1，并保留其他位，使用哪条语句？本题为普通变量，无并发访问。",
+    "tags": [
+      "C语言进阶",
+      "位运算"
+    ],
+    "difficulty": "进阶",
+    "type": "single_choice",
+    "options": [
+      "flags &= (1u << 3);",
+      "flags |= (1u << 3);",
+      "flags = (1u << 3);",
+      "flags >>= 3;"
+    ],
+    "answers": [
+      "1"
+    ],
+    "explanation": "flags |= 掩码将目标位置 1 并保留其他位，结果为 0x1A。直接赋值 flags = (1u << 3) 会丢弃原有的第 1 位和第 4 位。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/operator_arithmetic.html"
+    ]
+  },
+  {
+    "id": "c-advanced-009",
+    "direction": "电控",
+    "title": "短路与空指针检查",
+    "description": "p 是 int*，其值为 NULL 或指向有效 int 对象。哪个条件在 p==NULL 时不会求值 *p，且可判断非空时所指值是否为正？",
+    "tags": [
+      "C语言进阶",
+      "指针"
+    ],
+    "difficulty": "进阶",
+    "type": "single_choice",
+    "options": [
+      "*p > 0 && p != NULL",
+      "p != NULL && *p > 0",
+      "p != NULL || *p > 0",
+      "(*p > 0) & (p != NULL)"
+    ],
+    "answers": [
+      "1"
+    ],
+    "explanation": "逻辑与 && 从左往右求值；左侧为假时不求值右侧，因此先检查 p 再解引用。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/operator_logical.html"
+    ]
+  },
+  {
+    "id": "c-advanced-010",
+    "direction": "电控",
+    "title": "break 结束循环",
+    "description": "int total = 0; for (int i = 1; i <= 5; ++i) { if (i == 3) break; total += i; } 最终 total 是多少？填一个十进制整数。",
+    "tags": [
+      "C语言进阶",
+      "循环"
+    ],
+    "difficulty": "进阶",
+    "type": "fill_blank",
+    "options": [],
+    "answers": [
+      "3"
+    ],
+    "explanation": "i=1 和 2 时累加；i=3 时在累加之前退出整个循环，结果 1+2=3。",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/break.html"
+    ]
+  },
+  {
+    "id": "c-advanced-011",
+    "direction": "电控",
+    "title": "编程：数组最大值与位置",
+    "description": "输入：第一行整数 n（1≤n≤100），第二行 n 个整数（-10000≤ai≤10000）。\n输出：最大值和它第一次出现的下标，以一个空格分隔，末尾换行。下标从 0 开始。\n示例输入：\n5\n3 8 8 -2 7\n示例输出：\n8 1\n\n使用 C 语言，通过标准输入读入，向标准输出写结果。不要输出输入提示或其他文字。",
+    "tags": [
+      "C语言进阶",
+      "数组"
+    ],
+    "difficulty": "进阶",
+    "type": "code",
+    "options": [],
+    "answers": [],
+    "explanation": "",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/array.html"
+    ],
+    "judge": {
+      "enabled": true,
+      "languageIds": [
+        50
+      ],
+      "timeLimitSeconds": 2,
+      "testCases": [
+        {
+          "input": "5\n3 8 8 -2 7\n",
+          "expectedOutput": "8 1\n",
+          "hidden": false
+        },
+        {
+          "input": "1\n-5\n",
+          "expectedOutput": "-5 0\n",
+          "hidden": true
+        },
+        {
+          "input": "4\n-9 -2 -7 -2\n",
+          "expectedOutput": "-2 1\n",
+          "hidden": true
+        },
+        {
+          "input": "3\n0 0 0\n",
+          "expectedOutput": "0 0\n",
+          "hidden": true
+        },
+        {
+          "input": "4\n-10000 2 9 10000\n",
+          "expectedOutput": "10000 3\n",
+          "hidden": true
+        }
+      ]
+    }
+  },
+  {
+    "id": "c-advanced-012",
+    "direction": "电控",
+    "title": "编程：统计二进制中的 1",
+    "description": "输入：一个非负十进制整数 x（0≤x≤65535）。\n输出：x 的二进制表示中 1 的个数，并换行。前导零不影响结果。可使用 unsigned int 和位运算处理。\n示例输入：\n13\n示例输出：\n3\n说明：13 的二进制为 1101。\n\n使用 C 语言，通过标准输入读入，向标准输出写结果。不要输出输入提示或其他文字。",
+    "tags": [
+      "C语言进阶",
+      "位运算"
+    ],
+    "difficulty": "进阶",
+    "type": "code",
+    "options": [],
+    "answers": [],
+    "explanation": "",
+    "sourceUrls": [
+      "https://en.cppreference.com/w/c/language/operator_arithmetic.html"
+    ],
+    "judge": {
+      "enabled": true,
+      "languageIds": [
+        50
+      ],
+      "timeLimitSeconds": 2,
+      "testCases": [
+        {
+          "input": "13\n",
+          "expectedOutput": "3\n",
+          "hidden": false
+        },
+        {
+          "input": "0\n",
+          "expectedOutput": "0\n",
+          "hidden": true
+        },
+        {
+          "input": "65535\n",
+          "expectedOutput": "16\n",
+          "hidden": true
+        },
+        {
+          "input": "32768\n",
+          "expectedOutput": "1\n",
+          "hidden": true
+        },
+        {
+          "input": "21845\n",
+          "expectedOutput": "8\n",
+          "hidden": true
+        },
+        {
+          "input": "255\n",
+          "expectedOutput": "8\n",
+          "hidden": true
+        }
+      ]
+    }
+  },
+  {
+    "id": "stm32-basic-001",
+    "direction": "电控",
+    "title": "STM32F103 的 GPIO 时钟",
+    "description": "在 STM32F103 上通过 GPIOA 寄存器配置 PA0 前，应先在 RCC 中启用什么？",
+    "tags": [
+      "STM32单片机基础",
+      "RCC"
+    ],
+    "difficulty": "入门",
+    "type": "single_choice",
+    "options": [
+      "GPIOA 对应的 APB2 外设时钟",
+      "仅 USART1 的时钟",
+      "仅 DMA1 的时钟",
+      "不需要任何外设时钟"
+    ],
+    "answers": [
+      "0"
+    ],
+    "explanation": "RM0008 的 RCC_APB2ENR 中 IOPAEN 控制 GPIOA 时钟。应查具体型号的时钟树，不能把其他 STM32 系列的 AHB GPIO 时钟位置直接套用。",
+    "sourceUrls": [
+      "https://www.st.com/resource/en/reference_manual/cd00171190-stm32f101xx-stm32f102xx-stm32f103xx-stm32f105xx-and-stm32f107xx-advanced-armbased-32bit-mcus-stmicroelectronics.pdf"
+    ]
+  },
+  {
+    "id": "stm32-basic-002",
+    "direction": "电控",
+    "title": "STM32F103 的 GPIO 配置寄存器",
+    "description": "针对 STM32F103 的 GPIO 端口，配置引脚 0～7 的模式与配置位应使用哪类寄存器？",
+    "tags": [
+      "STM32单片机基础",
+      "GPIO"
+    ],
+    "difficulty": "入门",
+    "type": "single_choice",
+    "options": [
+      "GPIOx_CRH",
+      "GPIOx_CRL",
+      "GPIOx_IDR",
+      "GPIOx_ODR"
+    ],
+    "answers": [
+      "1"
+    ],
+    "explanation": "STM32F1 使用 CRL 配置引脚 0～7，CRH 配置 8～15。IDR 是输入数据，ODR 是输出数据；其他系列可能采用 MODER，不能混用。",
+    "sourceUrls": [
+      "https://www.st.com/resource/en/reference_manual/cd00171190-stm32f101xx-stm32f102xx-stm32f103xx-stm32f105xx-and-stm32f107xx-advanced-armbased-32bit-mcus-stmicroelectronics.pdf"
+    ]
+  },
+  {
+    "id": "stm32-basic-003",
+    "direction": "电控",
+    "title": "STM32F103 BSRR 的用途",
+    "description": "STM32F103 GPIOx_BSRR 的低 16 位与高 16 位分别用于什么？",
+    "tags": [
+      "STM32单片机基础",
+      "GPIO"
+    ],
+    "difficulty": "入门",
+    "type": "single_choice",
+    "options": [
+      "低 16 位复位，高 16 位置位",
+      "低 16 位置位，高 16 位复位",
+      "低 16 位读取，高 16 位输入配置",
+      "都用于切换输入模式"
+    ],
+    "answers": [
+      "1"
+    ],
+    "explanation": "向 BSRR 的 BS 位写 1 设置对应 ODR 位，向 BR 位写 1 复位对应位，可避免对 ODR 进行软件读改写。此题不同时置位和复位同一引脚。",
+    "sourceUrls": [
+      "https://www.st.com/resource/en/reference_manual/cd00171190-stm32f101xx-stm32f102xx-stm32f103xx-stm32f105xx-and-stm32f107xx-advanced-armbased-32bit-mcus-stmicroelectronics.pdf"
+    ]
+  },
+  {
+    "id": "stm32-basic-004",
+    "direction": "电控",
+    "title": "STM32F103 外部中断线映射",
+    "description": "在 STM32F103 上，PA0 与 PB0 对应 EXTI0。对于同一条 EXTI0 输入线，端口来源如何选择？",
+    "tags": [
+      "STM32单片机基础",
+      "EXTI"
+    ],
+    "difficulty": "入门",
+    "type": "single_choice",
+    "options": [
+      "PA0 与 PB0 可以同时作为两个独立 EXTI0 输入来源",
+      "通过 AFIO_EXTICR 选择一个端口的引脚 0",
+      "由 UART 波特率寄存器选择",
+      "只能固定为 PA0，不能改为 PB0"
+    ],
+    "answers": [
+      "1"
+    ],
+    "explanation": "AFIO_EXTICR 选择各条 EXTI 线对应的 GPIO 端口；同一条 EXTI0 一次只能映射一个来源。使用 AFIO 还需启用其时钟。",
+    "sourceUrls": [
+      "https://www.st.com/resource/en/reference_manual/cd00171190-stm32f101xx-stm32f102xx-stm32f103xx-stm32f105xx-and-stm32f107xx-advanced-armbased-32bit-mcus-stmicroelectronics.pdf"
+    ]
+  },
+  {
+    "id": "stm32-basic-005",
+    "direction": "电控",
+    "title": "STM32F103 定时器更新频率",
+    "description": "STM32F103 某通用定时器的实际输入时钟 f_TIM=72 MHz，向上计数，PSC=71、ARR=999，无重复计数器影响。更新频率 f_TIM/((PSC+1)×(ARR+1)) 是多少 Hz？填一个十进制整数。",
+    "tags": [
+      "STM32单片机基础",
+      "定时器"
+    ],
+    "difficulty": "入门",
+    "type": "fill_blank",
+    "options": [],
+    "answers": [
+      "1000"
+    ],
+    "explanation": "72 000 000÷72÷1000=1000 Hz。题目给出的是定时器实际输入时钟，不是直接假定 APB 总线时钟等于定时器时钟。",
+    "sourceUrls": [
+      "https://www.st.com/resource/en/reference_manual/cd00171190-stm32f101xx-stm32f102xx-stm32f103xx-stm32f105xx-and-stm32f107xx-advanced-armbased-32bit-mcus-stmicroelectronics.pdf"
+    ]
+  },
+  {
+    "id": "stm32-basic-006",
+    "direction": "电控",
+    "title": "STM32F103 ADC 输出范围",
+    "description": "STM32F103 的 ADC 在 12 位转换、右对齐的配置下，忽略模拟误差，一次转换结果的最大无符号整数值是多少？填一个十进制整数。",
+    "tags": [
+      "STM32单片机基础",
+      "ADC"
+    ],
+    "difficulty": "入门",
+    "type": "fill_blank",
+    "options": [],
+    "answers": [
+      "4095"
+    ],
+    "explanation": "12 位可表示 2^12 个码值，从 0 到 4095。具体参考电压、输入范围与误差还需查所用芯片数据手册。",
+    "sourceUrls": [
+      "https://www.st.com/resource/en/reference_manual/cd00171190-stm32f101xx-stm32f102xx-stm32f103xx-stm32f105xx-and-stm32f107xx-advanced-armbased-32bit-mcus-stmicroelectronics.pdf"
+    ]
+  },
+  {
+    "id": "stm32-basic-007",
+    "direction": "电控",
+    "title": "STM32F103 USART 异步通信",
+    "description": "两个设备使用 USART 异步模式通信，不使用硬件流控。除了电气接口匹配和共地，双方哪项参数应匹配？",
+    "tags": [
+      "STM32单片机基础",
+      "USART"
+    ],
+    "difficulty": "入门",
+    "type": "single_choice",
+    "options": [
+      "波特率、数据位、校验位和停止位",
+      "两侧程序必须使用相同变量名",
+      "主循环必须使用相同延时",
+      "发送缓冲区地址必须相同"
+    ],
+    "answers": [
+      "0"
+    ],
+    "explanation": "异步接收依据约定的位时间与帧格式采样；双方需匹配波特率和帧格式，且 TX/RX 连接应正确。",
+    "sourceUrls": [
+      "https://www.st.com/resource/en/reference_manual/cd00171190-stm32f101xx-stm32f102xx-stm32f103xx-stm32f105xx-and-stm32f107xx-advanced-armbased-32bit-mcus-stmicroelectronics.pdf"
+    ]
+  },
+  {
+    "id": "stm32-basic-008",
+    "direction": "电控",
+    "title": "STM32F103 DMA 的职责",
+    "description": "在 STM32F103 上配置 DMA 把 ADC 数据搬运到内存，以下理解正确的是？",
+    "tags": [
+      "STM32单片机基础",
+      "DMA"
+    ],
+    "difficulty": "入门",
+    "type": "single_choice",
+    "options": [
+      "DMA 自动选择 ADC 引脚并初始化全部时钟",
+      "DMA 可按配置搬运数据，CPU 仍需配置外设并处理完成或错误等状态",
+      "使用 DMA 后无需给目标缓冲区分配有效内存",
+      "DMA 保证缓冲区永远不会被覆盖"
+    ],
+    "answers": [
+      "1"
+    ],
+    "explanation": "DMA 根据请求、地址、传输数量等配置进行搬运，减少 CPU 逐个数据复制的工作。外设配置、缓冲区管理和错误处理仍是软件职责。",
+    "sourceUrls": [
+      "https://www.st.com/resource/en/reference_manual/cd00171190-stm32f101xx-stm32f102xx-stm32f103xx-stm32f105xx-and-stm32f107xx-advanced-armbased-32bit-mcus-stmicroelectronics.pdf"
+    ]
+  }
+]

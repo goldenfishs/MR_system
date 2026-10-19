@@ -66,7 +66,7 @@ const trainingEliminated = computed(() => teams.value.some(team => team.myApplic
 const requestedDirection = computed(() => typeof route.query.direction === "string" && directions.includes(route.query.direction) ? route.query.direction : "");
 const statusLabel = (item?: TeamApplication | null) => !item ? "未报名" : item.trainingStatus === "eliminated" ? "本轮已淘汰" :
   ({
-    pending: "待审核",
+    pending: item.interview?.status === "pending" ? "待面试" : "待审核",
     submitted: "待审核",
     accepted: item?.trainingStatus === "completed" ? "考核已通过" : "已录取",
     rejected: "未通过",
@@ -203,7 +203,7 @@ async function apply() {
     );
     selected.value = { ...selected.value, myApplication: item };
     teams.value = teams.value.map((t) => (t.id === id ? selected.value! : t));
-    notice.value = `已提交${groupLabel(item.direction)}报名，侧栏已加 🌟。审核通过后可完成该组作业和考试。`;
+    notice.value = `已提交${groupLabel(item.direction)}报名，侧栏已加 🌟。面试通过并录取后可完成该组作业和考试。`;
     await loadApplications(id);
     await refreshLearningAccess();
   } catch (e) {
@@ -453,7 +453,7 @@ onMounted(load);
                 class="mt-4"
                 maxlength="2000"
               />
-              <div class="d-flex justify-end ga-2">
+              <v-btn v-if="item.interview?.status === 'pending'" :to="'/recruitment?application=' + item.id" variant="text">进入面试管理</v-btn><div class="d-flex justify-end ga-2">
                 <v-btn
                   color="error"
                   variant="text"
@@ -462,10 +462,10 @@ onMounted(load);
                   >未通过</v-btn
                 ><v-btn
                   color="primary"
-                  :disabled="saving || (item.status === 'accepted' && !canReopen(item))"
+                  :disabled="saving || item.interview?.status === 'pending' || (item.status === 'accepted' && !canReopen(item))"
                   @click="review(item, 'accepted')"
                   >{{
-                    canReopen(item) ? "重新录取" : item.status === "accepted" ? statusLabel(item) : "通过并加入团队"
+                    item.interview?.status === "pending" ? "请先确认面试结果" : canReopen(item) ? "重新录取" : item.status === "accepted" ? statusLabel(item) : "通过并加入团队"
                   }}</v-btn
                 >
               </div></v-card

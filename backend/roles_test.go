@@ -76,7 +76,7 @@ func TestFreshmanAdmissionAssessmentPromotionAndLastAdministrator(t *testing.T) 
 		t.Fatal("unapproved freshman has learning access")
 	}
 	admin.request("PATCH", "/api/team-applications/"+application.ID, map[string]string{"status": "accepted", "memberType": "formal"}, 400)
-	admin.request("PATCH", "/api/team-applications/"+application.ID, map[string]string{"status": "accepted"}, 200)
+	admin.request("POST", "/api/interviews/"+application.ID+"/decision", map[string]string{"status": "passed"}, 200)
 	me := unmarshal[User](t, student.request("GET", "/api/auth/me", nil, 200)["user"])
 	if me.Role != "freshman" || me.MemberType != "freshman" {
 		t.Fatal("admission should not promote freshman")
@@ -109,6 +109,56 @@ func TestFreshmanAdmissionAssessmentPromotionAndLastAdministrator(t *testing.T) 
 	admin.request("PATCH", "/api/team-applications/"+application.ID, map[string]string{"status": "rejected"}, 200)
 	if unmarshal[bool](t, student.request("GET", "/api/learning-access", nil, 200)["allowed"]) {
 		t.Fatal("revoked freshman admission still grants access")
+	}
+}
+
+func TestMemberManagementSupportsMultipleGroupsAndAuditedForcePromotion(t *testing.T) {
+	a, admin := setup(t)
+	admin.login("admin")
+	electrical := trainingTeamForTest(t, admin, "电控")
+	mechanical := trainingTeamForTest(t, admin, "机械")
+	user, application := trainingApplicantForTest(t, a, admin, electrical, "电控", "multi-group-promotion@test.local")
+	progress := admitForTest(t, a, admin, application)
+	student := &testClient{t: t, handler: admin.handler}
+	student.request("POST", "/api/auth/login", map[string]string{"email": user.Email, "password": trainingPassword}, 200)
+
+	admin.request("PATCH", "/api/members/"+user.ID, map[string]any{"directions": []string{"电控", "机械"}}, 200)
+	checkGroupAccessForTest(t, student, true, []string{"电控", "机械"}, []string{"电控", "机械"})
+	admin.request("PATCH", "/api/members/"+user.ID, map[string]any{"directions": []string{"机械"}}, 200)
+	checkGroupAccessForTest(t, student, true, []string{"机械"}, []string{"机械"})
+	admin.request("PATCH", "/api/members/"+user.ID, map[string]any{"directions": []string{"电控", "机械"}}, 200)
+
+	grantForTest(t, admin, "demo-mentor", []GroupGrant{{"电控", []string{"assessment"}}})
+	manager := &testClient{t: t, handler: admin.handler}
+	manager.login("mentor")
+	manager.request("PATCH", "/api/members/"+user.ID, map[string]any{"memberType": "reserve", "forcePromotion": true, "assessmentNote": "越权尝试"}, 403)
+
+	admin.request("PATCH", "/api/members/"+user.ID, map[string]any{
+		"memberType": "reserve", "forcePromotion": true, "assessmentNote": "队务会议决定直接调整成员身份。",
+		"directions": []string{"电控", "机械"},
+	}, 200)
+	promoted, err := readOne[User](a.store, "SELECT payload FROM users WHERE id=?", user.ID)
+	if err != nil || promoted.Role != "reserve" || promoted.MemberType != "reserve" || promoted.PromotionOverrideAt == "" || promoted.PromotionOverrideBy != "demo-admin" || promoted.PromotionOverrideNote == "" {
+		t.Fatalf("direct promotion was not audited: %+v (%v)", promoted, err)
+	}
+	storedProgress := trainingProgressForTest(t, a, progress.ID)
+	if storedProgress.Status != "training" || len(storedProgress.Decisions) != 0 || promoted.AssessmentPassedAt != "" {
+		t.Fatal("administrator override fabricated a passed training stage")
+	}
+	admin.request("PATCH", "/api/members/"+user.ID, map[string]any{"directions": []string{"机械"}}, 200)
+	checkGroupAccessForTest(t, student, true, []string{"机械"}, []string{"机械"})
+	admin.request("PATCH", "/api/members/"+user.ID, map[string]any{"directions": []string{"电控", "机械"}}, 200)
+	for _, stage := range progress.Stages {
+		trainingDecisionForTest(admin, progress, stage.ID, "passed", 200)
+	}
+	admin.request("PATCH", "/api/members/"+user.ID, map[string]any{"directions": []string{"机械"}}, 200)
+	checkGroupAccessForTest(t, student, true, []string{"机械"}, []string{"机械"})
+	current, err := readOne[TeamApplication](a.store, "SELECT payload FROM team_applications WHERE id=?", application.ID)
+	if err != nil || current.Status != "rejected" {
+		t.Fatalf("removing a completed group did not release its accepted application: %+v (%v)", current, err)
+	}
+	if mechanical.ID == "" {
+		t.Fatal("mechanical recruitment team was not created")
 	}
 }
 

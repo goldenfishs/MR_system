@@ -31,6 +31,7 @@ export interface FileAsset {
   createdAt: string;
 }
 export interface TeamSpace {
+  interviewExemptDirections?: string[];
   id: string;
   name: string;
   description: string;
@@ -45,6 +46,7 @@ export interface TeamSpace {
   myApplication?: TeamApplication | null;
 }
 export interface TeamApplication {
+  interview?: { status: "pending" | "passed" | "exempt" | "rejected"; at: string; room: string; order: number; note: string; decidedBy?: string; decidedAt?: string };
   id: string;
   teamId: string;
   userId: string;
@@ -118,6 +120,7 @@ export interface JudgeConfig {
 export interface JudgeRun {
   id: string;
   taskId: string;
+  questionId?: string;
   userId: string;
   sourceFileId: string;
   languageId: number;

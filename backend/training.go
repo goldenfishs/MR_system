@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -103,10 +104,11 @@ func (a *App) listTrainingPlans(w http.ResponseWriter, r *http.Request, u User) 
 }
 func (a *App) createTrainingPlan(w http.ResponseWriter, r *http.Request, u User) error {
 	var in struct {
-		TeamID    string          `json:"teamId"`
-		Direction string          `json:"direction"`
-		Title     string          `json:"title"`
-		Stages    []TrainingStage `json:"stages"`
+		TeamID            string          `json:"teamId"`
+		Direction         string          `json:"direction"`
+		Title             string          `json:"title"`
+		Stages            []TrainingStage `json:"stages"`
+		ApplyToUnassessed bool            `json:"applyToUnassessed"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -134,11 +136,12 @@ func (a *App) createTrainingPlan(w http.ResponseWriter, r *http.Request, u User)
 	if count > 0 {
 		return fail(409, "该团队与技术组已有培养计划，请编辑已有计划")
 	}
-	if err := a.store.exec("INSERT INTO training_plans(id,team_id,direction,payload) VALUES(?,?,?,?)", plan.ID, plan.TeamID, plan.Direction, encoded(plan)); err != nil {
+	synced, err := a.saveTrainingPlan(r, plan, true, in.ApplyToUnassessed)
+	if err != nil {
 		return err
 	}
-	a.activity(u, "配置新生培养计划", plan.Direction+" · "+plan.Title)
-	respond(w, 201, map[string]any{"item": plan})
+	a.activity(u, "配置新生培养计划", plan.Direction+" · "+plan.Title+fmt.Sprintf(" · 同步 %d 人", synced))
+	respond(w, 201, map[string]any{"item": plan, "syncedCount": synced})
 	return nil
 }
 func (a *App) updateTrainingPlan(w http.ResponseWriter, r *http.Request, u User) error {
@@ -150,8 +153,9 @@ func (a *App) updateTrainingPlan(w http.ResponseWriter, r *http.Request, u User)
 		return err
 	}
 	var in struct {
-		Title  *string          `json:"title"`
-		Stages *[]TrainingStage `json:"stages"`
+		Title             *string          `json:"title"`
+		Stages            *[]TrainingStage `json:"stages"`
+		ApplyToUnassessed bool             `json:"applyToUnassessed"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -166,13 +170,70 @@ func (a *App) updateTrainingPlan(w http.ResponseWriter, r *http.Request, u User)
 		return err
 	}
 	plan.UpdatedBy, plan.UpdatedAt = u.ID, now()
-	if err := a.store.exec("UPDATE training_plans SET payload=? WHERE id=?", encoded(plan), plan.ID); err != nil {
+	synced, err := a.saveTrainingPlan(r, plan, false, in.ApplyToUnassessed)
+	if err != nil {
 		return err
 	}
-	a.activity(u, "更新新生培养计划", plan.Direction+" · "+plan.Title)
-	respond(w, 200, map[string]any{"item": plan})
+	a.activity(u, "更新新生培养计划", plan.Direction+" · "+plan.Title+fmt.Sprintf(" · 同步 %d 人", synced))
+	respond(w, 200, map[string]any{"item": plan, "syncedCount": synced})
 	return nil
 }
+
+// Save the plan and optional migration atomically. Assessed cycles are immutable.
+func (a *App) saveTrainingPlan(r *http.Request, plan TrainingPlan, create, apply bool) (int, error) {
+	tx, err := a.store.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	s := &Store{db: a.store.db, postgres: a.store.postgres, tx: tx}
+	if create {
+		err = s.exec("INSERT INTO training_plans(id,team_id,direction,payload) VALUES(?,?,?,?)", plan.ID, plan.TeamID, plan.Direction, encoded(plan))
+	} else {
+		err = s.exec("UPDATE training_plans SET payload=? WHERE id=?", encoded(plan), plan.ID)
+	}
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	if apply {
+		query := "SELECT payload FROM training_progress WHERE team_id=? AND direction=? AND status='training' ORDER BY id"
+		if s.postgres {
+			query += " FOR UPDATE"
+		}
+		items, err := readAll[TrainingProgress](s, query, plan.TeamID, plan.Direction)
+		if err != nil {
+			return 0, err
+		}
+		for _, p := range items {
+			if len(p.Decisions) != 0 || len(p.Stages) == 0 || p.CurrentStageID != p.Stages[0].ID {
+				continue
+			}
+			latest, err := latestTrainingInScope(s, p.UserID, p.TeamID, p.Direction)
+			if err != nil {
+				return 0, err
+			}
+			if latest == nil || latest.ID != p.ID {
+				continue
+			}
+			active, err := trainingEnrollmentActive(s, p)
+			if err != nil {
+				return 0, err
+			}
+			if !active {
+				continue
+			}
+			p.PlanID, p.PlanTitle, p.Stages = plan.ID, plan.Title, plan.Stages
+			p.CurrentStageID, p.UpdatedAt = plan.Stages[0].ID, now()
+			if err := s.exec("UPDATE training_progress SET payload=? WHERE id=?", encoded(p), p.ID); err != nil {
+				return 0, err
+			}
+			count++
+		}
+	}
+	return count, tx.Commit()
+}
+
 func latestTraining(s *Store, userID string) (*TrainingProgress, error) {
 	p, err := readOne[TrainingProgress](s, "SELECT payload FROM training_progress WHERE user_id=? ORDER BY cycle DESC LIMIT 1", userID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -361,7 +422,11 @@ func (a *App) decideTrainingStage(w http.ResponseWriter, r *http.Request, u User
 	out := []TrainingProgress{}
 	var batchFinal *bool
 	for _, id := range in.ProgressIDs {
-		p, err := readOne[TrainingProgress](s, "SELECT payload FROM training_progress WHERE id=?", id)
+		query := "SELECT payload FROM training_progress WHERE id=?"
+		if s.postgres {
+			query += " FOR UPDATE"
+		}
+		p, err := readOne[TrainingProgress](s, query, id)
 		if err != nil {
 			return err
 		}

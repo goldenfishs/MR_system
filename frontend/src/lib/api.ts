@@ -36,66 +36,84 @@ async function request<T>(
   const requestSession = sessionGeneration;
   // Profile images are sent as base64 JSON. Allow the server enough time to
   // decode/store a 2 MiB image without changing the normal request timeout.
-  const timeoutMs = method === "POST" && path.startsWith("/certificate-")
+  const timeoutMs = method === "POST" && (path === "/bank-sync/preview" || path === "/bank-sync/apply")
+    ? 120000
+    : method === "POST" && path.startsWith("/certificate-")
     ? 300000
     : method === "PATCH" && (path === "/profile" || path === "/profile/avatar")
     ? 120000
     : body instanceof FormData
       ? 120000
       : 20000;
-  const timeout = AbortSignal.timeout(timeoutMs);
-  let response: Response;
+  // Older mobile WebViews lack AbortSignal.any/timeout. Use the widely
+  // supported controller API, and detach listeners after each request.
+  const controller = new AbortController();
+  let timedOut = false;
+  const cancel = () => controller.abort();
+  if (signal?.aborted) cancel();
+  else signal?.addEventListener("abort", cancel, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   try {
-    response = await fetch(`/api${path}`, {
-      method,
-      credentials: "same-origin",
-      cache: "no-store",
-      headers:
-        body === undefined || body instanceof FormData
-          ? {}
-          : { "Content-Type": "application/json" },
-      body:
-        body === undefined
-          ? undefined
-          : body instanceof FormData
-            ? body
-            : JSON.stringify(body),
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-    });
-  } catch {
-    throw new ApiError(
-      timeout.aborted
-        ? "请求等待超时，请检查网络后重试。你的输入仍保留在页面中。"
-        : "连接失败，请检查网络后重试。你的输入仍保留在页面中。",
-      0,
-    );
+    let response: Response;
+    try {
+      response = await fetch(`/api${path}`, {
+        method,
+        credentials: "same-origin",
+        cache: "no-store",
+        headers:
+          body === undefined || body instanceof FormData
+            ? {}
+            : { "Content-Type": "application/json" },
+        body:
+          body === undefined
+            ? undefined
+            : body instanceof FormData
+              ? body
+              : JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch {
+      throw new ApiError(
+        timedOut
+          ? "请求等待超时，请检查网络后重试。你的输入仍保留在页面中。"
+          : "连接失败，请检查网络后重试。你的输入仍保留在页面中。",
+        0,
+      );
+    }
+    let data: any;
+    try {
+      data = await response.json();
+    } catch {
+      throw new ApiError(
+        "服务返回了无效响应，请稍后重试。",
+        response.status,
+        retryAfterSeconds(response),
+      );
+    }
+    if (!response.ok) {
+      if (response.status === 401 && !path.startsWith("/auth/") && sessionActive && requestSession === sessionGeneration)
+        window.dispatchEvent(new Event("session-expired"));
+      throw new ApiError(
+        data.error || "操作失败，请稍后重试。",
+        response.status,
+        retryAfterSeconds(response, data),
+      );
+    }
+    return data as T;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", cancel);
   }
-  let data: any;
-  try {
-    data = await response.json();
-  } catch {
-    throw new ApiError(
-      "服务返回了无效响应，请稍后重试。",
-      response.status,
-      retryAfterSeconds(response),
-    );
-  }
-  if (!response.ok) {
-    if (response.status === 401 && !path.startsWith("/auth/") && sessionActive && requestSession === sessionGeneration)
-      window.dispatchEvent(new Event("session-expired"));
-    throw new ApiError(
-      data.error || "操作失败，请稍后重试。",
-      response.status,
-      retryAfterSeconds(response, data),
-    );
-  }
-  return data as T;
 }
 export const api = {
   upload: <T>(path: string, body: FormData, signal?: AbortSignal) =>
     request<T>(path, "POST", body, signal),
   get: <T>(path: string) => request<T>(path),
-  post: <T>(path: string, body?: unknown) => request<T>(path, "POST", body),
+  post: <T>(path: string, body?: unknown, signal?: AbortSignal) => request<T>(path, "POST", body, signal),
   patch: <T>(path: string, body: unknown) => request<T>(path, "PATCH", body),
+  put: <T>(path: string, body: unknown) => request<T>(path, "PUT", body),
   delete: <T>(path: string) => request<T>(path, "DELETE"),
 };

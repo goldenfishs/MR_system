@@ -162,7 +162,7 @@ onMounted(load);
   <div class="page-content">
     <div class="mail-heading">
       <div>
-        <h1 class="page-title">批量邮件</h1>
+        <h1 class="page-title">邮件管理</h1>
         <p class="page-subtitle">
           选择系统用户、预览邮件，再逐人发送并记录结果。
         </p>
@@ -215,7 +215,7 @@ onMounted(load);
       :persistent="saving"
       ><v-card
         ><v-card-title class="d-flex align-center"
-          >撰写批量邮件<v-spacer /><v-btn
+          >撰写邮件<v-spacer /><v-btn
             icon="mdi-close"
             aria-label="关闭邮件草稿"
             variant="text"

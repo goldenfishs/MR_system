@@ -1,6 +1,9 @@
 package main
 
 type User struct {
+	DeactivatedAt         string       `json:"deactivatedAt,omitempty"`
+	DeactivatedBy         string       `json:"deactivatedBy,omitempty"`
+	DeactivationReason    string       `json:"deactivationReason,omitempty"`
 	ID                    string       `json:"id"`
 	Name                  string       `json:"name"`
 	Email                 string       `json:"email"`
@@ -9,6 +12,9 @@ type User struct {
 	AssessmentPassedAt    string       `json:"assessmentPassedAt,omitempty"`
 	AssessmentConfirmedBy string       `json:"assessmentConfirmedBy,omitempty"`
 	AssessmentNote        string       `json:"assessmentNote,omitempty"`
+	PromotionOverrideAt   string       `json:"promotionOverrideAt,omitempty"`
+	PromotionOverrideBy   string       `json:"promotionOverrideBy,omitempty"`
+	PromotionOverrideNote string       `json:"promotionOverrideNote,omitempty"`
 	GroupGrants           []GroupGrant `json:"groupGrants"`
 	Team                  string       `json:"team"`
 	Direction             string       `json:"direction"`
@@ -39,6 +45,10 @@ type Applicant struct {
 	UpdatedAt       string   `json:"updatedAt"`
 }
 type Task struct {
+	BankVisibility    string             `json:"bankVisibility"`
+	Status            string             `json:"status"`
+	PublishedAt       string             `json:"publishedAt,omitempty"`
+	Questions         []TaskQuestion     `json:"questions,omitempty"`
 	IllustrationURL   string             `json:"illustrationUrl,omitempty"`
 	IllustrationAlt   string             `json:"illustrationAlt,omitempty"`
 	MechanicalProblem *MechanicalProblem `json:"mechanicalProblem,omitempty"`
@@ -71,23 +81,54 @@ type Task struct {
 	SubmissionCount   int                `json:"submissionCount"`
 	MySubmission      *Submission        `json:"mySubmission"`
 }
+type TaskQuestion struct {
+	IllustrationURL  string       `json:"illustrationUrl,omitempty"`
+	IllustrationAlt  string       `json:"illustrationAlt,omitempty"`
+	GroupID          string       `json:"groupId,omitempty"`
+	GroupTitle       string       `json:"groupTitle,omitempty"`
+	GroupDescription string       `json:"groupDescription,omitempty"`
+	SourceProblemID  string       `json:"sourceProblemId,omitempty"`
+	AutoGrade        bool         `json:"autoGrade,omitempty"`
+	Answers          []string     `json:"answers,omitempty"`
+	Explanation      string       `json:"explanation,omitempty"`
+	Judge            *JudgeConfig `json:"judge,omitempty"`
+	ID               string       `json:"id"`
+	Title            string       `json:"title"`
+	Description      string       `json:"description"`
+	Type             string       `json:"type,omitempty"`
+	Options          []string     `json:"options,omitempty"`
+	FileIDs          []string     `json:"fileIds"`
+	MaxScore         float64      `json:"maxScore"`
+}
+type SubmissionAnswer struct {
+	AutoGraded bool     `json:"autoGraded,omitempty"`
+	JudgeRunID string   `json:"judgeRunId,omitempty"`
+	QuestionID string   `json:"questionId"`
+	FileIDs    []string `json:"fileIds"`
+	Response   string   `json:"response,omitempty"`
+	Score      *float64 `json:"score,omitempty"`
+	Feedback   string   `json:"feedback,omitempty"`
+	Status     string   `json:"status,omitempty"`
+}
 type Submission struct {
-	FileIDs     []string `json:"fileIds"`
-	JudgeRunID  string   `json:"judgeRunId,omitempty"`
-	ID          string   `json:"id"`
-	TaskID      string   `json:"taskId"`
-	UserID      string   `json:"userId"`
-	UserName    string   `json:"userName"`
-	Content     string   `json:"content"`
-	RepoURL     string   `json:"repoUrl"`
-	ArtifactURL string   `json:"artifactUrl"`
-	Version     int      `json:"version"`
-	Status      string   `json:"status"`
-	Score       *float64 `json:"score"`
-	Feedback    string   `json:"feedback"`
-	ReviewedBy  string   `json:"reviewedBy"`
-	CreatedAt   string   `json:"createdAt"`
-	ReviewedAt  string   `json:"reviewedAt"`
+	Answers     []SubmissionAnswer `json:"answers,omitempty"`
+	FinalizedAt string             `json:"finalizedAt,omitempty"`
+	FileIDs     []string           `json:"fileIds"`
+	JudgeRunID  string             `json:"judgeRunId,omitempty"`
+	ID          string             `json:"id"`
+	TaskID      string             `json:"taskId"`
+	UserID      string             `json:"userId"`
+	UserName    string             `json:"userName"`
+	Content     string             `json:"content"`
+	RepoURL     string             `json:"repoUrl"`
+	ArtifactURL string             `json:"artifactUrl"`
+	Version     int                `json:"version"`
+	Status      string             `json:"status"`
+	Score       *float64           `json:"score"`
+	Feedback    string             `json:"feedback"`
+	ReviewedBy  string             `json:"reviewedBy"`
+	CreatedAt   string             `json:"createdAt"`
+	ReviewedAt  string             `json:"reviewedAt"`
 }
 type Activity struct {
 	ID        string `json:"id"`

@@ -10,6 +10,7 @@ import type { Permission, Settings } from "./lib/types";
 import type { Profile } from "./lib/platform";
 import { navigationError } from "./router";
 import ProfileCompletionReminder from "./components/ProfileCompletionReminder.vue";
+import VersionNotice from "./components/VersionNotice.vue";
 const route = useRoute(),
   router = useRouter();
 const { mobile } = useDisplay();
@@ -31,6 +32,7 @@ const navigation = computed(() => [
     title: "团队报名",
     icon: "mdi-account-multiple-plus-outline",
   },
+  ...(!hasPermission("recruitment") ? [{ path: "/recruitment", title: "我的面试", icon: "mdi-account-clock-outline" }] : []),
   { path: "/training", title: "新生考核", icon: "mdi-account-school-outline" },
   ...(canOpenLearning.value ? [{
     path: "/learning",
@@ -46,10 +48,11 @@ const navigation = computed(() => [
   { path: "/profile", title: "个人中心", icon: "mdi-account-circle-outline" },
 ]);
 const managementNavigation = computed(() => [
+  ...(auth.user?.role === "admin" ? [{ path: "/bank-management", title: "题库管理", icon: "mdi-bookshelf" }] : []),
   ...(hasPermission("recruitment") ? [{ path: "/applications", title: "报名审核", icon: "mdi-account-check-outline" }] : []),
-  ...(hasPermission("members") ? [{ path: "/members", title: auth.user?.role === "admin" ? "用户与权限" : "组内成员", icon: "mdi-account-group-outline" }] : []),
-  ...(hasPermission("mail") ? [{ path: "/mail", title: "批量邮件", icon: "mdi-email-multiple-outline" }] : []),
-  ...(hasPermission("recruitment") ? [{ path: "/recruitment", title: "面试记录", icon: "mdi-account-clock-outline" }] : []),
+  ...(hasPermission("members") ? [{ path: "/members", title: auth.user?.role === "admin" ? "用户管理" : "组内成员", icon: "mdi-account-group-outline" }] : []),
+  ...(hasPermission("mail") ? [{ path: "/mail", title: "邮件管理", icon: "mdi-email-multiple-outline" }] : []),
+  ...(hasPermission("recruitment") ? [{ path: "/recruitment", title: "面试管理", icon: "mdi-account-clock-outline" }] : []),
 ]);
 function reopenPage() {
   window.location.assign(navigationError.target || route.fullPath);
@@ -163,11 +166,10 @@ const sectionTabs = computed(() => {
   if (route.path === "/recruitment" && hasPermission("recruitment"))
     return [
       { value: "all", title: "全部报名" },
-      { value: "submitted", title: "待筛选" },
-      { value: "screening", title: "筛选中" },
-      { value: "interview", title: "待面试" },
+      { value: "pending", title: "待面试" },
+      { value: "exempt", title: "线下面试已通过" },
       { value: "accepted", title: "已录取" },
-      { value: "rejected", title: "未录取" },
+      { value: "rejected", title: "未通过" },
     ];
   if (route.path === "/learning") {
     const direction = typeof route.query.direction === "string" ? route.query.direction : undefined;
@@ -321,7 +323,7 @@ function directionLink(direction: string) {
         />
         <v-app-bar-title>{{
           route.path === "/recruitment" && !hasPermission("recruitment")
-            ? "我的报名"
+            ? "我的面试"
             : route.path === "/learning" && route.query.direction
               ? groupLabel(String(route.query.direction))
               : route.meta.title
@@ -381,6 +383,7 @@ function directionLink(direction: string) {
       </v-app-bar>
     </template>
     <v-main>
+      <VersionNotice />
       <v-alert v-if="navigationError.message" type="error" variant="tonal" class="ma-5" role="alert">
         {{ navigationError.message }}
         <div class="mt-3 d-flex flex-wrap ga-2"><v-btn color="error" variant="tonal" @click="reopenPage">重新打开页面</v-btn><v-btn variant="text" @click="navigationError.message = ''">暂时关闭</v-btn></div>

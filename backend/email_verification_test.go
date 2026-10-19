@@ -33,6 +33,9 @@ func (m *testMailer) SendVerification(_ context.Context, email, code string) err
 	m.messages = append(m.messages, testMail{email, code})
 	return m.err
 }
+func (m *testMailer) SendPasswordReset(ctx context.Context, email, code string) error {
+	return m.SendVerification(ctx, email, code)
+}
 func (m *testMailer) last(t *testing.T) testMail {
 	t.Helper()
 	m.mu.Lock()

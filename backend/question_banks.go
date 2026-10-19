@@ -43,7 +43,7 @@ type questionBank struct {
 func loadQuestionBanks() ([]questionBank, error) {
 	banks := []questionBank{
 		{ID: "algorithm-basics-v1", Name: "C++ / Python 基础与算法", Direction: "视觉算法", Topics: []string{"C++", "Python", "数据结构", "算法编程"}},
-		{ID: "mcu-basics-v1", Name: "单片机与嵌入式基础", Direction: "电控", Topics: []string{"GPIO", "中断与定时器", "通信接口", "ADC / PWM"}},
+		{ID: "mcu-basics-v1", Name: "C语言与STM32学习题库", Direction: "电控", Topics: []string{"C语言基础", "C语言进阶", "STM32单片机基础", "单片机通用基础"}},
 		{ID: "hardware-basics-v1", Name: "元件识别与电路基础", Direction: "硬件", Topics: []string{"元件识别", "模拟电路", "数字电路", "电源基础"}},
 	}
 	entries, err := questionBankFiles.ReadDir("question_banks")
@@ -107,6 +107,7 @@ func (q bankQuestion) task(u User) Task {
 }
 
 func (a *App) registerQuestionBankRoutes(m *http.ServeMux) {
+	a.registerBankSyncRoutes(m)
 	m.HandleFunc("GET /api/question-banks", a.wrap(true, a.listQuestionBanks))
 	m.HandleFunc("POST /api/question-banks/{id}/import", a.wrap(true, a.importQuestionBank))
 }
@@ -132,6 +133,14 @@ func (a *App) listQuestionBanks(w http.ResponseWriter, r *http.Request, u User) 
 func (a *App) importQuestionBank(w http.ResponseWriter, r *http.Request, u User) error {
 	if !hasAnyPermission(u, "tasks") {
 		return fail(403, "没有题库管理权限")
+	}
+	var in struct {
+		SyncCourseTags bool `json:"syncCourseTags"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := decode(r, &in); err != nil {
+			return err
+		}
 	}
 	banks, err := loadQuestionBanks()
 	if err != nil {
@@ -166,13 +175,26 @@ func (a *App) importQuestionBank(w http.ResponseWriter, r *http.Request, u User)
 	}
 	defer tx.Rollback()
 	s := &Store{db: a.store.db, postgres: a.store.postgres, tx: tx}
-	imported, skipped := 0, 0
+	imported, skipped, grouped := 0, 0, 0
 	for _, t := range tasks {
 		var count int
 		if err = s.row("SELECT COUNT(*) FROM tasks WHERE id=?", t.ID).Scan(&count); err != nil {
 			return err
 		}
 		if count > 0 {
+			// Opt-in course metadata only; preserve authored content and results.
+			if in.SyncCourseTags {
+				existing, readErr := s.task(t.ID)
+				if readErr != nil {
+					return readErr
+				}
+				if addCourseTag(&existing, t) {
+					if err = s.exec("UPDATE tasks SET payload=? WHERE id=?", encoded(existing), existing.ID); err != nil {
+						return err
+					}
+					grouped++
+				}
+			}
 			skipped++
 			continue
 		}
@@ -187,6 +209,28 @@ func (a *App) importQuestionBank(w http.ResponseWriter, r *http.Request, u User)
 	if imported > 0 {
 		a.activity(u, "导入基础题库", fmt.Sprintf("%s：%d 道", selected.Name, imported))
 	}
-	respond(w, 200, map[string]any{"imported": imported, "skipped": skipped, "total": len(tasks)})
+	if grouped > 0 {
+		a.activity(u, "补充题库课程标签", fmt.Sprintf("%s：%d 道", selected.Name, grouped))
+	}
+	respond(w, 200, map[string]any{"imported": imported, "skipped": skipped, "grouped": grouped, "total": len(tasks)})
 	return nil
+}
+
+func addCourseTag(existing *Task, source Task) bool {
+	if existing.Direction != "电控" || existing.Direction != source.Direction || existing.Category != "problem" || len(existing.Tags) >= 10 {
+		return false
+	}
+	courses := []string{"C语言基础", "C语言进阶", "STM32单片机基础", "单片机通用基础"}
+	for _, tag := range existing.Tags {
+		if includesID(courses, tag) {
+			return false
+		} // Keep administrator classification.
+	}
+	for _, tag := range source.Tags {
+		if includesID(courses, tag) {
+			existing.Tags = append([]string{tag}, existing.Tags...)
+			return true
+		}
+	}
+	return false
 }

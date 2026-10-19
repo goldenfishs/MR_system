@@ -24,14 +24,13 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 type Config struct {
 	Demo                bool
 	Secure              bool
 	PublicOrigin        string
+	TrustedProxyIPs     string
 	WebDir              string
 	Mailer              VerificationMailer
 	EmailFrom           string
@@ -53,6 +52,7 @@ type App struct {
 	rateMu      sync.Mutex
 	platformMu  sync.Mutex
 	judgeSlots  chan struct{}
+	resetSlots  chan struct{}
 	mailMu      sync.RWMutex
 	mailService *mailServiceSnapshot
 }
@@ -98,7 +98,9 @@ func decode(r *http.Request, v any) error {
 	}
 	return nil
 }
-func isStaff(u User) bool { return u.Role == "admin" || u.Role == "group_admin" }
+func isStaff(u User) bool {
+	return u.DeactivatedAt == "" && (u.Role == "admin" || u.Role == "group_admin")
+}
 func canManage(u User) bool {
 	return hasAnyPermission(u, "tasks") || hasAnyPermission(u, "knowledge") || hasAnyPermission(u, "discussions")
 }
@@ -228,6 +230,9 @@ func (a *App) Handler() http.Handler {
 	m.HandleFunc("POST /api/settings/logo", a.wrap(true, a.uploadBrandLogo))
 	m.HandleFunc("POST /api/auth/login", a.wrap(false, a.login))
 	m.HandleFunc("POST /api/auth/register", a.wrap(false, a.register))
+	m.HandleFunc("POST /api/auth/password-reset/request", a.wrapWithMutationLock(false, false, a.requestPasswordReset))
+	m.HandleFunc("POST /api/auth/password-reset/confirm", a.wrap(false, a.confirmPasswordReset))
+	m.HandleFunc("POST /api/auth/verification-status", a.wrapWithMutationLock(false, false, a.verificationSendStatus))
 	m.HandleFunc("POST /api/auth/send-verification-code", a.wrapWithMutationLock(false, false, a.sendVerificationCode))
 	m.HandleFunc("POST /api/auth/logout", a.wrap(false, a.logout))
 	m.HandleFunc("GET /api/auth/me", a.wrap(true, func(w http.ResponseWriter, r *http.Request, u User) error {
@@ -241,6 +246,7 @@ func (a *App) Handler() http.Handler {
 	m.HandleFunc("GET /api/members", a.wrap(true, a.members))
 	m.HandleFunc("POST /api/members", a.wrap(true, a.createMember))
 	m.HandleFunc("PATCH /api/members/{id}", a.wrap(true, a.updateMember))
+	m.HandleFunc("PUT /api/members/{id}/password", a.wrap(true, a.setMemberPassword))
 	m.HandleFunc("GET /api/tasks", a.wrap(true, a.listTasks))
 	m.HandleFunc("POST /api/tasks", a.wrap(true, a.createTask))
 	m.HandleFunc("GET /api/tasks/{id}/submissions", a.wrap(true, a.listSubmissions))
@@ -322,7 +328,14 @@ func (a *App) currentUser(r *http.Request) (User, error) {
 	if len(c.Value) != 40 {
 		return User{}, sql.ErrNoRows
 	}
-	return readOne[User](a.store, `SELECT u.payload FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires_at>?`, tokenHash(c.Value), now())
+	u, err := readOne[User](a.store, `SELECT u.payload FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires_at>?`, tokenHash(c.Value), now())
+	if err != nil {
+		return User{}, err
+	}
+	if u.DeactivatedAt != "" {
+		return User{}, sql.ErrNoRows
+	}
+	return u, nil
 }
 func (a *App) setSession(w http.ResponseWriter, r *http.Request, u User) error {
 	cookie, err := a.createSession(a.store, r, u)
@@ -336,6 +349,14 @@ func (a *App) setSession(w http.ResponseWriter, r *http.Request, u User) error {
 // createSession accepts a transaction-scoped store so registration, challenge
 // consumption, and the initial session either commit together or roll back.
 func (a *App) createSession(s *Store, r *http.Request, u User) (*http.Cookie, error) {
+	// Read current status rather than trusting a caller's potentially stale User.
+	current, err := s.user(u.ID)
+	if err != nil {
+		return nil, err
+	}
+	if current.DeactivatedAt != "" {
+		return nil, fail(403, "该账号已注销，请联系管理员恢复")
+	}
 	if c, err := r.Cookie("robot_hub_session"); err == nil {
 		if err = s.exec("DELETE FROM sessions WHERE token_hash=?", tokenHash(c.Value)); err != nil {
 			return nil, err
@@ -351,20 +372,32 @@ func (a *App) createSession(s *Store, r *http.Request, u User) (*http.Cookie, er
 	}
 	return &http.Cookie{Name: "robot_hub_session", Value: token, Path: "/", HttpOnly: true, Secure: a.config.Secure, SameSite: http.SameSiteLaxMode, MaxAge: 86400, Expires: expiry}, nil
 }
-func rateKey(r *http.Request, email string) string {
+func (a *App) rateKey(r *http.Request, email string) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
+	}
+	// Only explicitly configured proxy peers may supply a client address.
+	// The ingress must overwrite X-Real-IP rather than forwarding user input.
+	peer := net.ParseIP(host)
+	for _, trusted := range strings.Split(a.config.TrustedProxyIPs, ",") {
+		ip := net.ParseIP(strings.TrimSpace(trusted))
+		if peer != nil && ip != nil && peer.Equal(ip) {
+			if client := net.ParseIP(strings.TrimSpace(r.Header.Get("X-Real-IP"))); client != nil {
+				host = client.String()
+			}
+			break
+		}
 	}
 	return host + "|" + email
 }
 func (a *App) clearRate(r *http.Request, email string) {
 	a.rateMu.Lock()
-	delete(a.attempts, rateKey(r, email))
+	delete(a.attempts, a.rateKey(r, email))
 	a.rateMu.Unlock()
 }
 func (a *App) rateAllowed(r *http.Request, email string) bool {
-	host := rateKey(r, email)
+	host := a.rateKey(r, email)
 	a.rateMu.Lock()
 	defer a.rateMu.Unlock()
 	for k, v := range a.attempts {
@@ -389,7 +422,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request, _ User) error {
 		return err
 	}
 	email, valid := normalizedEmail(in.Email)
-	if !valid || len(in.Password) > 72 || len(in.Password) < 1 {
+	if !valid || len(in.Password) < 1 {
 		return fail(401, "邮箱或密码不正确")
 	}
 	if !a.rateAllowed(r, email) {
@@ -403,7 +436,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request, _ User) error {
 	if err != nil {
 		hash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
 	}
-	match := bcrypt.CompareHashAndPassword([]byte(hash), []byte(in.Password))
+	match := comparePassword(hash, in.Password)
 	if err != nil || match != nil {
 		return fail(401, "邮箱或密码不正确")
 	}
@@ -687,7 +720,8 @@ func (a *App) members(w http.ResponseWriter, r *http.Request, u User) error {
 	}
 	type memberEntry struct {
 		User
-		Teams []memberTeam `json:"teams"`
+		Teams      []memberTeam `json:"teams"`
+		Directions []string     `json:"directions"`
 	}
 	teamMap := map[string]Team{}
 	for _, team := range teams {
@@ -702,7 +736,17 @@ func (a *App) members(w http.ResponseWriter, r *http.Request, u User) error {
 		if !allowed {
 			continue
 		}
-		entry := memberEntry{User: member, Teams: []memberTeam{}}
+		directions, err := a.memberDirections(member.ID)
+		if err != nil {
+			return err
+		}
+		visibleDirections := []string{}
+		for _, direction := range directions {
+			if hasPermission(u, direction, "members") {
+				visibleDirections = append(visibleDirections, direction)
+			}
+		}
+		entry := memberEntry{User: member, Teams: []memberTeam{}, Directions: visibleDirections}
 		for _, membership := range memberships {
 			if membership.UserID == member.ID && (u.Role == "admin" || hasPermission(u, membership.Direction, "members")) {
 				team := teamMap[membership.TeamID]
@@ -827,7 +871,7 @@ func (a *App) tasksFor(u User) ([]Task, error) {
 		t.MySubmission = nil
 		t.MyAccepted = false
 		for _, run := range runs {
-			if run.TaskID == t.ID && run.Status == "completed" {
+			if !run.Preview && run.TaskID == t.ID && run.Status == "completed" {
 				t.AttemptCount++
 				if run.Total > 0 && run.Passed == run.Total {
 					t.AcceptedCount++
@@ -870,7 +914,7 @@ func (a *App) tasksFor(u User) ([]Task, error) {
 			}
 		}
 		t.Assigned = a.requireTaskEnrollment(t, u) == nil
-		t.CanSubmit = t.Assigned && a.requireTaskSubmission(t, u) == nil
+		t.CanSubmit = a.requireTaskSubmission(t, u) == nil
 		if t.MechanicalProblem != nil && t.MechanicalProblem.Type == "drawing" {
 			t.CanSubmit = false
 		}
@@ -887,6 +931,9 @@ func (a *App) listTasks(w http.ResponseWriter, r *http.Request, u User) error {
 	filtered := []Task{}
 	query := r.URL.Query()
 	for _, t := range items {
+		if visibility := query.Get("bankVisibility"); visibility != "" && t.BankVisibility != visibility {
+			continue
+		}
 		if category := query.Get("category"); category != "" && t.Category != category {
 			continue
 		}
@@ -921,10 +968,21 @@ func (a *App) createTask(w http.ResponseWriter, r *http.Request, u User) error {
 	t.MySubmission = nil
 	t.SubmissionCount, t.AcceptedCount, t.AttemptCount = 0, 0, 0
 	t.Locked, t.MyAccepted, t.Assigned, t.CanSubmit = false, false, false, false
+	if t.Status == "draft" {
+		t.PublishedAt = ""
+	}
 	if err := a.store.exec("INSERT INTO tasks(id,payload) VALUES(?,?)", t.ID, encoded(t)); err != nil {
 		return err
 	}
-	a.activity(u, "发布培养任务", t.Title)
+	if t.Status == "draft" {
+		a.activity(u, "创建培养任务草稿", t.Title)
+	} else {
+		if t.Status == "draft" {
+			a.activity(u, "保存培养作业草稿", t.Title)
+		} else {
+			a.activity(u, "发布培养任务", t.Title)
+		}
+	}
 	respond(w, 201, map[string]any{"item": t})
 	return nil
 }
@@ -960,6 +1018,10 @@ func (a *App) submitTask(w http.ResponseWriter, r *http.Request, u User) error {
 	t, err := a.store.task(r.PathValue("id"))
 	if err != nil {
 		return err
+	}
+	normalizeTask(&t)
+	if len(t.Questions) > 0 {
+		return fail(400, "多题作业请先逐题保存答案，再提交整份作业")
 	}
 	if t.MechanicalProblem != nil {
 		return fail(400, "选择或填空题请直接作答；图纸题供自由练习，无需提交")
@@ -999,6 +1061,247 @@ func (a *App) submitTask(w http.ResponseWriter, r *http.Request, u User) error {
 	respond(w, 201, map[string]any{"item": s})
 	return nil
 }
+
+func normalizeSubmissionAnswers(t Task, input []SubmissionAnswer, requireComplete bool) ([]SubmissionAnswer, []string, error) {
+	if len(input) != len(t.Questions) {
+		return nil, nil, fail(400, "请为每道题提供一份答案记录")
+	}
+	byID := make(map[string]SubmissionAnswer, len(input))
+	for _, answer := range input {
+		if answer.QuestionID == "" || byID[answer.QuestionID].QuestionID != "" {
+			return nil, nil, fail(400, "题目答案编号缺失或重复")
+		}
+		if answer.AutoGraded || answer.Score != nil || answer.Status != "" || strings.TrimSpace(answer.Feedback) != "" {
+			return nil, nil, fail(400, "提交答案不能包含评分信息")
+		}
+		byID[answer.QuestionID] = answer
+	}
+	answers := make([]SubmissionAnswer, 0, len(t.Questions))
+	allFiles := []string{}
+	seenFiles := map[string]bool{}
+	for _, question := range t.Questions {
+		answer, ok := byID[question.ID]
+		if !ok {
+			return nil, nil, fail(400, "请为每道题提供一份答案记录")
+		}
+		if len(answer.FileIDs) > 20 {
+			return nil, nil, fail(400, "每道题最多上传 20 个答案文件")
+		}
+		answer.Response = strings.TrimSpace(answer.Response)
+		if len(answer.Response) > 20000 {
+			return nil, nil, fail(400, "单题文字答案不能超过 20000 字节")
+		}
+		switch question.Type {
+		case "single_choice":
+			if answer.Response != "" {
+				index, err := strconv.Atoi(answer.Response)
+				if err != nil || index < 0 || index >= len(question.Options) || strconv.Itoa(index) != answer.Response {
+					return nil, nil, fail(400, "单选题答案编号无效")
+				}
+			}
+			if requireComplete && answer.Response == "" {
+				return nil, nil, fail(400, "请完成每一道选择题")
+			}
+		case "multiple_choice":
+			choices := []string{}
+			if answer.Response != "" {
+				if err := json.Unmarshal([]byte(answer.Response), &choices); err != nil {
+					return nil, nil, fail(400, "多选题答案格式无效")
+				}
+			}
+			seenChoices := map[string]bool{}
+			for _, choice := range choices {
+				index, err := strconv.Atoi(choice)
+				if err != nil || index < 0 || index >= len(question.Options) || strconv.Itoa(index) != choice || seenChoices[choice] {
+					return nil, nil, fail(400, "多选题答案编号无效或重复")
+				}
+				seenChoices[choice] = true
+			}
+			if requireComplete && len(choices) == 0 {
+				return nil, nil, fail(400, "请完成每一道选择题")
+			}
+			sort.Slice(choices, func(i, j int) bool { return choices[i] < choices[j] })
+			answer.Response = encoded(choices)
+		case "fill_blank":
+			if requireComplete && answer.Response == "" {
+				return nil, nil, fail(400, "请完成每一道填空题")
+			}
+		case "code":
+			if answer.Response != "" || len(answer.FileIDs) > 0 {
+				return nil, nil, fail(400, "代码题答案只能使用在线判题记录提交")
+			}
+			if requireComplete && answer.JudgeRunID == "" {
+				return nil, nil, fail(400, "请先运行并提交每一道代码题")
+			}
+		case "short_answer":
+			if requireComplete && answer.Response == "" && len(answer.FileIDs) == 0 {
+				return nil, nil, fail(400, "请填写简答题答案或上传成果文件")
+			}
+		case "drawing":
+			if requireComplete && len(answer.FileIDs) == 0 {
+				return nil, nil, fail(400, "请为每道绘图题上传成果文件")
+			}
+		default:
+			return nil, nil, fail(400, "作业题型无效，请联系管理员")
+		}
+		if question.Type != "code" && answer.JudgeRunID != "" {
+			return nil, nil, fail(400, "只有代码题可以关联在线判题记录")
+		}
+		normalized := normalizedIDs(answer.FileIDs)
+		if len(normalized) != len(answer.FileIDs) {
+			return nil, nil, fail(400, "答案文件不能重复")
+		}
+		for _, fileID := range normalized {
+			if seenFiles[fileID] {
+				return nil, nil, fail(400, "同一答案文件不能重复关联到多道题")
+			}
+			seenFiles[fileID] = true
+			allFiles = append(allFiles, fileID)
+		}
+		answers = append(answers, SubmissionAnswer{QuestionID: question.ID, FileIDs: normalized, Response: answer.Response, JudgeRunID: answer.JudgeRunID})
+	}
+	return answers, allFiles, nil
+}
+
+func latestSubmissionForUser(items []Submission, userID string) *Submission {
+	for i := range items {
+		if items[i].UserID == userID {
+			return &items[i]
+		}
+	}
+	return nil
+}
+
+func (a *App) saveTaskSubmissionDraft(w http.ResponseWriter, r *http.Request, u User) error {
+	task, err := a.store.task(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	normalizeTask(&task)
+	if task.Category != "assignment" || len(task.Questions) == 0 {
+		return fail(400, "此接口仅用于多题作业")
+	}
+	if err = a.requireTaskSubmission(task, u); err != nil {
+		return err
+	}
+	var in struct {
+		Answers []SubmissionAnswer `json:"answers"`
+	}
+	if err = decode(r, &in); err != nil {
+		return err
+	}
+	answers, fileIDs, err := normalizeSubmissionAnswers(task, in.Answers, false)
+	if err != nil {
+		return err
+	}
+	for _, answer := range answers {
+		if err = requireOwnedFiles(a.store, u, answer.FileIDs); err != nil {
+			return err
+		}
+		if answer.JudgeRunID != "" {
+			question := taskQuestionByID(task, answer.QuestionID)
+			if question == nil {
+				return fail(400, "代码题目不存在")
+			}
+			if _, err = a.validateQuestionJudgeRun(task, *question, u, answer.JudgeRunID, false); err != nil {
+				return err
+			}
+		}
+	}
+	items, err := a.store.submissions(task.ID)
+	if err != nil {
+		return err
+	}
+	latest := latestSubmissionForUser(items, u.ID)
+	if latest != nil && latest.Status == "pending" {
+		return fail(409, "作业已提交，等待管理员审核")
+	}
+	if latest != nil && latest.Status == "approved" {
+		return fail(409, "作业已通过审核，不能再修改")
+	}
+	submission := Submission{Answers: answers, FileIDs: fileIDs, ID: randomID(), TaskID: task.ID, UserID: u.ID, UserName: u.Name, Status: "draft", CreatedAt: now()}
+	if latest != nil {
+		if latest.Status == "draft" && latest.FinalizedAt == "" {
+			submission.ID = latest.ID
+			submission.Version = latest.Version
+			if err = a.store.exec("UPDATE submissions SET payload=? WHERE id=?", encoded(submission), latest.ID); err != nil {
+				return err
+			}
+		} else if latest.Status == "changes_requested" {
+			submission.Version = latest.Version + 1
+			if err = a.store.exec("INSERT INTO submissions(id,task_id,user_id,version,payload) VALUES(?,?,?,?,?)", submission.ID, submission.TaskID, submission.UserID, submission.Version, encoded(submission)); err != nil {
+				return err
+			}
+		} else {
+			return fail(409, "当前作业状态不允许暂存新答案")
+		}
+	} else {
+		submission.Version = 1
+		if err = a.store.exec("INSERT INTO submissions(id,task_id,user_id,version,payload) VALUES(?,?,?,?,?)", submission.ID, submission.TaskID, submission.UserID, submission.Version, encoded(submission)); err != nil {
+			return err
+		}
+	}
+	a.activity(u, "保存作业答案草稿", task.Title)
+	respond(w, 200, map[string]any{"item": submission})
+	return nil
+}
+
+func (a *App) finalizeTaskSubmission(w http.ResponseWriter, r *http.Request, u User) error {
+	task, err := a.store.task(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	normalizeTask(&task)
+	if task.Category != "assignment" || len(task.Questions) == 0 {
+		return fail(400, "此接口仅用于多题作业")
+	}
+	if err = a.requireTaskSubmission(task, u); err != nil {
+		return err
+	}
+	items, err := a.store.submissions(task.ID)
+	if err != nil {
+		return err
+	}
+	latest := latestSubmissionForUser(items, u.ID)
+	if latest == nil || latest.Status != "draft" || latest.FinalizedAt != "" {
+		return fail(409, "请先保存作业答案草稿后再提交")
+	}
+	answers, fileIDs, err := normalizeSubmissionAnswers(task, latest.Answers, true)
+	if err != nil {
+		return err
+	}
+	for _, answer := range answers {
+		if err = requireOwnedFiles(a.store, u, answer.FileIDs); err != nil {
+			return err
+		}
+	}
+	verifiedRuns := map[string]JudgeRun{}
+	for i := range answers {
+		question := taskQuestionByID(task, answers[i].QuestionID)
+		if question == nil {
+			return fail(400, "作业题目不存在")
+		}
+		if question.Type == "code" {
+			run, verifyErr := a.validateQuestionJudgeRun(task, *question, u, answers[i].JudgeRunID, true)
+			if verifyErr != nil {
+				return verifyErr
+			}
+			verifiedRuns[question.ID] = run
+		}
+	}
+	latest.Answers = answers
+	latest.FileIDs = fileIDs
+	latest.Status = "pending"
+	latest.FinalizedAt = now()
+	autoGradeTaskSubmission(task, latest, verifiedRuns)
+	if err = a.store.exec("UPDATE submissions SET payload=? WHERE id=?", encoded(*latest), latest.ID); err != nil {
+		return err
+	}
+	a.activity(u, "提交作业", task.Title)
+	respond(w, 200, map[string]any{"item": latest})
+	return nil
+}
+
 func (a *App) reviewSubmission(w http.ResponseWriter, r *http.Request, u User) error {
 	if !hasAnyPermission(u, "tasks") {
 		return fail(403, "没有任务评阅权限")
@@ -1027,6 +1330,13 @@ func (a *App) reviewSubmission(w http.ResponseWriter, r *http.Request, u User) e
 	if latest != s.Version {
 		return fail(409, "已有新版本，请审核最新提交")
 	}
+	normalizeTask(&t)
+	if len(t.Questions) > 0 {
+		if s.FinalizedAt == "" || s.Status == "draft" {
+			return fail(409, "作业尚未正式提交，不能审核")
+		}
+		return a.reviewQuestionSubmission(w, r, u, t, s)
+	}
 	var in struct {
 		Status   string   `json:"status"`
 		Score    *float64 `json:"score"`
@@ -1053,6 +1363,182 @@ func (a *App) reviewSubmission(w http.ResponseWriter, r *http.Request, u User) e
 	respond(w, 200, map[string]any{"item": s})
 	return nil
 }
+
+// Drafts never call this function. Only a finalized complete submission is graded.
+func taskQuestionByID(task Task, questionID string) *TaskQuestion {
+	for i := range task.Questions {
+		if task.Questions[i].ID == questionID {
+			return &task.Questions[i]
+		}
+	}
+	return nil
+}
+
+func autoGradeTaskSubmission(task Task, submission *Submission, verifiedRuns ...map[string]JudgeRun) {
+	questions := map[string]TaskQuestion{}
+	for _, q := range task.Questions {
+		questions[q.ID] = q
+	}
+	runs := map[string]JudgeRun{}
+	if len(verifiedRuns) > 0 && verifiedRuns[0] != nil {
+		runs = verifiedRuns[0]
+	}
+	graded := false
+	for i := range submission.Answers {
+		answer := &submission.Answers[i]
+		q, ok := questions[answer.QuestionID]
+		if !ok {
+			continue
+		}
+		if q.Type == "code" {
+			run, exists := runs[q.ID]
+			if !exists {
+				continue
+			}
+			score := run.Score
+			answer.Score = &score
+			answer.Status = "approved"
+			answer.AutoGraded = true
+			answer.Feedback = fmt.Sprintf("在线判题：通过 %d / %d 个测试用例", run.Passed, run.Total)
+			graded = true
+			continue
+		}
+		if !q.AutoGrade || len(q.Answers) == 0 {
+			continue
+		}
+		correct := false
+		switch q.Type {
+		case "single_choice", "fill_blank":
+			correct = includesID(q.Answers, strings.TrimSpace(answer.Response))
+		case "multiple_choice":
+			var chosen []string
+			if json.Unmarshal([]byte(answer.Response), &chosen) == nil && len(chosen) == len(q.Answers) {
+				correct = true
+				seen := map[string]bool{}
+				for _, choice := range chosen {
+					if seen[choice] || !includesID(q.Answers, choice) {
+						correct = false
+					}
+					seen[choice] = true
+				}
+			}
+		default:
+			continue
+		}
+		score := 0.0
+		answer.Feedback = "自动判定：答案不正确"
+		if correct {
+			score = q.MaxScore
+			answer.Feedback = "自动判定：答案正确"
+		}
+		answer.Score, answer.Status, answer.AutoGraded = &score, "approved", true
+		graded = true
+	}
+	if graded {
+		aggregateTaskSubmission(task, submission)
+		if submission.Status == "approved" {
+			submission.ReviewedAt = now()
+		}
+	}
+}
+
+// Automatic and manual review share the same total/state computation.
+func aggregateTaskSubmission(task Task, submission *Submission) {
+	answers := map[string]SubmissionAnswer{}
+	for _, answer := range submission.Answers {
+		answers[answer.QuestionID] = answer
+	}
+	total := 0.0
+	allApproved := len(submission.Answers) == len(task.Questions)
+	hasChangesRequested := false
+	feedback := []string{}
+	for _, question := range task.Questions {
+		answer, ok := answers[question.ID]
+		if !ok {
+			allApproved = false
+			continue
+		}
+		if answer.Score != nil {
+			total += *answer.Score
+			if answer.Feedback != "" {
+				feedback = append(feedback, question.Title+"："+answer.Feedback)
+			}
+		}
+		if answer.Status == "changes_requested" {
+			hasChangesRequested = true
+		}
+		if answer.Status != "approved" || answer.Score == nil {
+			allApproved = false
+		}
+	}
+	submission.Score = &total
+	submission.Feedback = strings.Join(feedback, "\n")
+	switch {
+	case hasChangesRequested:
+		submission.Status = "changes_requested"
+	case allApproved:
+		submission.Status = "approved"
+	default:
+		submission.Status = "pending"
+	}
+}
+
+func (a *App) reviewQuestionSubmission(w http.ResponseWriter, r *http.Request, u User, task Task, submission Submission) error {
+	var in struct {
+		QuestionReviews []struct {
+			QuestionID string  `json:"questionId"`
+			Score      float64 `json:"score"`
+			Feedback   string  `json:"feedback"`
+			Status     string  `json:"status"`
+		} `json:"questionReviews"`
+	}
+	if err := decode(r, &in); err != nil {
+		return err
+	}
+	if len(in.QuestionReviews) == 0 || len(in.QuestionReviews) > len(task.Questions) {
+		return fail(400, "请至少提交一道题的评分")
+	}
+	questions := map[string]TaskQuestion{}
+	for _, question := range task.Questions {
+		questions[question.ID] = question
+	}
+	answers := map[string]int{}
+	for i := range submission.Answers {
+		answers[submission.Answers[i].QuestionID] = i
+	}
+	seen := map[string]bool{}
+	for _, review := range in.QuestionReviews {
+		question, ok := questions[review.QuestionID]
+		answerIndex, answerExists := answers[review.QuestionID]
+		if !ok || !answerExists || seen[review.QuestionID] {
+			return fail(400, "评分题目不存在或重复")
+		}
+		if (review.Status != "approved" && review.Status != "changes_requested") || !finite(review.Score) || review.Score < 0 || review.Score > question.MaxScore || len(review.Feedback) > 20000 {
+			return fail(400, "题目审核状态或分数无效")
+		}
+		if review.Status == "changes_requested" && strings.TrimSpace(review.Feedback) == "" {
+			return fail(400, "请说明该题需要修改的内容")
+		}
+		answer := &submission.Answers[answerIndex]
+		score := review.Score
+		answer.Score = &score
+		answer.Feedback = strings.TrimSpace(review.Feedback)
+		answer.Status = review.Status
+		answer.AutoGraded = false
+		seen[review.QuestionID] = true
+	}
+
+	aggregateTaskSubmission(task, &submission)
+	submission.ReviewedBy = u.ID
+	submission.ReviewedAt = now()
+	if err := a.store.exec("UPDATE submissions SET payload=? WHERE id=?", encoded(submission), submission.ID); err != nil {
+		return err
+	}
+	a.activity(u, "逐题审核作业成果", task.Title+" · "+submission.UserName)
+	respond(w, 200, map[string]any{"item": submission})
+	return nil
+}
+
 func (a *App) dashboard(w http.ResponseWriter, r *http.Request, u User) error {
 	apps, err := a.scopedApplicants(u)
 	if err != nil {
@@ -1146,7 +1632,7 @@ func newApp(store *Store, config Config) *App {
 	if config.CertificateRenderer == nil {
 		config.CertificateRenderer = defaultCertificateRenderer
 	}
-	return &App{store: store, config: config, attempts: map[string]attempt{}, judgeSlots: make(chan struct{}, 2)}
+	return &App{store: store, config: config, attempts: map[string]attempt{}, judgeSlots: make(chan struct{}, 2), resetSlots: make(chan struct{}, 8)}
 }
 func env(name, fallback string) string {
 	v := os.Getenv(name)
@@ -1181,7 +1667,7 @@ func main() {
 	if value, ok := mailer.(NoticeMailer); ok {
 		noticeMailer = value
 	}
-	app := newApp(store, Config{Mailer: mailer, NoticeMailer: noticeMailer, EmailFrom: emailConfig.From, EmailSecurity: emailConfig.Security, Demo: demo, Secure: os.Getenv("SESSION_SECURE") == "true", PublicOrigin: os.Getenv("PUBLIC_ORIGIN"), WebDir: env("WEB_DIR", "../frontend/dist"), UploadDir: env("UPLOAD_DIR", filepath.Join(env("DATA_DIR", "./data"), "uploads")), JudgeURL: os.Getenv("JUDGE_URL"), JudgeToken: os.Getenv("JUDGE_TOKEN")})
+	app := newApp(store, Config{TrustedProxyIPs: os.Getenv("TRUSTED_PROXY_IPS"), Mailer: mailer, NoticeMailer: noticeMailer, EmailFrom: emailConfig.From, EmailSecurity: emailConfig.Security, Demo: demo, Secure: os.Getenv("SESSION_SECURE") == "true", PublicOrigin: os.Getenv("PUBLIC_ORIGIN"), WebDir: env("WEB_DIR", "../frontend/dist"), UploadDir: env("UPLOAD_DIR", filepath.Join(env("DATA_DIR", "./data"), "uploads")), JudgeURL: os.Getenv("JUDGE_URL"), JudgeToken: os.Getenv("JUDGE_TOKEN")})
 	if err = app.loadStoredMailService(); err != nil {
 		log.Fatal(err)
 	}
@@ -1211,14 +1697,15 @@ func (a *App) createMember(w http.ResponseWriter, r *http.Request, u User) error
 		GroupGrants []GroupGrant `json:"groupGrants"`
 		Team        string       `json:"team"`
 		Direction   string       `json:"direction"`
+		Directions  []string     `json:"directions"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
 	email, valid := normalizedEmail(in.Email)
 	in.Name = strings.TrimSpace(in.Name)
-	if !valid || in.Name == "" || len(in.Name) > 100 || len(in.Password) < 12 || len(in.Password) > 72 || in.Team != "" && !validTeam(in.Team) {
-		return fail(400, "请填写有效的姓名、邮箱与 12–72 字节密码")
+	if !valid || in.Name == "" || len(in.Name) > 100 || !validNewPassword(in.Password) || in.Team != "" && !validTeam(in.Team) {
+		return fail(400, "请填写有效的姓名、邮箱与至少 6 个字符的密码")
 	}
 	if in.Role == "" {
 		in.Role = "freshman"
@@ -1227,6 +1714,17 @@ func (a *App) createMember(w http.ResponseWriter, r *http.Request, u User) error
 		return fail(400, "无效的账号角色")
 	}
 	member := User{Role: in.Role, MemberType: in.MemberType, GroupGrants: in.GroupGrants, Direction: in.Direction}
+	if in.Directions != nil {
+		directions, err := canonicalMemberDirections(in.Directions)
+		if err != nil {
+			return err
+		}
+		in.Directions = directions
+		member.Direction = ""
+		if len(directions) > 0 {
+			member.Direction = directions[0]
+		}
+	}
 	if member.MemberType == "" {
 		switch member.Role {
 		case "admin", "group_admin", "member":
@@ -1240,20 +1738,34 @@ func (a *App) createMember(w http.ResponseWriter, r *http.Request, u User) error
 	if err := validateUserAccess(&member); err != nil {
 		return err
 	}
+	tx, err := a.store.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	s := &Store{db: a.store.db, postgres: a.store.postgres, tx: tx}
 	var count int
-	if err := a.store.row("SELECT COUNT(*) FROM users WHERE email=?", email).Scan(&count); err != nil {
+	if err := s.row("SELECT COUNT(*) FROM users WHERE email=?", email).Scan(&count); err != nil {
 		return err
 	}
 	if count > 0 {
 		return fail(409, "该邮箱已注册")
 	}
-	created, err := createUser(a.store, in.Name, email, in.Password, member.Role, in.Team, in.Direction)
+	created, err := createUser(s, in.Name, email, in.Password, member.Role, in.Team, member.Direction)
 	if err != nil {
 		return err
 	}
 	created.MemberType = member.MemberType
 	created.GroupGrants = member.GroupGrants
-	if err = a.store.exec("UPDATE users SET payload=? WHERE id=?", encoded(created), created.ID); err != nil {
+	if in.Directions != nil {
+		if err = syncMemberDirections(s, u, created, in.Directions); err != nil {
+			return err
+		}
+	}
+	if err = s.exec("UPDATE users SET payload=? WHERE id=?", encoded(created), created.ID); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
 		return err
 	}
 	a.activity(u, "创建成员账号", created.Name)

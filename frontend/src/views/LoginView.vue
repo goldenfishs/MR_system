@@ -7,13 +7,17 @@ import type { PublicConfig, User } from "../lib/types";
 const route = useRoute(),
   router = useRouter();
 const register = ref(false),
+  resetMode = ref(false),
   email = ref(""),
   password = ref(""),
   confirmPassword = ref(""),
   verificationCode = ref(""),
+  resetCode = ref(""),
   error = ref(""),
   loading = ref(false),
   sending = ref(false),
+  sendingReset = ref(false),
+  checkingSendStatus = ref(false),
   sentMessage = ref(""),
   showPassword = ref(false);
 const config = ref<PublicConfig | null>(null);
@@ -22,6 +26,7 @@ const configLoading = ref(true),
 const competitions = computed(() => config.value?.competitions?.length ? config.value.competitions : ["RoboCon", "RoboMaster"]);
 const normalizedEmail = computed(() => email.value.trim().toLowerCase());
 const cooldowns = ref<Record<string, number>>({});
+const resetCooldowns = ref<Record<string, number>>({});
 const now = ref(Date.now());
 const cooldownSeconds = computed(() =>
   Math.max(
@@ -31,7 +36,11 @@ const cooldownSeconds = computed(() =>
     ),
   ),
 );
-const busy = computed(() => loading.value || sending.value);
+const resetCooldownSeconds = computed(() =>
+  Math.max(0, Math.ceil(((resetCooldowns.value[normalizedEmail.value] || 0) - now.value) / 1000)),
+);
+const busy = computed(() => loading.value || sending.value || sendingReset.value || checkingSendStatus.value);
+const resetBusy = busy;
 const registrationAvailable = computed(
   () => !configLoading.value && config.value?.registrationEnabled === true,
 );
@@ -48,6 +57,7 @@ const demoAccounts = [
 ];
 watch(email, () => {
   verificationCode.value = "";
+  resetCode.value = "";
   sentMessage.value = "";
   error.value = "";
 });
@@ -71,11 +81,44 @@ onUnmounted(() => clearInterval(countdownTimer));
 function selectMode(isRegister: boolean) {
   if (busy.value) return;
   register.value = isRegister;
+  resetMode.value = false;
+  password.value = "";
+  confirmPassword.value = "";
   error.value = "";
+  sentMessage.value = "";
+}
+function showPasswordReset() {
+  if (resetBusy.value) return;
+  register.value = false;
+  resetMode.value = true;
+  password.value = "";
+  confirmPassword.value = "";
+  verificationCode.value = "";
+  resetCode.value = "";
+  error.value = "";
+  sentMessage.value = "";
 }
 function startCooldown(address: string, seconds: number) {
   now.value = Date.now();
   cooldowns.value[address] = now.value + Math.max(1, seconds) * 1000;
+}
+async function refreshSendStatus() {
+  if (busy.value || !registrationAvailable.value) return;
+  const address = normalizedEmail.value;
+  checkingSendStatus.value = true;
+  try {
+    const result = await api.post<{ cooldownSeconds: number; message: string }>(
+      "/auth/verification-status", { email: address },
+    );
+    now.value = Date.now();
+    cooldowns.value[address] = now.value + Math.max(0, result.cooldownSeconds) * 1000;
+    error.value = result.cooldownSeconds > 0 ? result.message : "";
+    sentMessage.value = result.cooldownSeconds > 0 ? "" : "发送限制已解除，可以重新获取验证码。检查状态不会发送邮件。";
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    checkingSendStatus.value = false;
+  }
 }
 async function sendVerificationCode() {
   if (busy.value || !registrationAvailable.value || cooldownSeconds.value > 0)
@@ -107,6 +150,33 @@ async function sendVerificationCode() {
     sending.value = false;
   }
 }
+async function sendPasswordResetCode() {
+  if (resetBusy.value) return;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail.value)) {
+    error.value = "请先填写有效的邮箱地址。";
+    return;
+  }
+  sendingReset.value = true;
+  error.value = "";
+  sentMessage.value = "";
+  try {
+    const result = await api.post<{ message: string; cooldownSeconds: number }>(
+      "/auth/password-reset/request", { email: normalizedEmail.value },
+    );
+    now.value = Date.now();
+    resetCooldowns.value[normalizedEmail.value] = now.value + (result.cooldownSeconds || 60) * 1000;
+    resetCode.value = "";
+    sentMessage.value = result.message;
+  } catch (e) {
+    error.value = (e as Error).message;
+    if (e instanceof ApiError && e.status === 429) {
+      now.value = Date.now();
+      resetCooldowns.value[normalizedEmail.value] = now.value + (e.retryAfterSeconds || 60) * 1000;
+    }
+  } finally {
+    sendingReset.value = false;
+  }
+}
 async function submit() {
   if (busy.value) return;
   if (register.value && !registrationAvailable.value) {
@@ -117,18 +187,17 @@ async function submit() {
     error.value = "请完整填写账号信息。";
     return;
   }
-  if (register.value) {
-    if (!/^\d{6}$/.test(verificationCode.value.trim())) {
+  if (register.value || resetMode.value) {
+    if (resetMode.value && !/^\d{6}$/.test(resetCode.value.trim())) {
       error.value = "请输入邮件中的 6 位验证码。";
       return;
     }
-    const passwordBytes = new TextEncoder().encode(password.value).length;
-    if (passwordBytes < 10) {
-      error.value = "密码太短，请使用至少 10 位字母、数字或符号。";
+    if (register.value && !/^\d{6}$/.test(verificationCode.value.trim())) {
+      error.value = "请输入邮件中的 6 位验证码。";
       return;
     }
-    if (passwordBytes > 72) {
-      error.value = "密码过长，请缩短后重试。";
+    if (Array.from(password.value).length < 6) {
+      error.value = "密码至少需要 6 个字符。";
       return;
     }
     if (password.value !== confirmPassword.value) {
@@ -139,6 +208,18 @@ async function submit() {
   error.value = "";
   loading.value = true;
   try {
+    if (resetMode.value) {
+      const result = await api.post<{ message: string }>(
+        "/auth/password-reset/confirm",
+        { email: normalizedEmail.value, verificationCode: resetCode.value.trim(), password: password.value },
+      );
+      resetMode.value = false;
+      password.value = "";
+      confirmPassword.value = "";
+      resetCode.value = "";
+      sentMessage.value = result.message;
+      return;
+    }
     const result = await api.post<{ user: User }>(
       register.value ? "/auth/register" : "/auth/login",
       {
@@ -192,8 +273,8 @@ async function submit() {
           <button
             type="button"
             role="tab"
-            :aria-selected="!register"
-            :class="{ selected: !register }"
+            :aria-selected="!register && !resetMode"
+            :class="{ selected: !register && !resetMode }"
             :disabled="busy"
             @click="selectMode(false)"
           >
@@ -211,12 +292,12 @@ async function submit() {
           </button>
         </div>
         <div class="login-form">
-          <h2>{{ register ? "创建你的账号" : "登录协作台" }}</h2>
+          <h2>{{ register ? "创建你的账号" : resetMode ? "重置密码" : "登录协作台" }}</h2>
           <p class="form-description">
             {{
               register
                 ? "使用邮箱与密码注册，验证邮箱后即可登录。在个人中心补全资料后即可报名。"
-                : "使用邮箱与密码登录，继续处理战队事务。"
+                : resetMode ? "通过已绑定的邮箱获取验证码，重设账号密码。" : "使用邮箱与密码登录，继续处理战队事务。"
             }}
           </p>
           <v-alert
@@ -267,13 +348,14 @@ async function submit() {
             >{{ error }}</v-alert
           >
           <v-alert
-            v-if="register && sentMessage"
+            v-if="sentMessage"
             type="success"
             variant="tonal"
             class="mb-4"
             density="compact"
             >{{ sentMessage }}</v-alert
           >
+          <v-alert v-if="route.query.passwordChanged" type="success" variant="tonal" class="mb-4">密码已修改，请使用新密码登录。</v-alert>
           <form @submit.prevent="submit">
             <label for="login-email">邮箱</label
             ><v-text-field
@@ -310,7 +392,7 @@ async function submit() {
                   variant="tonal"
                   :loading="sending"
                   :disabled="
-                    loading || !registrationAvailable || cooldownSeconds > 0
+                    busy || !registrationAvailable || cooldownSeconds > 0
                   "
                   @click="sendVerificationCode"
                   >{{
@@ -321,17 +403,47 @@ async function submit() {
                 >
               </div>
               <p class="verification-hint">
-                验证码 10 分钟内有效，请留意垃圾邮件箱。
+                验证码 10 分钟内有效，请使用最新一封邮件中的验证码，并留意垃圾邮件箱。
               </p>
+              <v-btn v-if="cooldownSeconds > 0" type="button" variant="text" size="small"
+                :disabled="busy || !registrationAvailable" :loading="checkingSendStatus"
+                @click="refreshSendStatus">刷新发送状态</v-btn>
             </template>
-            <label for="login-password">密码</label
+            <template v-if="resetMode">
+              <label for="reset-code">邮箱验证码</label>
+              <div class="verification-row">
+                <v-text-field
+                  id="reset-code"
+                  v-model="resetCode"
+                  placeholder="6 位数字验证码"
+                  autocomplete="one-time-code"
+                  inputmode="numeric"
+                  pattern="[0-9]{6}"
+                  maxlength="6"
+                  :disabled="resetBusy"
+                  hide-details
+                  required
+                />
+                <v-btn
+                  type="button"
+                  color="primary"
+                  variant="tonal"
+                  :loading="sendingReset"
+                  :disabled="resetBusy || resetCooldownSeconds > 0"
+                  @click="sendPasswordResetCode"
+                  >{{ resetCooldownSeconds > 0 ? `${resetCooldownSeconds} 秒后重发` : "发送重置验证码" }}</v-btn
+                >
+              </div>
+              <p class="verification-hint">验证码 10 分钟内有效。如果没有收到邮件，请检查垃圾邮件箱。</p>
+            </template>
+            <label for="login-password">{{ register || resetMode ? "新密码" : "密码" }}</label
             ><v-text-field
               id="login-password"
               v-model="password"
               :type="showPassword ? 'text' : 'password'"
-              :autocomplete="register ? 'new-password' : 'current-password'"
+              :autocomplete="register || resetMode ? 'new-password' : 'current-password'"
               :placeholder="
-                register ? '建议至少 10 位字母、数字或符号' : '请输入密码'
+                register || resetMode ? '至少 6 个字符' : '请输入密码'
               "
               :append-inner-icon="
                 showPassword ? 'mdi-eye-off-outline' : 'mdi-eye-outline'
@@ -339,13 +451,13 @@ async function submit() {
               @click:append-inner="showPassword = !showPassword"
               prepend-inner-icon="mdi-lock-outline"
               :disabled="busy"
-              :hint="register ? '建议组合使用字母、数字和符号。' : undefined"
-              :persistent-hint="register"
-              :hide-details="!register"
+              :hint="register || resetMode ? '至少 6 个字符，可使用任意字符组合。' : undefined"
+              :persistent-hint="register || resetMode"
+              :hide-details="!register && !resetMode"
               class="mb-6"
               required
             />
-            <template v-if="register">
+            <template v-if="register || resetMode">
               <label for="login-confirm-password">确认密码</label>
               <v-text-field
                 id="login-confirm-password"
@@ -366,11 +478,13 @@ async function submit() {
               block
               height="48"
               :loading="loading"
-              :disabled="sending || (register && !registrationAvailable)"
-              >{{ register ? "验证邮箱并注册" : "登录协作台"
+              :disabled="sending || sendingReset || (register && !registrationAvailable)"
+              >{{ register ? "验证邮箱并注册" : resetMode ? "确认重置密码" : "登录协作台"
               }}<v-icon end size="18">mdi-arrow-right</v-icon></v-btn
             >
           </form>
+          <v-btn v-if="!register && !resetMode" class="mt-3 px-0" variant="text" size="small" :disabled="busy" @click="showPasswordReset">忘记密码？通过邮箱重置</v-btn>
+          <v-btn v-else-if="resetMode" class="mt-3 px-0" variant="text" size="small" :disabled="resetBusy" @click="resetMode = false; password = ''; confirmPassword = ''; resetCode = ''; error = ''; sentMessage = ''">返回登录</v-btn>
           <div v-if="config?.demoMode" class="demo-box">
             <div>
               <v-icon size="16">mdi-flask-outline</v-icon> 本地演示空间
@@ -388,6 +502,7 @@ async function submit() {
                   email = a.email;
                   password = a.password;
                   register = false;
+                  resetMode = false;
                   error = '';
                 "
                 >{{ a.title }}</v-btn

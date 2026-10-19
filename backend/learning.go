@@ -28,10 +28,12 @@ type DiscussionReply struct {
 	CreatedAt string `json:"createdAt"`
 }
 type Discussion struct {
+	CategoryID string            `json:"categoryId"`
 	ID         string            `json:"id"`
 	Title      string            `json:"title"`
 	Content    string            `json:"content"`
 	Direction  string            `json:"direction"`
+	FileIDs    []string          `json:"fileIds"`
 	Status     string            `json:"status"`
 	Published  bool              `json:"published"`
 	CreatedBy  string            `json:"createdBy"`
@@ -42,6 +44,13 @@ type Discussion struct {
 }
 
 func normalizeTask(t *Task) {
+	if t.BankVisibility == "" {
+		t.BankVisibility = "public"
+	}
+	if t.Status == "" {
+		// Existing stored tasks predate publication states and remain published.
+		t.Status = "published"
+	}
 	if t.Category == "" {
 		t.Category = "assignment"
 	}
@@ -52,9 +61,32 @@ func normalizeTask(t *Task) {
 		t.FileIDs = []string{}
 	}
 	t.Tags = normalizedIDs(t.Tags)
+	for i := range t.Questions {
+		if t.Questions[i].Type == "" {
+			// Older multi-question assignments were file-based drawing exercises.
+			t.Questions[i].Type = "drawing"
+		}
+		if t.Questions[i].Options == nil {
+			t.Questions[i].Options = []string{}
+		}
+		if t.Questions[i].FileIDs == nil {
+			t.Questions[i].FileIDs = []string{}
+		}
+		t.Questions[i].FileIDs = normalizedIDs(t.Questions[i].FileIDs)
+	}
 }
 func taskLocked(t Task, u User) bool {
-	if hasPermission(u, t.Direction, "tasks") || t.StartsAt == "" {
+	normalizeTask(&t)
+	if hasPermission(u, t.Direction, "tasks") {
+		return false
+	}
+	if t.BankVisibility == "internal" {
+		return true
+	}
+	if t.Status != "published" {
+		return true
+	}
+	if t.StartsAt == "" {
 		return false
 	}
 	start, err := time.Parse(time.RFC3339, t.StartsAt)
@@ -62,6 +94,7 @@ func taskLocked(t Task, u User) bool {
 	return err != nil || time.Now().Before(start)
 }
 func (a *App) registerLearningRoutes(m *http.ServeMux) {
+	a.registerDiscussionCategoryRoutes(m)
 	m.HandleFunc("GET /api/learning-access", a.wrap(true, a.getLearningAccess))
 	m.HandleFunc("GET /api/knowledge-base", a.wrap(true, a.listKnowledge))
 	m.HandleFunc("POST /api/knowledge-base", a.wrap(true, a.createKnowledge))
@@ -73,6 +106,7 @@ func (a *App) registerLearningRoutes(m *http.ServeMux) {
 	m.HandleFunc("PATCH /api/discussions/{id}", a.wrap(true, a.updateDiscussion))
 	m.HandleFunc("PATCH /api/tasks/{id}", a.wrap(true, a.updateTask))
 	m.HandleFunc("DELETE /api/tasks/{id}", a.wrap(true, a.deleteTask))
+	m.HandleFunc("POST /api/tasks/{id}/publish", a.wrap(true, a.publishTask))
 }
 
 // Resolve access from current enrollment records. Profile direction and cached
@@ -302,6 +336,9 @@ func (a *App) listDiscussions(w http.ResponseWriter, r *http.Request, u User) er
 		if direction := r.URL.Query().Get("direction"); direction != "" && item.Direction != direction {
 			continue
 		}
+		if category := r.URL.Query().Get("categoryId"); category != "" && (category == "__uncategorized" && item.CategoryID != "" || category != "__uncategorized" && item.CategoryID != category) {
+			continue
+		}
 		if status := r.URL.Query().Get("status"); status != "" && item.Status != status {
 			continue
 		}
@@ -319,9 +356,11 @@ func (a *App) listDiscussions(w http.ResponseWriter, r *http.Request, u User) er
 }
 func (a *App) createDiscussion(w http.ResponseWriter, r *http.Request, u User) error {
 	var in struct {
-		Title     string `json:"title"`
-		Content   string `json:"content"`
-		Direction string `json:"direction"`
+		CategoryID string   `json:"categoryId"`
+		Title      string   `json:"title"`
+		Content    string   `json:"content"`
+		Direction  string   `json:"direction"`
+		FileIDs    []string `json:"fileIds"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -330,7 +369,14 @@ func (a *App) createDiscussion(w http.ResponseWriter, r *http.Request, u User) e
 	if in.Title == "" || len(in.Title) > 250 || in.Content == "" || len(in.Content) > 30000 || in.Direction != "" && !validDirection(in.Direction) {
 		return fail(400, "请填写有效的问题标题、内容和技术组")
 	}
-	item := Discussion{ID: randomID(), Title: in.Title, Content: in.Content, Direction: in.Direction, Status: "open", CreatedBy: u.ID, AuthorName: u.Name, CreatedAt: now(), Replies: []DiscussionReply{}}
+	in.CategoryID = strings.TrimSpace(in.CategoryID)
+	if err := a.validateDiscussionCategoryID(in.CategoryID, in.Direction); err != nil {
+		return err
+	}
+	if err := requireOwnedFiles(a.store, u, in.FileIDs); err != nil {
+		return err
+	}
+	item := Discussion{CategoryID: in.CategoryID, ID: randomID(), Title: in.Title, Content: in.Content, Direction: in.Direction, FileIDs: normalizedIDs(in.FileIDs), Status: "open", CreatedBy: u.ID, AuthorName: u.Name, CreatedAt: now(), Replies: []DiscussionReply{}}
 	item.UpdatedAt = item.CreatedAt
 	if err := a.store.exec("INSERT INTO discussions(id,created_by,payload) VALUES(?,?,?)", item.ID, u.ID, encoded(item)); err != nil {
 		return err
@@ -386,11 +432,21 @@ func (a *App) updateDiscussion(w http.ResponseWriter, r *http.Request, u User) e
 		return err
 	}
 	var in struct {
-		Status    *string `json:"status"`
-		Published *bool   `json:"published"`
+		CategoryID *string `json:"categoryId"`
+		Status     *string `json:"status"`
+		Published  *bool   `json:"published"`
 	}
 	if err = decode(r, &in); err != nil {
 		return err
+	}
+	if in.CategoryID != nil {
+		id := strings.TrimSpace(*in.CategoryID)
+		if id != item.CategoryID {
+			if err = a.validateDiscussionCategoryID(id, item.Direction); err != nil {
+				return err
+			}
+			item.CategoryID = id
+		}
 	}
 	if in.Status != nil {
 		if *in.Status != "open" && *in.Status != "resolved" {
@@ -435,11 +491,9 @@ func (a *App) updateTask(w http.ResponseWriter, r *http.Request, u User) error {
 	if err = requirePermission(u, task.Direction, "tasks"); err != nil {
 		return err
 	}
-	previousFiles := append([]string{}, task.FileIDs...)
-	if task.MechanicalProblem != nil {
-		previousFiles = append(previousFiles, task.MechanicalProblem.AnswerFileIDs...)
-	}
+	previousFiles := taskLearningFileIDs(task)
 	var in struct {
+		BankVisibility    *string         `json:"bankVisibility"`
 		Title             *string         `json:"title"`
 		Description       *string         `json:"description"`
 		IllustrationURL   *string         `json:"illustrationUrl"`
@@ -460,16 +514,20 @@ func (a *App) updateTask(w http.ResponseWriter, r *http.Request, u User) error {
 		Tags              *[]string       `json:"tags"`
 		Judge             json.RawMessage `json:"judge"`
 		MechanicalProblem json.RawMessage `json:"mechanicalProblem"`
+		Questions         *[]TaskQuestion `json:"questions"`
 	}
 	if err = decode(r, &in); err != nil {
 		return err
 	}
 	var usage int
-	if err = a.store.row("SELECT (SELECT COUNT(*) FROM submissions WHERE task_id=?) + (SELECT COUNT(*) FROM judge_runs WHERE task_id=?)", task.ID, task.ID).Scan(&usage); err != nil {
+	if err = a.taskStudentUsage(task.ID, &usage); err != nil {
 		return err
 	}
 	if usage > 0 {
 		return fail(409, "此任务已有提交或判题记录，请发布新版本，保留原题与成绩的一致性")
+	}
+	if in.BankVisibility != nil {
+		task.BankVisibility = *in.BankVisibility
 	}
 	if in.Title != nil {
 		task.Title = strings.TrimSpace(*in.Title)
@@ -525,6 +583,9 @@ func (a *App) updateTask(w http.ResponseWriter, r *http.Request, u User) error {
 	if in.Tags != nil {
 		task.Tags = *in.Tags
 	}
+	if in.Questions != nil {
+		task.Questions = *in.Questions
+	}
 	if in.Judge != nil {
 		if strings.TrimSpace(string(in.Judge)) == "null" {
 			task.Judge = nil
@@ -560,6 +621,36 @@ func (a *App) updateTask(w http.ResponseWriter, r *http.Request, u User) error {
 	respond(w, 200, map[string]any{"item": task})
 	return nil
 }
+
+func (a *App) publishTask(w http.ResponseWriter, r *http.Request, u User) error {
+	task, err := a.store.task(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	if err = requirePermission(u, task.Direction, "tasks"); err != nil {
+		return err
+	}
+	normalizeTask(&task)
+	if task.Status != "draft" || task.Category != "assignment" {
+		return fail(409, "只有未发布的作业草稿可以发布")
+	}
+	if len(task.Questions) == 0 {
+		return fail(400, "发布作业前至少添加一道题目")
+	}
+	previousFiles := taskLearningFileIDs(task)
+	task.Status = "published"
+	if err = a.validateTaskContent(&task, u, previousFiles); err != nil {
+		return err
+	}
+	task.PublishedAt = now()
+	if err = a.store.exec("UPDATE tasks SET payload=? WHERE id=?", encoded(task), task.ID); err != nil {
+		return err
+	}
+	a.activity(u, "发布培养作业", task.Title)
+	respond(w, 200, map[string]any{"item": task})
+	return nil
+}
+
 func (a *App) deleteTask(w http.ResponseWriter, r *http.Request, u User) error {
 	if !hasAnyPermission(u, "tasks") {
 		return fail(403, "只有管理员或导师可删除任务")
@@ -572,7 +663,7 @@ func (a *App) deleteTask(w http.ResponseWriter, r *http.Request, u User) error {
 		return err
 	}
 	var count int
-	if err = a.store.row("SELECT (SELECT COUNT(*) FROM submissions WHERE task_id=?) + (SELECT COUNT(*) FROM judge_runs WHERE task_id=?)", task.ID, task.ID).Scan(&count); err != nil {
+	if err = a.taskStudentUsage(task.ID, &count); err != nil {
 		return err
 	}
 	if count > 0 {
@@ -582,5 +673,22 @@ func (a *App) deleteTask(w http.ResponseWriter, r *http.Request, u User) error {
 		return err
 	}
 	respond(w, 200, map[string]any{"deleted": true})
+	return nil
+}
+
+// Preview runs validate task content without freezing it or creating student work.
+func (a *App) taskStudentUsage(taskID string, count *int) error {
+	if err := a.store.row("SELECT COUNT(*) FROM submissions WHERE task_id=?", taskID).Scan(count); err != nil {
+		return err
+	}
+	runs, err := readAll[JudgeRun](a.store, "SELECT payload FROM judge_runs WHERE task_id=?", taskID)
+	if err != nil {
+		return err
+	}
+	for _, run := range runs {
+		if !run.Preview {
+			*count++
+		}
+	}
 	return nil
 }

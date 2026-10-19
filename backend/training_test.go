@@ -351,7 +351,7 @@ func TestFreshmanGroupManagerCanApplyButGrantsDoNotReplaceAdmission(t *testing.T
 		t.Fatal("group manager could not participate in personal admission")
 	}
 	student.request("PATCH", "/api/team-applications/"+ap.ID, map[string]string{"status": "accepted"}, 403)
-	admin.request("PATCH", "/api/team-applications/"+ap.ID, map[string]string{"status": "accepted"}, 200)
+	admin.request("POST", "/api/interviews/"+ap.ID+"/decision", map[string]string{"status": "passed"}, 200)
 	if !unmarshal[bool](t, student.request("GET", "/api/learning-access", nil, 200)["allowed"]) {
 		t.Fatal("admitted freshman manager did not receive personal learning access")
 	}

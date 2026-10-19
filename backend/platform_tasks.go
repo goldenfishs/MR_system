@@ -1,13 +1,22 @@
 package main
 
 import (
+	"archive/zip"
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"io"
+	"math"
+	"mime"
 	"net/http"
+	"os"
+	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // NoticeMailer deliberately sends one recipient per message. No recipient list is
@@ -17,12 +26,15 @@ type NoticeMailer interface {
 }
 
 type MailRecipient struct {
-	UserID string `json:"userId"`
-	Name   string `json:"name"`
-	Email  string `json:"email"`
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
-	SentAt string `json:"sentAt,omitempty"`
+	Body                   string `json:"body,omitempty"`
+	InterviewApplicationID string `json:"interviewApplicationId,omitempty"`
+	InterviewSchedule      string `json:"interviewSchedule,omitempty"`
+	UserID                 string `json:"userId"`
+	Name                   string `json:"name"`
+	Email                  string `json:"email"`
+	Status                 string `json:"status"`
+	Error                  string `json:"error,omitempty"`
+	SentAt                 string `json:"sentAt,omitempty"`
 }
 type MailCampaign struct {
 	ID         string          `json:"id"`
@@ -58,6 +70,13 @@ func includesID(ids []string, id string) bool {
 func (a *App) taskVisibleTo(t Task, u User) (bool, error) {
 	if hasPermission(u, t.Direction, "tasks") {
 		return true, nil
+	}
+	normalizeTask(&t)
+	if t.BankVisibility == "internal" {
+		return false, nil
+	}
+	if t.Status != "published" {
+		return false, nil
 	}
 	return a.learningAllowed(u)
 }
@@ -101,7 +120,18 @@ func (a *App) requireTaskEnrollment(t Task, u User) error {
 	return nil
 }
 func (a *App) requireTaskSubmission(t Task, u User) error {
-	if err := a.requireTaskEnrollment(t, u); err != nil {
+	normalizeTask(&t)
+	if t.BankVisibility == "internal" && !hasPermission(u, t.Direction, "tasks") {
+		return fail(403, "内部题库仅限对应组的题目管理员使用")
+	}
+	if t.Status != "published" {
+		return fail(409, "该任务尚未发布")
+	}
+	if t.Category == "problem" {
+		if err := a.requireLearningAccess(u); err != nil {
+			return err
+		}
+	} else if err := a.requireTaskEnrollment(t, u); err != nil {
 		return err
 	}
 	if t.StartsAt != "" {
@@ -124,6 +154,10 @@ func (a *App) validateTaskContent(t *Task, u User, previousFiles ...[]string) er
 	if t.Title == "" || len(t.Title) > 250 || t.Description == "" || len(t.Description) > 30000 || (t.Team != "" && !validTeam(t.Team)) || (t.Direction != "" && !validDirection(t.Direction)) || !validDate(t.DueAt) || !validURL(t.ResourcesURL) || !finite(t.MaxScore) || t.MaxScore <= 0 || t.MaxScore > 1000 {
 		return fail(400, "请填写有效的任务内容、截止日期、分值和适用范围")
 	}
+	normalizeTask(t)
+	if t.Status != "draft" && t.Status != "published" {
+		return fail(400, "任务状态只能为草稿或已发布")
+	}
 	switch t.Kind {
 	case "code", "document", "hardware", "quiz":
 	default:
@@ -134,26 +168,20 @@ func (a *App) validateTaskContent(t *Task, u User, previousFiles ...[]string) er
 	default:
 		return fail(400, "无效的任务难度")
 	}
-	if t.IllustrationURL != "" {
-		name := strings.TrimPrefix(t.IllustrationURL, "/question-bank/")
-		if name == t.IllustrationURL || !strings.HasSuffix(name, ".svg") || len(name) > 100 {
-			return fail(400, "题目示意图须使用内置题库图片")
-		}
-		for _, ch := range strings.TrimSuffix(name, ".svg") {
-			if !(ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '-') {
-				return fail(400, "题目示意图路径不合法")
-			}
-		}
-		if name == ".svg" || strings.TrimSpace(t.IllustrationAlt) == "" || len(t.IllustrationAlt) > 1000 {
-			return fail(400, "请填写有效的题目示意图说明")
-		}
-	} else if t.IllustrationAlt != "" {
-		return fail(400, "题目示意图说明需要对应的图片")
+	if err := validateIllustration(t.IllustrationURL, t.IllustrationAlt); err != nil {
+		return err
 	}
 	return a.validateTaskPlatform(t, u, previousFiles...)
 }
 
 func (a *App) validateTaskPlatform(t *Task, u User, existing ...[]string) error {
+	normalizeTask(t)
+	if t.BankVisibility != "public" && t.BankVisibility != "internal" {
+		return fail(400, "题库可见范围只能为公开或内部")
+	}
+	if t.BankVisibility == "internal" && t.Category != "problem" {
+		return fail(400, "内部可见范围仅适用于题库题目")
+	}
 	if err := requirePermission(u, t.Direction, "tasks"); err != nil {
 		return err
 	}
@@ -221,10 +249,202 @@ func (a *App) validateTaskPlatform(t *Task, u User, existing ...[]string) error 
 	if err := a.validateMechanicalProblem(t, u, previous); err != nil {
 		return err
 	}
+	if err := validateTaskQuestions(t); err != nil {
+		return err
+	}
 	if err := requireUpdatedFiles(a.store, u, t.FileIDs, previous); err != nil {
 		return err
 	}
+	for _, question := range t.Questions {
+		allowed := append([]string{}, previous...)
+		preservedSource := false
+		if len(existing) > 0 && question.SourceProblemID != "" {
+			if old, err := a.store.task(t.ID); err == nil {
+				for _, oldQuestion := range old.Questions {
+					if oldQuestion.ID == question.ID && oldQuestion.SourceProblemID == question.SourceProblemID {
+						preservedSource = true
+						break
+					}
+				}
+			}
+		}
+		if question.SourceProblemID != "" && !preservedSource {
+			source, err := a.store.task(question.SourceProblemID)
+			if err != nil {
+				return fail(400, "来源题目不存在，请重新选题")
+			}
+			if source.Category != "problem" || !hasPermission(u, source.Direction, "tasks") {
+				return fail(403, "没有来源题目的出题权限")
+			}
+			allowed = append(allowed, source.FileIDs...)
+		}
+		if err := requireUpdatedFiles(a.store, u, question.FileIDs, allowed); err != nil {
+			return err
+		}
+	}
+	if t.Direction == "机械" {
+		if err := a.requireMechanicalLearningFiles(taskLearningFileIDs(*t)); err != nil {
+			return err
+		}
+	}
 	return validateJudgeConfig(t)
+}
+
+func taskLearningFileIDs(t Task) []string {
+	ids := append([]string{}, t.FileIDs...)
+	for _, question := range t.Questions {
+		ids = append(ids, question.FileIDs...)
+	}
+	if t.MechanicalProblem != nil {
+		ids = append(ids, t.MechanicalProblem.AnswerFileIDs...)
+	}
+	return ids
+}
+
+func validTaskQuestionID(id string) bool {
+	if id == "" || len(id) > 100 {
+		return false
+	}
+	for _, ch := range id {
+		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+func validateTaskQuestions(t *Task) error {
+	if err := validateQuestionGroups(t.Questions); err != nil {
+		return err
+	}
+	if len(t.Questions) == 0 {
+		return nil
+	}
+	if t.Category != "assignment" {
+		return fail(400, "仅作业支持分题配置")
+	}
+	if len(t.Questions) > 50 {
+		return fail(400, "每份作业最多设置 50 道题")
+	}
+	seen := map[string]bool{}
+	total := 0.0
+	for i := range t.Questions {
+		question := &t.Questions[i]
+		question.ID = strings.TrimSpace(question.ID)
+		question.Title = strings.TrimSpace(question.Title)
+		question.Description = strings.TrimSpace(question.Description)
+		if !validTaskQuestionID(question.ID) || seen[question.ID] {
+			return fail(400, "作业题目编号不能为空、重复或格式无效")
+		}
+		seen[question.ID] = true
+		if question.Title == "" || len(question.Title) > 200 || len(question.Description) > 20000 || len(question.FileIDs) > 20 || !finite(question.MaxScore) || question.MaxScore <= 0 || question.MaxScore > t.MaxScore {
+			return fail(400, "请填写有效的题目标题、附件和分值")
+		}
+		switch question.Type {
+		case "single_choice", "multiple_choice":
+			if question.Judge != nil {
+				return fail(400, "只有代码题可以配置在线判题")
+			}
+			if len(question.Options) < 2 || len(question.Options) > 20 {
+				return fail(400, "选择题需要设置 2–20 个选项")
+			}
+			for optionIndex := range question.Options {
+				question.Options[optionIndex] = strings.TrimSpace(question.Options[optionIndex])
+				if question.Options[optionIndex] == "" || len(question.Options[optionIndex]) > 1000 {
+					return fail(400, "选择题选项不能为空或超过 1000 字节")
+				}
+			}
+		case "fill_blank", "short_answer", "drawing":
+			if question.Judge != nil {
+				return fail(400, "只有代码题可以配置在线判题")
+			}
+			if len(question.Options) > 0 {
+				return fail(400, "非选择题不能包含选项")
+			}
+		case "code":
+			if t.Direction == "机械" || t.Direction == "运营" {
+				return fail(400, "机械组和运营组使用文字或文件作业，不设置代码自动评测")
+			}
+			if len(question.Options) > 0 {
+				return fail(400, "代码题不能包含选择选项")
+			}
+			if question.Judge == nil {
+				return fail(400, "代码题必须配置在线判题测试用例")
+			}
+			if !question.Judge.Enabled {
+				return fail(400, "代码题必须启用在线自动判题")
+			}
+			judgeTask := *t
+			judgeTask.Kind = "code"
+			judgeTask.SubmissionType = "code"
+			judgeTask.MaxScore = question.MaxScore
+			judgeTask.Judge = question.Judge
+			if err := validateJudgeConfig(&judgeTask); err != nil {
+				return err
+			}
+			question.Judge = judgeTask.Judge
+		default:
+			return fail(400, "请选择有效的作业题型")
+		}
+		if err := validateTaskQuestionGrading(question); err != nil {
+			return err
+		}
+		if question.Options == nil {
+			question.Options = []string{}
+		}
+		question.FileIDs = normalizedIDs(question.FileIDs)
+		if t.Status == "published" && strings.TrimSpace(question.Description) == "" && len(question.FileIDs) == 0 {
+			return fail(400, "每道题至少需要填写题目说明或上传题目文件")
+		}
+		total += question.MaxScore
+	}
+	if math.Abs(total-t.MaxScore) > 0.000001 {
+		return fail(400, "各题分值总和必须等于作业总分")
+	}
+	return nil
+}
+
+// Reference answers are private configuration, never embedded in feedback.
+func validateTaskQuestionGrading(q *TaskQuestion) error {
+	q.Explanation = strings.TrimSpace(q.Explanation)
+	if len(q.Explanation) > 20000 || len(q.Answers) > 20 {
+		return fail(400, "答案解析不能超过 20000 字节，标准答案最多 20 项")
+	}
+	objective := q.Type == "single_choice" || q.Type == "multiple_choice" || q.Type == "fill_blank"
+	if !objective && (q.AutoGrade || len(q.Answers) > 0) {
+		return fail(400, "仅选择题和填空题支持标准答案自动评分")
+	}
+	if q.AutoGrade && len(q.Answers) == 0 {
+		return fail(400, "自动评分题必须填写标准答案")
+	}
+	if q.Type == "single_choice" && len(q.Answers) > 1 {
+		return fail(400, "单选题只能设置一个标准答案")
+	}
+	seen := map[string]bool{}
+	for i := range q.Answers {
+		answer := strings.TrimSpace(q.Answers[i])
+		if answer == "" || len(answer) > 20000 || seen[answer] {
+			return fail(400, "标准答案不能为空、重复或超过 20000 字节")
+		}
+		if q.Type == "single_choice" || q.Type == "multiple_choice" {
+			index, err := strconv.Atoi(answer)
+			if err != nil || index < 0 || index >= len(q.Options) || strconv.Itoa(index) != answer {
+				return fail(400, "标准答案的选项编号无效")
+			}
+		}
+		seen[answer] = true
+		q.Answers[i] = answer
+	}
+	return nil
+}
+
+func submissionHasFile(s Submission, fileID string) bool {
+	for _, answer := range s.Answers {
+		if includesID(answer.FileIDs, fileID) {
+			return true
+		}
+	}
+	return false
 }
 func (a *App) validateSubmissionFiles(t Task, u User, fileIDs []string, runID string) error {
 	if len(fileIDs) > 20 {
@@ -249,7 +469,7 @@ func (a *App) validateSubmissionFiles(t Task, u User, fileIDs []string, runID st
 	if err != nil {
 		return err
 	}
-	if run.UserID != u.ID || run.TaskID != t.ID || run.Status != "completed" || !includesID(fileIDs, run.SourceFileID) {
+	if run.Preview || run.UserID != u.ID || run.TaskID != t.ID || run.Status != "completed" || !includesID(fileIDs, run.SourceFileID) {
 		return fail(400, "请使用本任务已完成的本人判题记录及对应源代码文件")
 	}
 	source, err := a.readJudgeSource(run.SourceFileID, u)
@@ -271,7 +491,14 @@ func (a *App) taskFileAccess(u User, fileID string) (bool, error) {
 	}
 	for _, t := range tasks {
 		isReference := t.MechanicalProblem != nil && t.MechanicalProblem.Type == "drawing" && includesID(t.MechanicalProblem.AnswerFileIDs, fileID)
-		if (includesID(t.FileIDs, fileID) || isReference) && !taskLocked(t, u) {
+		isQuestionFile := false
+		for _, question := range t.Questions {
+			if includesID(question.FileIDs, fileID) {
+				isQuestionFile = true
+				break
+			}
+		}
+		if (includesID(t.FileIDs, fileID) || isReference || isQuestionFile) && !taskLocked(t, u) {
 			visible, err := a.taskVisibleTo(t, u)
 			if err != nil || visible {
 				return visible, err
@@ -283,7 +510,29 @@ func (a *App) taskFileAccess(u User, fileID string) (bool, error) {
 		return false, err
 	}
 	for _, s := range submissions {
-		if includesID(s.FileIDs, fileID) {
+		if includesID(s.FileIDs, fileID) || submissionHasFile(s, fileID) {
+			task, err := a.store.task(s.TaskID)
+			if err != nil {
+				return false, err
+			}
+			if s.UserID == u.ID || hasPermission(u, task.Direction, "tasks") {
+				return true, nil
+			}
+		}
+		for _, answer := range s.Answers {
+			if answer.JudgeRunID == "" {
+				continue
+			}
+			run, err := readOne[JudgeRun](a.store, "SELECT payload FROM judge_runs WHERE id=?", answer.JudgeRunID)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return false, err
+			}
+			if run.TaskID != s.TaskID || run.UserID != s.UserID || run.QuestionID != answer.QuestionID || run.SourceFileID != fileID {
+				continue
+			}
 			task, err := a.store.task(s.TaskID)
 			if err != nil {
 				return false, err
@@ -298,6 +547,9 @@ func (a *App) taskFileAccess(u User, fileID string) (bool, error) {
 
 func (a *App) registerTaskPlatformRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/tasks/{id}/practice", a.wrap(true, a.practiceMechanicalProblem))
+	m.HandleFunc("POST /api/tasks/{id}/submission-draft", a.wrap(true, a.saveTaskSubmissionDraft))
+	m.HandleFunc("POST /api/tasks/{id}/submission-finalize", a.wrap(true, a.finalizeTaskSubmission))
+	m.HandleFunc("GET /api/tasks/{id}/submissions/export", a.wrap(true, a.exportTaskSubmissions))
 	m.HandleFunc("GET /api/mail-campaigns", a.wrap(true, a.listMailCampaigns))
 	m.HandleFunc("POST /api/mail-campaigns", a.wrap(true, a.createMailCampaign))
 	m.HandleFunc("GET /api/mail-campaigns/{id}", a.wrap(true, a.getMailCampaign))
@@ -307,6 +559,211 @@ func (a *App) registerTaskPlatformRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/tasks/{id}/judge", a.wrapWithMutationLock(true, false, a.startJudge))
 	m.HandleFunc("GET /api/judge-runs/{id}", a.wrap(true, a.getJudgeRun))
 }
+
+func safeZipSegment(value string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(value) {
+		if unicode.IsControl(r) || strings.ContainsRune(`/\\:*?"<>|`, r) {
+			b.WriteRune('_')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	clean := strings.Trim(strings.TrimSpace(b.String()), ".")
+	if clean == "" || clean == ".." {
+		return "未命名"
+	}
+	if len([]rune(clean)) > 100 {
+		clean = string([]rune(clean)[:100])
+	}
+	return clean
+}
+
+func uniqueZipEntry(entries map[string]bool, candidate string) string {
+	if !entries[candidate] {
+		entries[candidate] = true
+		return candidate
+	}
+	extension := path.Ext(candidate)
+	stem := strings.TrimSuffix(candidate, extension)
+	for suffix := 2; ; suffix++ {
+		name := fmt.Sprintf("%s (%d)%s", stem, suffix, extension)
+		if !entries[name] {
+			entries[name] = true
+			return name
+		}
+	}
+}
+
+func (a *App) exportTaskSubmissions(w http.ResponseWriter, r *http.Request, u User) error {
+	task, err := a.store.task(r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	if err = requirePermission(u, task.Direction, "tasks"); err != nil {
+		return err
+	}
+	normalizeTask(&task)
+	if task.Category != "assignment" || len(task.Questions) == 0 {
+		return fail(400, "仅支持导出多题作业的提交文件")
+	}
+	submissions, err := a.store.submissions(task.ID)
+	if err != nil {
+		return err
+	}
+	latest := []Submission{}
+	seenUsers := map[string]bool{}
+	for _, submission := range submissions {
+		if seenUsers[submission.UserID] {
+			continue
+		}
+		if submission.FinalizedAt == "" || submission.Status == "draft" {
+			continue
+		}
+		seenUsers[submission.UserID] = true
+		latest = append(latest, submission)
+	}
+	if len(latest) == 0 {
+		return fail(409, "目前还没有已提交的作业")
+	}
+	tmp, err := os.CreateTemp(a.uploadRoot(), "task-submissions-*.zip")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	archive := zip.NewWriter(tmp)
+	entries := map[string]bool{}
+	fileCount := 0
+	questionIndexes := map[string]int{}
+	questionTitles := map[string]string{}
+	for i, question := range task.Questions {
+		questionIndexes[question.ID] = i + 1
+		questionTitles[question.ID] = question.Title
+	}
+	for _, submission := range latest {
+		user, userErr := a.store.user(submission.UserID)
+		if userErr != nil {
+			archive.Close()
+			tmp.Close()
+			return userErr
+		}
+		studentFolder := safeZipSegment(submission.UserName) + "_" + safeZipSegment(task.Title) + "_" + safeZipSegment(user.ID)
+		for _, answer := range submission.Answers {
+			questionIndex, exists := questionIndexes[answer.QuestionID]
+			if !exists {
+				continue
+			}
+			questionFolder := fmt.Sprintf("%02d_%s", questionIndex, safeZipSegment(questionTitles[answer.QuestionID]))
+			for _, fileID := range answer.FileIDs {
+				asset, assetErr := a.fileAsset(fileID)
+				if assetErr != nil {
+					archive.Close()
+					tmp.Close()
+					return assetErr
+				}
+				entryName := uniqueZipEntry(entries, path.Join(studentFolder, questionFolder, safeZipSegment(asset.Name)))
+				entry, createErr := archive.Create(entryName)
+				if createErr != nil {
+					archive.Close()
+					tmp.Close()
+					return createErr
+				}
+				file, _, openErr := a.openAsset(fileID)
+				if openErr != nil {
+					archive.Close()
+					tmp.Close()
+					return openErr
+				}
+				_, copyErr := io.Copy(entry, file)
+				closeErr := file.Close()
+				if copyErr != nil {
+					archive.Close()
+					tmp.Close()
+					return copyErr
+				}
+				if closeErr != nil {
+					archive.Close()
+					tmp.Close()
+					return closeErr
+				}
+				fileCount++
+			}
+			if answer.JudgeRunID != "" {
+				run, runErr := readOne[JudgeRun](a.store, "SELECT payload FROM judge_runs WHERE id=?", answer.JudgeRunID)
+				if runErr != nil {
+					archive.Close()
+					tmp.Close()
+					return runErr
+				}
+				if run.TaskID != task.ID || run.UserID != submission.UserID || run.QuestionID != answer.QuestionID {
+					archive.Close()
+					tmp.Close()
+					return fail(409, "代码判题记录与提交题目不一致")
+				}
+				asset, assetErr := a.fileAsset(run.SourceFileID)
+				if assetErr != nil {
+					archive.Close()
+					tmp.Close()
+					return assetErr
+				}
+				entryName := uniqueZipEntry(entries, path.Join(studentFolder, questionFolder, safeZipSegment(asset.Name)))
+				entry, createErr := archive.Create(entryName)
+				if createErr != nil {
+					archive.Close()
+					tmp.Close()
+					return createErr
+				}
+				source, _, openErr := a.openAsset(run.SourceFileID)
+				if openErr != nil {
+					archive.Close()
+					tmp.Close()
+					return openErr
+				}
+				_, copyErr := io.Copy(entry, source)
+				closeErr := source.Close()
+				if copyErr != nil {
+					archive.Close()
+					tmp.Close()
+					return copyErr
+				}
+				if closeErr != nil {
+					archive.Close()
+					tmp.Close()
+					return closeErr
+				}
+				fileCount++
+			}
+		}
+	}
+	if fileCount == 0 {
+		archive.Close()
+		tmp.Close()
+		return fail(409, "已提交的作业中没有可导出的答案文件")
+	}
+	if err = archive.Close(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	file, err := os.Open(tmpName)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": safeZipSegment(task.Title) + "_作业提交.zip"}))
+	w.Header().Set("Content-Length", fmt.Sprint(info.Size()))
+	http.ServeContent(w, r, "submissions.zip", info.ModTime(), file)
+	return nil
+}
+
 func (a *App) listMailCampaigns(w http.ResponseWriter, _ *http.Request, u User) error {
 	if !hasAnyPermission(u, "mail") {
 		return fail(403, "没有批量邮件权限")
@@ -438,6 +895,9 @@ func (a *App) beginMailCampaign(w http.ResponseWriter, r *http.Request, u User, 
 	}
 	eligible := false
 	for _, recipient := range item.Recipients {
+		if ((!retry && recipient.Status == "pending") || (retry && recipient.Status == "failed")) && !a.interviewDeliveryValid(recipient) {
+			return fail(409, "面试安排或结果已改变，请重新生成面试通知")
+		}
 		if !retry && recipient.Status == "pending" || retry && recipient.Status == "failed" {
 			eligible = true
 		}
@@ -477,11 +937,17 @@ func (a *App) deliverMailCampaign(item MailCampaign, retry bool, actorID string,
 		actor, err := a.store.user(actorID)
 		allowed := false
 		if err == nil {
-			allowed, err = a.recipientAllowed(actor, recipient.UserID, "mail")
+			allowed, err = a.mailRecipientAllowed(actor, *recipient)
 		}
 		if err != nil || !allowed {
 			recipient.Status = "failed"
 			recipient.Error = "收件人授权已失效"
+			_ = a.saveMailCampaign(item)
+			continue
+		}
+		if !a.interviewDeliveryValid(*recipient) {
+			recipient.Status = "failed"
+			recipient.Error = "面试安排已改变，请重新生成通知"
 			_ = a.saveMailCampaign(item)
 			continue
 		}
@@ -492,7 +958,11 @@ func (a *App) deliverMailCampaign(item MailCampaign, retry bool, actorID string,
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		err = mailer.SendMessage(ctx, recipient.Email, item.Subject, item.Body)
+		body := item.Body
+		if recipient.Body != "" {
+			body = recipient.Body
+		}
+		err = mailer.SendMessage(ctx, recipient.Email, item.Subject, body)
 		cancel()
 		if err != nil {
 			recipient.Status = "failed"

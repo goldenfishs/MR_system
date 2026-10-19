@@ -186,7 +186,7 @@ onMounted(() => {
     <p class="page-subtitle">管理网站名称、标志、招新安排与发信邮箱。修改后立即生效。</p>
     <div class="settings-shortcuts mb-6">
       <v-btn to="/admin" variant="tonal" prepend-icon="mdi-shield-crown-outline">系统管理</v-btn>
-      <v-btn to="/members" variant="tonal" prepend-icon="mdi-account-cog-outline">用户与权限</v-btn>
+      <v-btn to="/members" variant="tonal" prepend-icon="mdi-account-cog-outline">用户管理</v-btn>
       <v-btn href="#branding" variant="text" prepend-icon="mdi-palette-outline">网站外观</v-btn>
       <v-btn href="#email" variant="text" prepend-icon="mdi-email-outline">邮件服务</v-btn>
     </div>

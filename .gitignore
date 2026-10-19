@@ -1,5 +1,5 @@
 # Dependencies and generated frontend output
-node_modules/
+node_modules
 dist/
 .vite/
 *.tsbuildinfo
@@ -32,3 +32,13 @@ bin/
 .idea/
 .vscode/
 *.swp
+
+# Local content, deployment history and private training material
+tmp/
+output/
+__pycache__/
+*.pyc
+content/
+role=admin
+
+dist-release/

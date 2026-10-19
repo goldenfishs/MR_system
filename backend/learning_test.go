@@ -84,6 +84,41 @@ func TestLearningDiscussionPrivateResolutionAndPublication(t *testing.T) {
 		t.Fatal("revoked publication remains visible")
 	}
 }
+
+func TestDiscussionAttachmentsFollowQuestionVisibility(t *testing.T) {
+	_, c := setup(t)
+	c.login("admin")
+	foreign := uploadForTest(t, c, "unowned-reference.txt", []byte("private reference"), 201)
+	c.login("student")
+	c.request("POST", "/api/discussions", map[string]any{
+		"title": "附件归属校验", "content": "尝试引用其他用户的附件。", "direction": "电控", "fileIds": []string{foreign.ID},
+	}, 403)
+
+	file := uploadForTest(t, c, "uart-waveform.txt", []byte("波形记录"), 201)
+	discussion := unmarshal[Discussion](t, c.request("POST", "/api/discussions", map[string]any{
+		"title": "串口波形附件", "content": "请查看上传的波形记录。", "direction": "电控", "fileIds": []string{file.ID},
+	}, 201)["discussion"])
+	if len(discussion.FileIDs) != 1 || discussion.FileIDs[0] != file.ID {
+		t.Fatal("discussion attachment was not persisted")
+	}
+	c.login("interviewer")
+	downloadForTest(t, c, file.ID, "download", 403)
+	c.login("mentor")
+	downloadForTest(t, c, file.ID, "download", 200)
+	c.request("POST", "/api/discussions/"+discussion.ID+"/replies", map[string]string{"content": "已查看波形。"}, 201)
+	c.request("PATCH", "/api/discussions/"+discussion.ID, map[string]any{"status": "resolved", "published": true}, 200)
+	c.login("interviewer")
+	public := unmarshal[[]Discussion](t, c.request("GET", "/api/discussions?published=true", nil, 200)["discussions"])
+	if len(public) != 1 || len(public[0].FileIDs) != 1 || public[0].FileIDs[0] != file.ID {
+		t.Fatal("published discussion attachment missing")
+	}
+	downloadForTest(t, c, file.ID, "download", 200)
+	c.login("admin")
+	c.request("PATCH", "/api/discussions/"+discussion.ID, map[string]bool{"published": false}, 200)
+	c.login("interviewer")
+	downloadForTest(t, c, file.ID, "download", 403)
+}
+
 func TestLearningScheduledExamContentFileAndSubmissionRelease(t *testing.T) {
 	a, c := setup(t)
 	c.login("admin")

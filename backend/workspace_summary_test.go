@@ -16,7 +16,7 @@ func TestWorkspaceScopeAndNewMembershipList(t *testing.T) {
 	completeProfile(t, c)
 	application := unmarshal[TeamApplication](t, c.request("POST", "/api/teams/"+team.ID+"/applications", map[string]string{"direction": "机械", "resumeFileId": resume.ID}, 201)["item"])
 	c.login("admin")
-	c.request("PATCH", "/api/team-applications/"+application.ID, map[string]string{"status": "accepted"}, 200)
+	c.request("POST", "/api/interviews/"+application.ID+"/decision", map[string]string{"status": "passed"}, 200)
 	c.request("POST", "/api/records", map[string]any{"userId": user.ID, "title": "成员入队证明", "kind": "certificate"}, 201)
 	members := unmarshal[[]struct {
 		User

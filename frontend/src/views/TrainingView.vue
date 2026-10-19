@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { useRoute, onBeforeRouteLeave } from "vue-router";
 import { api } from "../lib/api";
 import { auth } from "../lib/auth";
 import { refreshLearningAccess } from "../lib/learning-access";
@@ -9,14 +10,16 @@ import type { TeamSpace } from "../lib/platform";
 import type { MemberType } from "../lib/types";
 import { currentTrainingStage, defaultTrainingStages, trainingStatusColors, trainingStatusNames, type TrainingPlan, type TrainingProgress, type TrainingStage } from "../lib/training";
 
+const route = useRoute();
 const isManager = computed(() => hasPermission("assessment"));
 const groups = computed(() => manageableGroups("assessment"));
-const tab = ref(isManager.value ? "manage" : "mine");
+const tab = ref(isManager.value ? (route.query.section === "plans" ? "plans" : "manage") : "mine");
 const teams = ref<TeamSpace[]>([]), plans = ref<TrainingPlan[]>([]), progress = ref<TrainingProgress[]>([]);
 const loading = ref(true), saving = ref(false), error = ref(""), notice = ref("");
 const direction = ref<string>(groups.value[0]?.value || ""), teamId = ref(""), stageFilter = ref(""), status = ref("training"), search = ref("");
 const selectedIds = ref<string[]>([]), detail = ref<TrainingProgress | null>(null);
 const mineDirection = ref(""), showHistory = ref(false);
+const applyToUnassessed = ref(false);
 const planDialog = ref(false), planError = ref(""), planDraft = reactive({ title: "", stages: [] as TrainingStage[] });
 const decisionDialog = ref(false), decisionError = ref(""), decisionStatus = ref<"passed" | "eliminated">("passed"), decisionNote = ref("");
 const targetMemberType = ref<Exclude<MemberType, "freshman">>("reserve");
@@ -45,6 +48,7 @@ const teamOptions = computed(() => [
   ...(scopedProgress.value.some(item => !item.teamId && item.direction === direction.value) || plans.value.some(item => !item.teamId && item.direction === direction.value) ? [{ title: "历史招新", value: legacyTeam }] : []),
 ]);
 const scope = computed(() => scopedProgress.value.filter(item => item.teamId === actualTeamId.value && item.direction === direction.value));
+const unassessedCount = computed(() => scope.value.filter(item => item.status === "training" && !item.decisions.length).length);
 const plan = computed(() => plans.value.find(item => item.teamId === actualTeamId.value && item.direction === direction.value));
 const stageSignature = (stage: TrainingStage | undefined) => stage ? JSON.stringify([stage.id, stage.title, stage.order, stage.final]) : "";
 const progressStage = (item: TrainingProgress) => currentTrainingStage(item) || item.stages.find(stage => stage.id === item.decisions.at(-1)?.stageId);
@@ -114,7 +118,7 @@ async function load() {
     plans.value = (planData.items || []).map(item => ({ ...item, stages: item.stages || [] }));
     progress.value = (progressData.items || []).map(item => ({ ...item, stages: item.stages || [], decisions: item.decisions || [] }));
     selectedIds.value = [];
-    if (isManager.value) selectScope();
+    if (isManager.value) { selectScope(); if (tab.value === "plans") openPlan(); }
   } catch (e) {
     if (version === loadVersion) error.value = (e as Error).message;
   } finally {
@@ -128,8 +132,12 @@ function openPlan() {
   if (!teamId.value || !hasPermission("assessment", direction.value)) return;
   planDraft.title = plan.value?.title || `${groupLabel(direction.value)}新生培养`;
   planDraft.stages = plan.value?.stages.length ? plan.value.stages.map(stage => ({ ...stage })) : defaultTrainingStages();
-  planError.value = ""; planDialog.value = true;
+  applyToUnassessed.value = false;
+  planError.value = ""; planDialog.value = true; tab.value = "plans";
 }
+function closePlan() { planDialog.value = false; tab.value = "manage"; }
+watch(tab, value => { if (value === "plans" && !planDialog.value && !loading.value) openPlan(); });
+onBeforeRouteLeave(() => !planDialog.value || window.confirm("阶段方案尚未保存，确定离开？"));
 function reorderStage(index: number, offset: number) {
   const target = index + offset;
   if (target < 0 || target >= planDraft.stages.length) return;
@@ -147,10 +155,12 @@ async function savePlan() {
   const stageInput = planDraft.stages.map((stage, index) => ({ ...(stage.id ? { id: stage.id } : {}), title: stage.title.trim(), description: stage.description.trim(), final: index === planDraft.stages.length - 1 }));
   saving.value = true; planError.value = "";
   try {
-    if (plan.value) await api.patch(`/training-plans/${plan.value.id}`, { title: planDraft.title.trim(), stages: stageInput });
-    else await api.post("/training-plans", { teamId: actualTeamId.value, direction: direction.value, title: planDraft.title.trim(), stages: stageInput });
-    planDialog.value = false;
-    notice.value = "阶段方案已保存，新录取的培养周期将使用此方案。";
+    const input = { title: planDraft.title.trim(), stages: stageInput, applyToUnassessed: applyToUnassessed.value };
+    const result = plan.value
+      ? await api.patch<{ syncedCount: number }>(`/training-plans/${plan.value.id}`, input)
+      : await api.post<{ syncedCount: number }>("/training-plans", { teamId: actualTeamId.value, direction: direction.value, ...input });
+    closePlan();
+    notice.value = `已保存 ${stageInput.length} 个阶段${applyToUnassessed.value ? `，同步了 ${result.syncedCount} 名尚未考核的新生` : '，后续录取使用新方案'}。`;
     await load();
   } catch (e) { planError.value = (e as Error).message; }
   finally { saving.value = false; }
@@ -188,23 +198,29 @@ onUnmounted(() => { loadVersion++; });
   <div class="page-content training-page">
     <div class="training-heading">
       <div><h1 class="page-title">新生考核</h1><p class="page-subtitle">各组独立记录培养阶段、考核结果与成长历程。</p></div>
-      <v-btn variant="text" prepend-icon="mdi-refresh" :disabled="loading || saving" @click="load">刷新记录</v-btn>
+      <v-btn variant="text" prepend-icon="mdi-refresh" :disabled="loading || saving || planDialog" @click="load">刷新记录</v-btn>
     </div>
-    <v-tabs v-if="isManager" v-model="tab" color="primary" class="training-tabs"><v-tab value="manage">阶段管理</v-tab><v-tab value="mine">我的进度</v-tab></v-tabs>
+    <v-tabs v-if="isManager" v-model="tab" color="primary" class="training-tabs"><v-tab value="manage" :disabled="planDialog">考核名单</v-tab><v-tab value="plans">阶段配置</v-tab><v-tab value="mine" :disabled="planDialog">我的进度</v-tab></v-tabs>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-5">{{ error }}<v-btn variant="text" @click="load">重试</v-btn></v-alert>
     <v-progress-linear v-if="loading" color="primary" indeterminate class="mb-5" />
-    <template v-else-if="tab === 'manage' && isManager">
+    <template v-else-if="(tab === 'manage' || tab === 'plans') && isManager">
       <div class="scope-controls">
-        <v-select v-model="direction" :items="groups" label="管理组别" hide-details />
-        <v-select v-model="teamId" :items="teamOptions" label="招募团队" hide-details :disabled="!teamOptions.length" />
-        <v-btn color="primary" variant="tonal" prepend-icon="mdi-tune-variant" :disabled="!teamId || saving" @click="openPlan">配置阶段</v-btn>
+        <v-select v-model="direction" :items="groups" label="管理组别" hide-details :disabled="planDialog || saving" />
+        <v-select v-model="teamId" :items="teamOptions" label="招募团队" hide-details :disabled="!teamOptions.length || planDialog || saving" />
+        <v-btn color="primary" variant="tonal" prepend-icon="mdi-tune-variant" :disabled="!teamId || saving || planDialog" @click="openPlan">配置阶段</v-btn>
       </div>
       <v-card v-if="!teamId" class="training-empty"><v-icon size="42" color="primary">mdi-account-group-outline</v-icon><h2>还没有可管理的招募团队</h2><p>管理员发布团队并开放该组报名后，即可配置新生培养阶段。</p></v-card>
-      <template v-else>
+    <v-card v-if="planDialog" class="plan-editor-page"><v-card-title class="dialog-heading">配置培养阶段 · {{ planDraft.stages.length }} 个阶段<v-spacer /><v-btn icon="mdi-close" aria-label="关闭阶段设置" variant="text" :disabled="saving" @click="closePlan" /></v-card-title><v-card-text>
+      <p class="dialog-context">{{ teamName(teamId) }} · {{ groupLabel(direction) }}</p><v-alert v-if="planError" type="error" variant="tonal" class="mb-4">{{ planError }}</v-alert><v-alert type="info" variant="tonal" density="compact" class="mb-5">阶段从上到下依次进行，最后一个阶段为最终考核。可自由增减到 1–12 个阶段，修改名称、说明和顺序。</v-alert><v-text-field v-model="planDraft.title" label="方案名称" maxlength="200" :disabled="saving" />
+      <div v-for="(stage, index) in planDraft.stages" :key="stage.id || `new-${index}`" class="stage-editor"><div class="stage-editor-heading"><strong>阶段 {{ index + 1 }}</strong><v-chip v-if="index === planDraft.stages.length - 1" size="x-small" color="primary">最终考核</v-chip><v-spacer /><v-btn icon="mdi-arrow-up" size="small" variant="text" aria-label="上移阶段" :disabled="saving || index === 0" @click="reorderStage(index, -1)" /><v-btn icon="mdi-arrow-down" size="small" variant="text" aria-label="下移阶段" :disabled="saving || index === planDraft.stages.length - 1" @click="reorderStage(index, 1)" /><v-btn icon="mdi-delete-outline" size="small" variant="text" aria-label="删除阶段" :disabled="saving || planDraft.stages.length === 1" @click="planDraft.stages.splice(index, 1)" /></div><v-text-field v-model="stage.title" label="阶段名称" maxlength="200" :disabled="saving" /><v-textarea v-model="stage.description" label="阶段说明（可选）" rows="2" maxlength="2000" hide-details :disabled="saving" /></div>
+      <v-btn variant="tonal" prepend-icon="mdi-plus" :disabled="saving || planDraft.stages.length >= 12" @click="addStage">增加阶段</v-btn>
+      <div class="plan-apply"><h3>保存后应用到</h3><v-radio-group v-model="applyToUnassessed" :disabled="saving" hide-details><v-radio :value="false" label="仅后续新录取人员" /><v-radio :value="true" :label="`后续新录取人员 + 当前尚未考核的新生（约 ${unassessedCount} 人）`" /></v-radio-group><p>已产生考核结果、已通过或已淘汰的周期保留原方案。同步人数以保存时仍有录取资格的人员为准。</p></div>
+    </v-card-text><v-card-actions class="dialog-actions"><v-spacer /><v-btn :disabled="saving" @click="closePlan">取消</v-btn><v-btn color="primary" variant="flat" :loading="saving" @click="savePlan">保存阶段方案</v-btn></v-card-actions></v-card>
+      <template v-else-if="teamId">
         <div class="training-stats"><v-card v-for="stat in stats" :key="stat.label" class="stat-card"><v-icon :color="stat.color" size="25">{{ stat.icon }}</v-icon><div><strong>{{ stat.value }}</strong><span>{{ stat.label }}</span></div></v-card></div>
         <v-card class="plan-card">
-          <div class="plan-heading"><div><h2>{{ plan?.title || `${groupLabel(direction)}新生培养` }}</h2><p>{{ plan ? '新录取人员按此方案开始培养；已有周期保留当时的阶段安排。' : '未单独配置时，使用基础学习、阶段考核、最终考核三个阶段。' }}</p></div><v-chip size="small" variant="outlined">按阶段依次确认</v-chip></div>
-          <div class="stage-overview"><div v-for="(stage, index) in (plan?.stages.length ? plan.stages : defaultTrainingStages())" :key="stage.id || index" class="overview-stage"><span class="stage-number">{{ index + 1 }}</span><div><strong>{{ stage.title }}</strong><small>{{ stage.final ? '最终通过后晋升' : '通过后进入下一阶段' }}</small></div></div></div>
+          <div class="plan-heading"><div><h2>{{ plan?.title || `${groupLabel(direction)}新生培养` }}</h2><p>{{ plan ? '新录取人员按此方案开始培养；已有周期保留当时的阶段安排。' : '当前为默认方案，可点击配置阶段，自定义本组的阶段数量与内容。' }}</p></div><v-chip size="small" variant="outlined">共 {{ plan?.stages.length || 3 }} 个阶段</v-chip></div>
+          <div class="stage-overview"><div v-for="(stage, index) in (plan?.stages.length ? plan.stages : defaultTrainingStages())" :key="stage.id || index" class="overview-stage"><span class="stage-number">{{ index + 1 }}</span><div><strong>{{ stage.title }}</strong><small>{{ stage.description || (stage.final ? '最终通过后晋升' : '通过后进入下一阶段') }}</small></div></div></div>
         </v-card>
         <v-card class="roster-card">
           <div class="roster-heading"><div><h2>阶段名单</h2><p>选择同一阶段的培养中人员，批量确认通过或淘汰；结果仅影响当前团队与组别。</p></div><span class="roster-count">{{ roster.length }} 条记录</span></div>
@@ -232,11 +248,7 @@ onUnmounted(() => { loadVersion++; });
       </template>
     </template>
 
-    <v-dialog v-model="planDialog" max-width="800" scrollable :persistent="saving"><v-card><v-card-title class="dialog-heading">配置培养阶段<v-spacer /><v-btn icon="mdi-close" aria-label="关闭阶段设置" variant="text" :disabled="saving" @click="planDialog = false" /></v-card-title><v-card-text>
-      <p class="dialog-context">{{ teamName(teamId) }} · {{ groupLabel(direction) }}</p><v-alert v-if="planError" type="error" variant="tonal" class="mb-4">{{ planError }}</v-alert><v-alert type="info" variant="tonal" density="compact" class="mb-5">阶段从上到下依次进行，最后一个阶段为最终考核。调整方案仅影响新的录取周期。</v-alert><v-text-field v-model="planDraft.title" label="方案名称" maxlength="200" :disabled="saving" />
-      <div v-for="(stage, index) in planDraft.stages" :key="stage.id || `new-${index}`" class="stage-editor"><div class="stage-editor-heading"><strong>阶段 {{ index + 1 }}</strong><v-chip v-if="index === planDraft.stages.length - 1" size="x-small" color="primary">最终考核</v-chip><v-spacer /><v-btn icon="mdi-arrow-up" size="small" variant="text" aria-label="上移阶段" :disabled="saving || index === 0" @click="reorderStage(index, -1)" /><v-btn icon="mdi-arrow-down" size="small" variant="text" aria-label="下移阶段" :disabled="saving || index === planDraft.stages.length - 1" @click="reorderStage(index, 1)" /><v-btn icon="mdi-delete-outline" size="small" variant="text" aria-label="删除阶段" :disabled="saving || planDraft.stages.length === 1" @click="planDraft.stages.splice(index, 1)" /></div><v-text-field v-model="stage.title" label="阶段名称" maxlength="200" :disabled="saving" /><v-textarea v-model="stage.description" label="阶段说明（可选）" rows="2" maxlength="2000" hide-details :disabled="saving" /></div>
-      <v-btn variant="tonal" prepend-icon="mdi-plus" :disabled="saving || planDraft.stages.length >= 12" @click="addStage">增加阶段</v-btn>
-    </v-card-text><v-card-actions class="dialog-actions"><v-spacer /><v-btn :disabled="saving" @click="planDialog = false">取消</v-btn><v-btn color="primary" variant="flat" :loading="saving" @click="savePlan">保存阶段方案</v-btn></v-card-actions></v-card></v-dialog>
+
 
     <v-dialog v-model="decisionDialog" max-width="600" :persistent="saving"><v-card><v-card-title class="dialog-heading">{{ decisionStatus === 'passed' ? '确认阶段通过' : '确认淘汰' }}<v-spacer /><v-btn icon="mdi-close" variant="text" aria-label="关闭考核确认" :disabled="saving" @click="decisionDialog = false" /></v-card-title><v-card-text><v-alert v-if="decisionError" type="error" variant="tonal" class="mb-4">{{ decisionError }}</v-alert><p class="decision-summary">{{ groupLabel(decisionRecords[0]?.direction || '') }} · {{ decisionRecords[0] ? stageName(decisionRecords[0]) : '' }}<strong>{{ decisionRecords.length }} 人</strong></p><div class="decision-people"><v-chip v-for="item in decisionRecords" :key="item.id" size="small">{{ item.userName }}</v-chip></div><v-alert :type="decisionStatus === 'eliminated' ? 'warning' : 'info'" variant="tonal" density="compact" class="my-5">{{ decisionStatus === 'eliminated' ? '淘汰仅关闭当前团队与组别的提交资格，其他组的培养与报名不受影响。保留所有考核记录，重新参加本组需明确重新开启培养。' : finalDecision ? '通过本组最终考核后确认成员身份；已有更高身份会保留，其他组仍按各自阶段考核。' : '通过本组当前阶段后进入下一阶段，不改变其他组的培养进度。' }}</v-alert><v-select v-if="decisionStatus === 'passed' && finalDecision" v-model="targetMemberType" :items="[{ title: '梯队队员', value: 'reserve' }, { title: '正式队员', value: 'formal' }]" label="晋升为" :disabled="saving" /><v-textarea v-model="decisionNote" label="考核反馈（成员可查看）" rows="3" maxlength="2000" hide-details :disabled="saving" /></v-card-text><v-card-actions class="dialog-actions"><v-spacer /><v-btn :disabled="saving" @click="decisionDialog = false">取消</v-btn><v-btn :color="decisionStatus === 'eliminated' ? 'error' : 'primary'" variant="flat" :loading="saving" @click="confirmDecision">{{ decisionStatus === 'eliminated' ? '确认淘汰' : finalDecision ? '通过并晋升' : '确认通过' }}</v-btn></v-card-actions></v-card></v-dialog>
 
@@ -246,6 +258,11 @@ onUnmounted(() => { loadVersion++; });
 </template>
 
 <style scoped>
+.plan-editor-page { max-width: 960px; }
+.plan-apply { margin-top: 28px; padding: 20px; background: #f7f9fc; border-radius: 8px; }
+.plan-apply h3 { font-size: 15px; font-weight: 500; }
+.plan-apply p { font-size: 13px; color: #757575; line-height: 1.8; margin-top: 10px; }
+.overview-stage { max-width: 320px; }
 .training-page { max-width: 1360px; }
 .training-heading, .plan-heading, .roster-heading, .progress-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .training-tabs { margin-bottom: 24px; border-bottom: 1px solid #e5e7eb; }
