@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/csv"
 	"fmt"
@@ -85,6 +86,7 @@ type FinanceSummary struct {
 func (a *App) registerFinanceRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/finance/claims", a.wrap(true, a.listFinanceClaims))
 	m.HandleFunc("POST /api/finance/claims", a.wrap(true, a.createFinanceClaim))
+	m.HandleFunc("POST /api/finance/claims/batch", a.wrap(true, a.createFinanceClaimsBatch))
 	m.HandleFunc("PATCH /api/finance/claims/{id}", a.wrap(true, a.updateFinanceClaim))
 	m.HandleFunc("GET /api/finance/ledger", a.wrap(true, a.listFinanceLedger))
 	m.HandleFunc("POST /api/finance/ledger", a.wrap(true, a.createFinanceLedger))
@@ -204,6 +206,86 @@ func (a *App) createFinanceClaim(w http.ResponseWriter, r *http.Request, u User)
 	respond(w, 201, map[string]any{"item": c})
 	return nil
 }
+
+// A batch and its retry record commit together under the shared finance lock.
+// The settings record stores only IDs and a digest, never receipt contents.
+type financeBatchReceipt struct {
+	Digest   string   `json:"digest"`
+	ClaimIDs []string `json:"claimIds"`
+}
+
+func (a *App) createFinanceClaimsBatch(w http.ResponseWriter, r *http.Request, u User) error {
+	var in struct {
+		RequestID string               `json:"requestId"`
+		Items     []FinanceClaimFields `json:"items"`
+	}
+	if err := decode(r, &in); err != nil {
+		return err
+	}
+	in.RequestID = strings.TrimSpace(in.RequestID)
+	if !financeText(in.RequestID, 128, true) || len(in.Items) < 1 || len(in.Items) > 20 {
+		return fail(400, "请提供批次编号，每批提交 1 至 20 条报销")
+	}
+	key := fmt.Sprintf("finance-batch:%x", sha256.Sum256([]byte(u.ID+"\x00"+in.RequestID)))
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(encoded(in.Items))))
+	scoped, tx, err := a.beginFinanceWrite(r)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	a = scoped
+	prior, err := readOne[financeBatchReceipt](a.store, "SELECT payload FROM settings WHERE id=?", key)
+	if err == nil {
+		if prior.Digest != digest {
+			return fail(409, "该批次已提交，请刷新后查看；修改内容后请创建新批次")
+		}
+		items := make([]FinanceClaim, 0, len(prior.ClaimIDs))
+		for _, id := range prior.ClaimIDs {
+			c, readErr := readOne[FinanceClaim](a.store, "SELECT payload FROM finance_claims WHERE id=? AND user_id=?", id, u.ID)
+			if readErr != nil {
+				return readErr
+			}
+			items = append(items, c)
+		}
+		respond(w, 200, map[string]any{"items": items, "replayed": true})
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+	seenInvoices := map[string]bool{}
+	for i := range in.Items {
+		for _, id := range in.Items[i].InvoiceFileIDs {
+			if seenInvoices[id] {
+				return fail(400, fmt.Sprintf("第 %d 条报销重复使用了本批次发票", i+1))
+			}
+			seenInvoices[id] = true
+		}
+		if err = a.validateFinanceClaim(&in.Items[i], u); err != nil {
+			return err
+		}
+	}
+	items := make([]FinanceClaim, 0, len(in.Items))
+	receipt := financeBatchReceipt{Digest: digest, ClaimIDs: []string{}}
+	for _, fields := range in.Items {
+		c := FinanceClaim{FinanceClaimFields: fields, ID: randomID(), UserID: u.ID, UserName: u.Name, Status: "submitted", Version: 1, CreatedAt: now(), PayoutFileIDs: []string{}, Events: []FinanceEvent{}}
+		c.event("submit", u, "批量提交")
+		if err = a.saveFinanceClaim(c); err != nil {
+			return err
+		}
+		items = append(items, c)
+		receipt.ClaimIDs = append(receipt.ClaimIDs, c.ID)
+	}
+	if err = a.store.exec("INSERT INTO settings(id,payload) VALUES(?,?)", key, encoded(receipt)); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	respond(w, 201, map[string]any{"items": items, "replayed": false})
+	return nil
+}
+
 func (a *App) updateFinanceClaim(w http.ResponseWriter, r *http.Request, u User) error {
 	var in struct {
 		FinanceClaimFields
@@ -235,7 +317,7 @@ func (a *App) updateFinanceClaim(w http.ResponseWriter, r *http.Request, u User)
 	if c.Version != in.Version {
 		return fail(409, "记录已更新，请刷新后重试")
 	}
-	if c.Status == "paid" || c.Status == "cancelled" {
+	if c.Status == "cancelled" || (c.Status == "paid" && in.Action != "supplement") {
 		return fail(409, "已完成或已撤销的申请不可修改")
 	}
 	note := strings.TrimSpace(in.ReviewNote)
@@ -249,6 +331,23 @@ func (a *App) updateFinanceClaim(w http.ResponseWriter, r *http.Request, u User)
 		return fail(400, "说明过长")
 	}
 	switch in.Action {
+	case "supplement":
+		if c.UserID != u.ID {
+			return fail(403, "只能由申请人补交发票")
+		}
+		if c.Status != "submitted" && c.Status != "approved" && c.Status != "returned" && c.Status != "paid" {
+			return fail(409, "当前状态不能补交发票")
+		}
+		if len(in.InvoiceFileIDs) == 0 {
+			return fail(400, "请选择需要补交的发票")
+		}
+		// Only append invoice evidence. Ignore all submitted monetary/status fields.
+		merged := append(append([]string{}, c.InvoiceFileIDs...), in.InvoiceFileIDs...)
+		if err = a.financeFiles(u, append(append([]string{}, merged...), c.PaymentFileIDs...), u.ID); err != nil {
+			return err
+		}
+		c.Revisions = append(c.Revisions, FinanceClaimRevision{FinanceClaimFields: c.FinanceClaimFields, Version: c.Version, SavedAt: now()})
+		c.InvoiceFileIDs = merged
 	case "approve":
 		if err = financeAdmin(u); err != nil {
 			return err

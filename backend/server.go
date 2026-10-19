@@ -167,7 +167,9 @@ func (a *App) wrapWithMutationLock(auth, mutationLock bool, handler func(http.Re
 				}
 			}
 			limit := int64(1 << 20)
-			if r.URL.Path == "/api/files" {
+			if r.URL.Path == "/api/finance/recognize" {
+				limit = 9 << 20
+			} else if r.URL.Path == "/api/files" {
 				limit = 26 << 20
 			} else if r.Method == http.MethodPatch && r.URL.Path == "/api/profile" {
 				limit = 6 << 20
@@ -262,6 +264,7 @@ func (a *App) Handler() http.Handler {
 	a.registerCertificateRoutes(m)
 	a.registerAdminSettingsRoutes(m)
 	a.registerFinanceRoutes(m)
+	a.registerFinanceRecognitionRoutes(m)
 	m.HandleFunc("GET /api/workspace-summary", a.wrap(true, a.workspaceSummary))
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, 404, map[string]string{"error": "接口不存在"})

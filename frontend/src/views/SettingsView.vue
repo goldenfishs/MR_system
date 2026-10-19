@@ -3,6 +3,7 @@ import { nextTick, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { api } from "../lib/api";
 import type { MailServiceSettings, Settings } from "../lib/types";
+import FinanceRecognitionSettings from "../components/FinanceRecognitionSettings.vue";
 const route = useRoute();
 const form = reactive<Settings>({
   description: "",
@@ -102,7 +103,7 @@ async function saveMail() {
 }
 async function scrollToSection() {
   await nextTick();
-  if (["#branding", "#email", "#general"].includes(route.hash)) document.getElementById(route.hash.slice(1))?.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (["#branding", "#email", "#general", "#finance-recognition"].includes(route.hash)) document.getElementById(route.hash.slice(1))?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 watch(() => route.hash, () => void scrollToSection());
 function localDateTime(value: string) {
@@ -183,12 +184,13 @@ onMounted(() => {
 <template>
   <div class="page-content">
     <h1 class="page-title">系统设置</h1>
-    <p class="page-subtitle">管理网站名称、标志、招新安排与发信邮箱。修改后立即生效。</p>
+    <p class="page-subtitle">管理网站名称、标志、招新安排、发信邮箱与发票识别。修改后立即生效。</p>
     <div class="settings-shortcuts mb-6">
       <v-btn to="/admin" variant="tonal" prepend-icon="mdi-shield-crown-outline">系统管理</v-btn>
       <v-btn to="/members" variant="tonal" prepend-icon="mdi-account-cog-outline">用户管理</v-btn>
       <v-btn href="#branding" variant="text" prepend-icon="mdi-palette-outline">网站外观</v-btn>
       <v-btn href="#email" variant="text" prepend-icon="mdi-email-outline">邮件服务</v-btn>
+      <v-btn href="#finance-recognition" variant="text" prepend-icon="mdi-text-recognition">发票识别</v-btn>
     </div>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-5"
       >{{ error
@@ -319,6 +321,7 @@ onMounted(() => {
         </template>
       </v-card>
     </form>
+    <FinanceRecognitionSettings v-if="loaded" />
     <v-snackbar v-model="saved" color="success">{{ savedMessage }}</v-snackbar>
   </div>
 </template>
