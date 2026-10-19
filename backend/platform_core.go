@@ -832,7 +832,25 @@ func (a *App) applyToTeam(w http.ResponseWriter, r *http.Request, u User) error 
 	if file.MIME != "application/pdf" {
 		return fail(400, "简历必须为 PDF 文件")
 	}
-	ap, err := readOne[TeamApplication](a.store, "SELECT payload FROM team_applications WHERE team_id=? AND user_id=?", t.ID, u.ID)
+	tx, err := a.store.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	s := &Store{db: a.store.db, postgres: a.store.postgres, tx: tx}
+	if err = lockInterviewSlots(s); err != nil {
+		return err
+	}
+	// Re-read within the booking lock so an interview exemption configured
+	// concurrently is reflected in this application, rather than a stale team.
+	t, err = readOne[Team](s, "SELECT payload FROM teams WHERE id=?", t.ID)
+	if err != nil {
+		return err
+	}
+	if t.Status != "open" || expired(t.Deadline) || !slices.Contains(t.Directions, in.Direction) {
+		return fail(409, "该团队或组别已停止报名，请刷新后重试")
+	}
+	ap, err := readOne[TeamApplication](s, "SELECT payload FROM team_applications WHERE team_id=? AND user_id=?", t.ID, u.ID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -856,7 +874,10 @@ func (a *App) applyToTeam(w http.ResponseWriter, r *http.Request, u User) error 
 	ap.Status = "pending"
 	ap.Feedback = ""
 	ap.UpdatedAt = now()
-	if err = a.store.exec("INSERT INTO team_applications(id,team_id,user_id,payload) VALUES(?,?,?,?) ON CONFLICT(team_id,user_id) DO UPDATE SET payload=excluded.payload", ap.ID, t.ID, u.ID, encoded(ap)); err != nil {
+	if err = s.exec("INSERT INTO team_applications(id,team_id,user_id,payload) VALUES(?,?,?,?) ON CONFLICT(team_id,user_id) DO UPDATE SET payload=excluded.payload", ap.ID, t.ID, u.ID, encoded(ap)); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
 		return err
 	}
 	respond(w, 201, map[string]any{"item": ap})
@@ -891,6 +912,9 @@ func (a *App) reviewTeamApplication(w http.ResponseWriter, r *http.Request, u Us
 	}
 	defer tx.Rollback()
 	s := &Store{db: a.store.db, postgres: a.store.postgres, tx: tx}
+	if err = lockInterviewSlots(s); err != nil {
+		return err
+	}
 	ap, err := readOne[TeamApplication](s, "SELECT payload FROM team_applications WHERE id=?", r.PathValue("id"))
 	if err != nil {
 		return err

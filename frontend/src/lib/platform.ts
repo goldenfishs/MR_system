@@ -45,8 +45,19 @@ export interface TeamSpace {
   memberCount: number;
   myApplication?: TeamApplication | null;
 }
+export interface TeamInterview {
+  status: "pending" | "passed" | "exempt" | "rejected";
+  at: string;
+  room: string;
+  order: number;
+  note: string;
+  slotId?: string;
+  durationMinutes?: number;
+  decidedBy?: string;
+  decidedAt?: string;
+}
 export interface TeamApplication {
-  interview?: { status: "pending" | "passed" | "exempt" | "rejected"; at: string; room: string; order: number; note: string; decidedBy?: string; decidedAt?: string };
+  interview?: TeamInterview;
   id: string;
   teamId: string;
   userId: string;

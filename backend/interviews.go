@@ -10,16 +10,19 @@ import (
 )
 
 type TeamInterview struct {
-	Status    string `json:"status"`
-	At        string `json:"at"`
-	Room      string `json:"room"`
-	Order     int    `json:"order"`
-	Note      string `json:"note"`
-	DecidedBy string `json:"decidedBy,omitempty"`
-	DecidedAt string `json:"decidedAt,omitempty"`
+	SlotID          string `json:"slotId,omitempty"`
+	DurationMinutes int    `json:"durationMinutes,omitempty"`
+	Status          string `json:"status"`
+	At              string `json:"at"`
+	Room            string `json:"room"`
+	Order           int    `json:"order"`
+	Note            string `json:"note"`
+	DecidedBy       string `json:"decidedBy,omitempty"`
+	DecidedAt       string `json:"decidedAt,omitempty"`
 }
 
 func (a *App) registerInterviewRoutes(m *http.ServeMux) {
+	a.registerInterviewSlotRoutes(m)
 	m.HandleFunc("GET /api/interviews", a.wrap(true, a.listInterviews))
 	m.HandleFunc("PATCH /api/interviews/schedule", a.wrap(true, a.scheduleInterviews))
 	m.HandleFunc("POST /api/interviews/{id}/decision", a.wrap(true, a.decideInterview))
@@ -87,6 +90,25 @@ func (a *App) scheduleInterviews(w http.ResponseWriter, r *http.Request, u User)
 	}
 	defer tx.Rollback()
 	s := &Store{db: a.store.db, postgres: a.store.postgres, tx: tx}
+	if err = lockInterviewSlots(s); err != nil {
+		return err
+	}
+	apps, err := readAll[TeamApplication](s, "SELECT payload FROM team_applications")
+	if err != nil {
+		return err
+	}
+	state, err := readInterviewSlots(s)
+	if err != nil {
+		return err
+	}
+	// The entire selected batch moves atomically. Ignore its old appointments
+	// while checking the final arrangement, then include each new appointment.
+	conflicts := []TeamApplication{}
+	for _, ap := range apps {
+		if !slices.Contains(in.ApplicationIDs, ap.ID) {
+			conflicts = append(conflicts, ap)
+		}
+	}
 	out := []TeamApplication{}
 	for i, id := range in.ApplicationIDs {
 		ap, err := interviewApplication(s, u, id)
@@ -97,7 +119,18 @@ func (a *App) scheduleInterviews(w http.ResponseWriter, r *http.Request, u User)
 		if ap.Status != "pending" || v.Status != "pending" {
 			return fail(409, "只能安排待面试报名；已录取或已确认结果的报名不能重复排期")
 		}
-		v.At = start.Add(time.Duration(i*in.IntervalMinutes) * time.Minute).UTC().Format(time.RFC3339)
+		when := start.Add(time.Duration(i*in.IntervalMinutes) * time.Minute)
+		if err = checkInterviewApplicantConflict(ap, when, when.Add(time.Duration(in.IntervalMinutes)*time.Minute), conflicts, state.Slots); err != nil {
+			return err
+		}
+		end := when.Add(time.Duration(in.IntervalMinutes) * time.Minute)
+		candidate := InterviewSlot{Room: in.Room, StartAt: when.UTC().Format(time.RFC3339), EndAt: end.UTC().Format(time.RFC3339)}
+		if slotRoomConflict(candidate, state.Slots, interviewSlotCounts(conflicts)) || manualInterviewRoomConflict(in.Room, when, end, conflicts, ap.ID) {
+			return fail(409, "该教室在所选时间已有面试安排，请选择其他教室或使用已有预约时段")
+		}
+		v.SlotID = ""
+		v.DurationMinutes = in.IntervalMinutes
+		v.At = when.UTC().Format(time.RFC3339)
 		v.Room = in.Room
 		v.Order = in.StartOrder + i
 		ap.Interview = &v
@@ -106,6 +139,7 @@ func (a *App) scheduleInterviews(w http.ResponseWriter, r *http.Request, u User)
 			return err
 		}
 		out = append(out, ap)
+		conflicts = append(conflicts, ap)
 	}
 	if err = tx.Commit(); err != nil {
 		return err
@@ -131,6 +165,9 @@ func (a *App) decideInterview(w http.ResponseWriter, r *http.Request, u User) er
 	}
 	defer tx.Rollback()
 	s := &Store{db: a.store.db, postgres: a.store.postgres, tx: tx}
+	if err = lockInterviewSlots(s); err != nil {
+		return err
+	}
 	ap, err := interviewApplication(s, u, r.PathValue("id"))
 	if err != nil {
 		return err
@@ -251,6 +288,9 @@ func (a *App) configureLegacyInterviewRound(w http.ResponseWriter, r *http.Reque
 	}
 	defer tx.Rollback()
 	s := &Store{db: a.store.db, postgres: a.store.postgres, tx: tx}
+	if err = lockInterviewSlots(s); err != nil {
+		return err
+	}
 	count := 0
 	for _, id := range normalizedIDs(in.TeamIDs) {
 		team, err := readOne[Team](s, "SELECT payload FROM teams WHERE id=?", id)

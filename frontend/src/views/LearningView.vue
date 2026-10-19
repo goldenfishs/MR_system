@@ -732,7 +732,7 @@ async function openBankImport() {
     if (version !== importLoadVersion || direction !== selectedDirection.value) return;
     importBanks.value = items.filter(bank => bank.direction === direction);
     importBankId.value = importBanks.value[0]?.id || "";
-    if (!importBankId.value) importError.value = "当前组别暂无可导入的基础题库。";
+    if (!importBankId.value) importError.value = "当前组别暂无可导入的内置示例题库。";
   } catch (e) {
     if (version === importLoadVersion) importError.value = messageOf(e);
   } finally {
@@ -747,7 +747,7 @@ async function importQuestionBank() {
   try {
     const result = await api.post<{ imported: number; skipped: number; grouped: number; total: number }>(`/question-banks/${encodeURIComponent(bank.id)}/import`, { syncCourseTags: true });
     importOpen.value = false;
-    notice.value = `${groupLabel(bank.direction)}基础题库导入完成：新增 ${result.imported} 题，已存在 ${result.skipped} 题${result.grouped ? `，补充课程分组 ${result.grouped} 题` : ""}。`;
+    notice.value = `${groupLabel(bank.direction)}内置示例题导入完成：新增 ${result.imported} 题，已存在 ${result.skipped} 题${result.grouped ? `，补充课程分组 ${result.grouped} 题` : ""}。`;
     await load();
   } catch (e) {
     importError.value = messageOf(e);
@@ -1133,7 +1133,7 @@ onUnmounted(() => clearInterval(timeTicker));
   >
     <div class="page-content learning-page">
       <div class="page-heading">
-        <div>
+        <div class="heading-copy">
           <h1>{{ groupName }} · {{ section === 'knowledge' ? '知识库' : section === 'exam' ? '考试' : section === 'bank' ? '题库' : section === 'tasks' ? '作业' : '首页' }}</h1>
           <p>
             {{
@@ -1166,8 +1166,7 @@ onUnmounted(() => clearInterval(timeTicker));
             @click="load()"
             >刷新</v-btn
           >
-          <v-btn v-if="auth.user?.role === 'admin' && section === 'bank'" to="/bank-management" color="primary" variant="tonal" :disabled="saving || uploadBusy || questionUploadBusy || mechanicalUploadBusy" :prepend-icon="route.query.from === 'bank-management' ? 'mdi-arrow-left' : 'mdi-sync'">{{ route.query.from === 'bank-management' ? '返回题库管理' : '题库管理与同步' }}</v-btn>
-          <v-btn v-if="canImportBank" color="primary" variant="tonal" prepend-icon="mdi-database-import-outline" :disabled="importing" @click="openBankImport">导入基础题库</v-btn>
+          <v-btn v-if="auth.user?.role === 'admin' && section === 'bank'" to="/bank-management" color="primary" variant="tonal" :disabled="saving || uploadBusy || questionUploadBusy || mechanicalUploadBusy" :prepend-icon="route.query.from === 'bank-management' ? 'mdi-arrow-left' : 'mdi-sync'">{{ route.query.from === 'bank-management' ? '返回题库管理' : '题库管理' }}</v-btn>
           <v-btn
             v-if="canManage && section !== 'knowledge' && (section !== 'bank' || supportsBank)"
             color="primary"
@@ -1175,6 +1174,10 @@ onUnmounted(() => clearInterval(timeTicker));
             @click="startCreate"
             >{{ section === 'exam' ? '安排考试' : section === 'bank' ? '发布题目' : '发布作业' }}</v-btn
           >
+          <v-menu v-if="canImportBank">
+            <template #activator="{ props }"><v-btn v-bind="props" variant="text" append-icon="mdi-chevron-down" :disabled="importing" aria-label="更多题库操作">更多</v-btn></template>
+            <v-list density="compact"><v-list-item prepend-icon="mdi-database-import-outline" title="导入内置示例题" subtitle="随系统附带，不拉取 GitHub 更新" @click="openBankImport" /></v-list>
+          </v-menu>
         </div>
       </div>
       <v-alert v-if="error" type="error" variant="tonal" class="mb-5"
@@ -1295,7 +1298,7 @@ onUnmounted(() => clearInterval(timeTicker));
           <v-card class="problem-list" elevation="1">
             <div class="problem-list-tools"><v-select v-model="problemSort" :items="[{value:'course',title:'学习顺序'},{value:'newest',title:'最新发布'},{value:'title',title:'题目名称'},{value:'accepted',title:'通过次数'}]" density="compact" variant="outlined" hide-details aria-label="题库排序" /><span>{{ problems.length }} 道题目</span></div>
             <div class="problem-table-scroll"><table class="problem-table"><thead><tr><th>状态</th><th>题目</th><th>标签</th><th>通过 / 尝试</th><th>难度</th></tr></thead><tbody><tr v-for="task in pagedProblems" :key="task.id"><td><v-icon v-if="task.mechanicalProblem?.type === 'drawing'" size="19" color="blue-grey" title="自主练习，无需提交">mdi-ruler-square</v-icon><v-icon v-else size="19" :color="task.myAccepted ? 'teal' : 'grey-lighten-1'">{{ task.myAccepted ? 'mdi-check-circle-outline' : 'mdi-circle-outline' }}</v-icon></td><td><button class="problem-title" @click="openTask(task)"><span>#{{ task.id.slice(0, 6).toUpperCase() }}</span><strong>{{ task.title }}</strong><span v-if="task.mechanicalProblem">{{ objectiveTypeLabel(task) }}</span></button></td><td><div class="problem-tags"><v-chip v-for="tag in task.tags || []" :key="tag" size="x-small" color="primary" variant="tonal" @click="(controlBank && controlCourses.includes(tag)) || (algorithmBank && algorithmCourseGroups.includes(tag)) ? selectProblemGroup(tag) : problemTag = tag">{{ tag }}</v-chip><span v-if="!task.tags?.length">{{ task.direction }}</span></div></td><td>{{ task.mechanicalProblem?.type === 'drawing' ? '自主练习' : `${task.acceptedCount || 0} / ${task.attemptCount || 0}` }}</td><td><v-chip size="x-small" :color="task.difficulty === '挑战' ? 'deep-orange' : task.difficulty === '进阶' ? 'amber-darken-2' : 'teal'" variant="tonal">{{ task.difficulty }}</v-chip></td></tr></tbody></table></div>
-            <div v-if="!problems.length" class="problem-empty"><v-icon size="38" color="indigo-lighten-3">{{ mechanicalBank ? 'mdi-pencil-ruler' : 'mdi-code-braces' }}</v-icon><h2>暂无匹配的题目</h2><p>{{ canManage ? mechanicalBank ? '发布选择、填空题或练习图纸，参考答案可按需提供。' : '导入基础题库，或发布选择、填空和编程题供成员练习。' : '更换搜索条件，或等待管理员发布新的练习题目。' }}</p></div>
+            <div v-if="!problems.length" class="problem-empty"><v-icon size="38" color="indigo-lighten-3">{{ mechanicalBank ? 'mdi-pencil-ruler' : 'mdi-code-braces' }}</v-icon><h2>暂无匹配的题目</h2><p>{{ canManage ? mechanicalBank ? '发布选择、填空题或练习图纸，参考答案可按需提供。' : auth.user?.role === 'admin' ? '在「题库管理」中同步 GitHub 题库并设置公开范围，或直接发布新题目。' : '发布新的练习题目，或通过「更多」导入系统内置示例题。' : '更换搜索条件，或等待管理员发布新的练习题目。' }}</p></div>
             <v-pagination v-if="problems.length > 15" v-model="problemPage" :length="Math.ceil(problems.length / 15)" :total-visible="5" density="compact" class="my-3" />
           </v-card>
           <aside class="problem-sidebar"><v-card elevation="1"><h3>题目分类</h3><v-select v-model="problemTag" :items="['全部标签', ...filteredProblemTags]" label="知识标签" density="compact" variant="outlined" hide-details /><v-select v-model="problemDifficulty" :items="['全部难度', '入门', '进阶', '挑战']" label="题目难度" density="compact" variant="outlined" hide-details class="mt-4" /><v-btn color="primary" variant="text" class="mt-3" @click="resetProblemFilters">清除筛选</v-btn></v-card><v-card elevation="1"><h3>练习一道题</h3><p>从当前筛选结果中随机挑选，开始今天的练习。</p><v-btn color="primary" variant="tonal" block prepend-icon="mdi-shuffle-variant" :disabled="!problems.length" @click="randomProblem">随机题目</v-btn></v-card></aside>
@@ -1815,11 +1818,12 @@ onUnmounted(() => clearInterval(timeTicker));
 
       <v-dialog v-model="importOpen" max-width="540" :persistent="importing">
         <v-card>
-          <v-card-title>导入{{ groupName }}基础题库</v-card-title>
+          <v-card-title class="text-wrap">导入{{ groupName }}内置示例题</v-card-title>
           <v-card-text>
+            <p class="mb-4">这些示例题随当前系统版本附带，此操作不会从 GitHub 拉取更新。管理员可在「题库管理」中同步外部题库、选择课程并管理题目公开范围。</p>
             <v-progress-linear v-if="importLoading" indeterminate color="primary" aria-label="正在加载题库" class="mb-4" />
             <v-alert v-if="importError" type="error" variant="tonal" density="compact" class="mb-4">{{ importError }}</v-alert>
-            <v-select v-if="importBanks.length > 1" v-model="importBankId" :items="importBanks" item-title="name" item-value="id" label="选择基础题库" :disabled="importing" />
+            <v-select v-if="importBanks.length > 1" v-model="importBankId" :items="importBanks" item-title="name" item-value="id" label="选择内置示例题库" :disabled="importing" />
             <template v-if="selectedImportBank">
               <p class="mb-3"><strong>{{ selectedImportBank.name }}</strong> · {{ selectedImportBank.count }} 道题目</p>
               <div class="problem-tags mb-4"><v-chip v-for="topic in selectedImportBank.topics" :key="topic" size="small" variant="tonal" color="primary">{{ topic }}</v-chip></div>
@@ -2074,6 +2078,7 @@ onUnmounted(() => clearInterval(timeTicker));
 </template>
 
 <style scoped>
+.learning-page { container-type: inline-size; container-name: learning; min-width: 0; }
 .copied-question-illustration { display: block; max-width: 100%; max-height: 360px; margin: 16px auto; }
 .bank-visibility-tabs { margin: 16px 0; }
 .bank-visibility-tabs p, .assignment-bank-picker p { color: #64748b; margin: 12px 0; }
@@ -2087,10 +2092,15 @@ onUnmounted(() => clearInterval(timeTicker));
 .problem-illustration figcaption { font-size: 12px; color: #677887; margin-top: 8px; }
 .page-heading {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 20px;
   margin-bottom: 20px;
+}
+.heading-copy {
+  flex: 1 1 280px;
+  min-width: min(100%, 240px);
 }
 .page-heading h1 {
   font-size: 24px;
@@ -2107,9 +2117,13 @@ onUnmounted(() => clearInterval(timeTicker));
 }
 .heading-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
-  flex-shrink: 0;
+  max-width: 100%;
+  margin-left: auto;
 }
+.heading-actions > .v-btn { flex-shrink: 0; }
 .loading-panel {
   min-height: 240px;
   display: flex;
@@ -2479,6 +2493,7 @@ onUnmounted(() => clearInterval(timeTicker));
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   padding: 16px 0;
+  row-gap: 16px;
 }
 .overview-stats > div {
   display: flex;
@@ -2495,6 +2510,7 @@ onUnmounted(() => clearInterval(timeTicker));
   font-weight: 500;
   color: #1976d2;
   line-height: 1.3;
+  flex-shrink: 0;
 }
 .overview-stats span {
   font-size: 13px;
@@ -2502,6 +2518,7 @@ onUnmounted(() => clearInterval(timeTicker));
 }
 .task-toolbar {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 20px;
@@ -2522,6 +2539,8 @@ onUnmounted(() => clearInterval(timeTicker));
   display: flex;
   gap: 12px;
   width: 390px;
+  max-width: 100%;
+  margin-left: auto;
 }
 .task-filters > .v-text-field {
   min-width: 0;
@@ -3009,7 +3028,7 @@ onUnmounted(() => clearInterval(timeTicker));
     font-size: 13px;
   }
   .heading-actions {
-    margin-left: auto;
+    margin-left: 0;
   }
   .overview-stats {
     padding: 12px 0;
@@ -3084,5 +3103,25 @@ onUnmounted(() => clearInterval(timeTicker));
   .submission-heading {
     align-items: flex-start;
   }
+}
+/* Use the content width so browser zoom and the desktop drawer behave alike. */
+@container learning (max-width: 900px) {
+  .problem-layout { grid-template-columns: 1fr; }
+  .problem-sidebar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .overview-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .overview-stats > div:nth-child(odd) { border-left: 0; }
+}
+@container learning (max-width: 600px) {
+  .heading-copy { flex-basis: 100%; }
+  .heading-actions { justify-content: flex-start; width: 100%; margin-left: 0; }
+  .task-toolbar { align-items: stretch; gap: 12px; }
+  .task-filters { width: 100%; }
+  .problem-sidebar { grid-template-columns: 1fr; }
+  .overview-stats > div { flex-direction: column; align-items: flex-start; gap: 5px; }
+}
+@container learning (max-width: 380px) {
+  .task-filters { flex-wrap: wrap; }
+  .task-filters > .v-text-field, .task-filters > .v-select { flex-basis: 100%; }
+  .problem-list-tools { flex-wrap: wrap; gap: 10px; }
 }
 </style>

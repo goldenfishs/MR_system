@@ -203,7 +203,9 @@ async function apply() {
     );
     selected.value = { ...selected.value, myApplication: item };
     teams.value = teams.value.map((t) => (t.id === id ? selected.value! : t));
-    notice.value = `已提交${groupLabel(item.direction)}报名，侧栏已加 🌟。面试通过并录取后可完成该组作业和考试。`;
+    notice.value = item.interview?.status === 'pending'
+      ? `已提交${groupLabel(item.direction)}报名。可进入「我的面试」选择时间，或等待管理员安排。`
+      : `已提交${groupLabel(item.direction)}报名，等待录取确认。`;
     await loadApplications(id);
     await refreshLearningAccess();
   } catch (e) {
@@ -324,7 +326,7 @@ onMounted(load);
             size="small"
             >{{ statusLabel(team.myApplication) }}</v-chip
           ><v-btn v-if="isAdmin" variant="text" @click="edit(team)">编辑</v-btn
-          ><v-spacer /><v-btn
+          ><v-spacer /><v-btn v-if="team.myApplication?.status === 'pending' && team.myApplication.interview?.status === 'pending'" :to="{ path: '/recruitment', query: { application: team.myApplication.id } }" color="primary" variant="tonal" prepend-icon="mdi-calendar-clock">{{ team.myApplication.interview.at ? '查看面试安排' : '预约面试' }}</v-btn><v-btn
             color="primary"
             variant="text"
             @click="open(team)"
@@ -490,6 +492,11 @@ onMounted(load);
               >报名状态：{{ statusLabel(selected.myApplication) }}
               <p v-if="selected.myApplication.trainingStatus === 'eliminated'" class="mt-2">本组本轮阶段考核已淘汰，不能继续提交本组作业或参加考试；其它组录取资格不受影响。历史记录仍保留，重新录取由管理员或获授权组管理员确认。</p>
               <p v-else-if="selected.myApplication.trainingStatus === 'training'" class="mt-2">当前考核阶段：{{ selected.myApplication.trainingStageTitle }}。完成最终考核后确认梯队或正式队员身份。</p>
+              <div v-if="selected.myApplication.status === 'pending' && selected.myApplication.interview?.status === 'pending'" class="mt-3">
+                <p v-if="selected.myApplication.interview.at">面试时间：{{ dateTime(selected.myApplication.interview.at) }} · {{ selected.myApplication.interview.room }}</p>
+                <p v-else>请选择开放的面试时段；暂未开放时，请等待组管理员安排。</p>
+                <v-btn :to="{ path: '/recruitment', query: { application: selected.myApplication.id } }" color="primary" variant="tonal" prepend-icon="mdi-calendar-clock">{{ selected.myApplication.interview.slotId ? '查看 / 改签面试' : selected.myApplication.interview.at ? '查看面试安排' : '选择面试时间' }}</v-btn>
+              </div>
               <p v-if="selected.myApplication.feedback" class="mt-2 pre-wrap">
                 审核意见：{{ selected.myApplication.feedback }}
               </p></v-alert
@@ -689,6 +696,8 @@ onMounted(load);
 }
 .card-footer {
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   align-items: center;
   border-top: 1px solid #eee;
   padding-top: 10px;

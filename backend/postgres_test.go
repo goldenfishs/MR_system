@@ -270,4 +270,5 @@ func TestPostgreSQLPersistence(t *testing.T) {
 	if err != nil || bankTask.BankVisibility != "public" {
 		t.Fatal("PostgreSQL repeated sync overwrote local visibility", err)
 	}
+	exerciseInterviewSlotsPostgres(t, isolatedURL, reopened)
 }
