@@ -480,6 +480,13 @@ func requireOwnedFiles(s *Store, u User, ids []string) error {
 			return fail(400, "文件不能重复")
 		}
 		seen[id] = true
+		var financeRefs int
+		if err := s.row("SELECT COUNT(*) FROM finance_files WHERE file_id=?", id).Scan(&financeRefs); err != nil {
+			return err
+		}
+		if financeRefs > 0 {
+			return fail(400, "财务凭证仅用于财务业务；其他用途请单独上传文件")
+		}
 		f, err := readOne[FileAsset](s, "SELECT payload FROM files WHERE id=?", id)
 		if errors.Is(err, sql.ErrNoRows) {
 			return fail(400, "所选文件不存在")
@@ -497,6 +504,18 @@ func (a *App) canDownloadFile(u User, id string) (bool, error) {
 	f, err := a.fileAsset(id)
 	if err != nil {
 		return false, err
+	}
+	// Finance receipts remain private even if a generic resource later references them.
+	var financeRefs, financeAccess int
+	if err = a.store.row("SELECT COUNT(*) FROM finance_files WHERE file_id=?", id).Scan(&financeRefs); err != nil {
+		return false, err
+	}
+	if financeRefs > 0 {
+		if u.Role == "admin" || f.OwnerID == u.ID {
+			return true, nil
+		}
+		err = a.store.row("SELECT COUNT(*) FROM finance_files WHERE file_id=? AND user_id=?", id, u.ID).Scan(&financeAccess)
+		return financeAccess > 0, err
 	}
 	if f.OwnerID == u.ID || u.Role == "admin" {
 		return true, nil
@@ -539,7 +558,7 @@ func allowedExtension(name string) bool {
 	if len(ext) > 1 && strings.Trim(ext[1:], "0123456789") == "" {
 		return slices.Contains([]string{".prt", ".asm", ".drw"}, filepath.Ext(strings.TrimSuffix(name, ext)))
 	}
-	return slices.Contains([]string{".pdf", ".mp4", ".webm", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".md", ".zip", ".7z", ".rar", ".c", ".cpp", ".cc", ".cxx", ".cs", ".rb", ".php", ".kt", ".swift", ".lua", ".pas", ".hs", ".scala", ".m", ".ml", ".pl", ".sh", ".h", ".hpp", ".py", ".js", ".ts", ".java", ".go", ".rs", ".json", ".yaml", ".yml", ".png", ".jpg", ".jpeg", ".webp", ".svg", ".pcb", ".kicad_pcb", ".sch", ".kicad_sch", ".gerber", ".gbr", ".dxf", ".step", ".stp", ".sldprt", ".sldasm", ".ino", ".hex", ".bin", ".stl", ".f3d", ".pro", ".ioc", ".ipynb", ".csv", ".toml", ".cmake", ".epro", ".eprj",
+	return slices.Contains([]string{".pdf", ".ofd", ".mp4", ".webm", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".md", ".zip", ".7z", ".rar", ".c", ".cpp", ".cc", ".cxx", ".cs", ".rb", ".php", ".kt", ".swift", ".lua", ".pas", ".hs", ".scala", ".m", ".ml", ".pl", ".sh", ".h", ".hpp", ".py", ".js", ".ts", ".java", ".go", ".rs", ".json", ".yaml", ".yml", ".png", ".jpg", ".jpeg", ".webp", ".svg", ".pcb", ".kicad_pcb", ".sch", ".kicad_sch", ".gerber", ".gbr", ".dxf", ".step", ".stp", ".sldprt", ".sldasm", ".ino", ".hex", ".bin", ".stl", ".f3d", ".pro", ".ioc", ".ipynb", ".csv", ".toml", ".cmake", ".epro", ".eprj",
 		".slddrw", ".dwg", ".dwt", ".dwf", ".dws", ".iges", ".igs", ".x_t", ".x_b", ".xmt_txt", ".xmt_bin", ".prt", ".asm", ".drw", ".ipt", ".iam", ".idw", ".ipn", ".sat", ".sab", ".obj", ".mtl", ".3mf", ".ply", ".stpz", ".f3z", ".fcstd", ".catpart", ".catproduct", ".catdrawing", ".3dxml", ".jt",
 		".hh", ".hxx", ".ipp", ".tpp", ".inl", ".s", ".asm", ".cu", ".cuh", ".pyi", ".pyw", ".jsx", ".tsx", ".html", ".css", ".scss", ".vue", ".r", ".jl", ".f", ".f90", ".v", ".sv", ".vh", ".svh", ".vhd", ".vhdl", ".ino", ".pde", ".ld", ".map", ".elf", ".axf", ".uvproj", ".uvprojx", ".uvopt", ".uvoptx", ".ewp", ".eww", ".ewd", ".cproject", ".project", ".sln", ".vcxproj", ".vcxproj.filters", ".mk", ".bat", ".ps1", ".xml", ".ini", ".cfg", ".conf", ".log", ".dat", ".npz", ".npy", ".mat", ".tar", ".gz", ".bz2", ".xz", ".tgz", ".schdoc", ".pcbdoc", ".prjpcb", ".pcblib", ".schlib", ".brd", ".drl", ".lbr", ".kicad_pro", ".kicad_sym", ".kicad_mod",
 	}, ext)

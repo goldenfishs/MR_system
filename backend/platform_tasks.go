@@ -682,6 +682,15 @@ func (a *App) exportTaskSubmissions(w http.ResponseWriter, r *http.Request, u Us
 					tmp.Close()
 					return createErr
 				}
+				allowed, accessErr := a.canDownloadFile(u, fileID)
+				if accessErr != nil || !allowed {
+					archive.Close()
+					tmp.Close()
+					if accessErr != nil {
+						return accessErr
+					}
+					return fail(403, "作业中包含无权导出的私人凭证")
+				}
 				file, _, openErr := a.openAsset(fileID)
 				if openErr != nil {
 					archive.Close()
@@ -726,6 +735,15 @@ func (a *App) exportTaskSubmissions(w http.ResponseWriter, r *http.Request, u Us
 					archive.Close()
 					tmp.Close()
 					return createErr
+				}
+				allowed, accessErr := a.canDownloadFile(u, run.SourceFileID)
+				if accessErr != nil || !allowed {
+					archive.Close()
+					tmp.Close()
+					if accessErr != nil {
+						return accessErr
+					}
+					return fail(403, "作业中包含无权导出的私人凭证")
 				}
 				source, _, openErr := a.openAsset(run.SourceFileID)
 				if openErr != nil {

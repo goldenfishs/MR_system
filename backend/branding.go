@@ -184,6 +184,13 @@ func (a *App) publicBrandLogo(w http.ResponseWriter, r *http.Request, _ User) er
 	if settings.LogoURL != "/api/public/logo/"+r.PathValue("id") {
 		return fail(404, "标志不存在")
 	}
+	var financeRefs int
+	if err = a.store.row("SELECT COUNT(*) FROM finance_files WHERE file_id=?", r.PathValue("id")).Scan(&financeRefs); err != nil {
+		return err
+	}
+	if financeRefs > 0 {
+		return fail(404, "标志不存在")
+	}
 	file, asset, err := a.openAsset(r.PathValue("id"))
 	if err != nil {
 		return err

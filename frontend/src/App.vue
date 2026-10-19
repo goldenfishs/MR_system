@@ -45,9 +45,11 @@ const navigation = computed(() => [
     title: "荣誉中心",
     icon: "mdi-certificate-outline",
   },
+  { path: "/finance", title: "财务中心", icon: "mdi-wallet-outline" },
   { path: "/profile", title: "个人中心", icon: "mdi-account-circle-outline" },
 ]);
 const managementNavigation = computed(() => [
+  ...(auth.user?.role === "admin" ? [{ path: "/finance-management", title: "财务管理", icon: "mdi-cash-multiple" }] : []),
   ...(auth.user?.role === "admin" ? [{ path: "/bank-management", title: "题库管理", icon: "mdi-bookshelf" }] : []),
   ...(hasPermission("recruitment") ? [{ path: "/applications", title: "报名审核", icon: "mdi-account-check-outline" }] : []),
   ...(hasPermission("members") ? [{ path: "/members", title: auth.user?.role === "admin" ? "用户管理" : "组内成员", icon: "mdi-account-group-outline" }] : []),

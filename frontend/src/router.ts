@@ -89,6 +89,16 @@ const router = createRouter({
       meta: { title: "讨论区" },
     },
     {
+      path: "/finance",
+      component: () => import("./views/FinanceView.vue"),
+      meta: { title: "财务中心" },
+    },
+    {
+      path: "/finance-management",
+      component: () => import("./views/FinanceView.vue"),
+      meta: { title: "财务管理", admin: true },
+    },
+    {
       path: "/files",
       component: () => import("./views/FilesView.vue"),
       meta: { title: "我的附件" },
