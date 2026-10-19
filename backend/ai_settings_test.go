@@ -242,6 +242,77 @@ func TestAIUpstreamDiscoveryAndSyntheticTest(t *testing.T) {
 	}
 }
 
+func TestAIDiscoveryBeforeApplicationBinding(t *testing.T) {
+	a, _ := setup(t)
+	admin := User{ID: "discovery-admin", Role: "admin"}
+	if _, e := putAI(t, a, aiConfigurationFixture(), admin); e != nil {
+		t.Fatal(e)
+	}
+	s, _ := a.aiConfiguration()
+	before := encoded(s)
+	// Replacing a provider and removing the old model leaves the application
+	// temporarily unbound. Discovery must not validate or persist that draft.
+	draft := &aiDiscoveryRequest{Revision: s.Revision, Provider: &aiProvider{
+		ID: "replacement", Name: "Replacement", Type: "openai", Enabled: true,
+		BaseURL: "https://api.example.com/v1/", APIKey: "unsaved-discovery-secret",
+	}}
+	p, e := a.aiDiscoveryProvider(s, "replacement", draft)
+	if e != nil || p.BaseURL != "https://api.example.com/v1" || p.APIKey != "" || p.KeyCiphertext == "" {
+		t.Fatalf("unsaved provider discovery failed: %v", e)
+	}
+	key, _ := a.mailSettingsKey(false)
+	secret, e := decryptMailPassword(key, p.KeyCiphertext)
+	if e != nil || secret != "unsaved-discovery-secret" {
+		t.Fatal("draft credential not used")
+	}
+	after, _ := a.aiConfiguration()
+	if encoded(after) != before {
+		t.Fatal("discovery modified saved credentials or application bindings")
+	}
+	// No request body remains compatible with already saved providers.
+	p, e = a.aiDiscoveryProvider(s, "deepseek", nil)
+	if e != nil || p.KeyCiphertext != s.Providers[0].KeyCiphertext {
+		t.Fatal("saved provider discovery failed", e)
+	}
+	public := publicAI(t, a).Providers[0]
+	draft = &aiDiscoveryRequest{Revision: s.Revision, Provider: &public}
+	p, e = a.aiDiscoveryProvider(s, "deepseek", draft)
+	if e != nil || p.KeyCiphertext != s.Providers[0].KeyCiphertext {
+		t.Fatal("blank draft key did not reuse saved credential", e)
+	}
+	public.BaseURL = "https://different.example.com/v1"
+	_, e = a.aiDiscoveryProvider(s, "deepseek", draft)
+	requireAIStatus(t, e, 400)
+	public.APIKey = "replacement-draft-secret"
+	if _, e = a.aiDiscoveryProvider(s, "deepseek", draft); e != nil {
+		t.Fatal("explicit key for new endpoint rejected", e)
+	}
+	public.KeyCiphertext = "injected"
+	_, e = a.aiDiscoveryProvider(s, "deepseek", draft)
+	requireAIStatus(t, e, 400)
+	public.KeyCiphertext = ""
+	public.ClearAPIKey = true
+	_, e = a.aiDiscoveryProvider(s, "deepseek", draft)
+	requireAIStatus(t, e, 409)
+	public.ClearAPIKey = false
+	public.Enabled = false
+	_, e = a.aiDiscoveryProvider(s, "deepseek", draft)
+	requireAIStatus(t, e, 409)
+	public.Enabled = true
+	public.BaseURL = "https://127.0.0.1/v1"
+	_, e = a.aiDiscoveryProvider(s, "deepseek", draft)
+	requireAIStatus(t, e, 400)
+	draft.Revision--
+	_, e = a.aiDiscoveryProvider(s, "deepseek", draft)
+	requireAIStatus(t, e, 409)
+	draft.Revision = s.Revision
+	_, e = a.aiDiscoveryProvider(s, "wrong-id", draft)
+	requireAIStatus(t, e, 400)
+	draft.Provider = nil
+	_, e = a.aiDiscoveryProvider(s, "deepseek", draft)
+	requireAIStatus(t, e, 400)
+}
+
 func TestAILegacyPartialAndCustomEndpointPreserved(t *testing.T) {
 	for _, fixture := range []struct{ name, endpoint, model string }{
 		{"custom path", "https://api.example.com/custom/invoke", "legacy"},

@@ -425,6 +425,48 @@ func requestAIModels(ctx context.Context, client *http.Client, p aiProvider, key
 	}
 	return items, nil
 }
+
+type aiDiscoveryRequest struct {
+	Revision int64       `json:"revision"`
+	Provider *aiProvider `json:"provider"`
+}
+
+// Discovery can use an unsaved provider without validating or changing application
+// bindings. Reuse saved secrets only for the same provider and unchanged address.
+func (a *App) aiDiscoveryProvider(s aiConfiguration, id string, draft *aiDiscoveryRequest) (aiProvider, error) {
+	var p aiProvider
+	if draft != nil {
+		if draft.Revision != s.Revision {
+			return p, fail(409, "AI 配置已被其他管理员修改，请刷新后重试")
+		}
+		if draft.Provider == nil || draft.Provider.ID != id {
+			return p, fail(400, "请选择有效的模型服务商")
+		}
+		candidate := aiConfiguration{Providers: []aiProvider{*draft.Provider}, Applications: []aiApplication{builtinFinanceAI()}}
+		if e := a.validateAISettings(&candidate, s); e != nil {
+			return p, e
+		}
+		p = candidate.Providers[0]
+	} else {
+		for _, v := range s.Providers {
+			if v.ID == id {
+				p = v
+				break
+			}
+		}
+	}
+	if p.ID == "" {
+		return p, fail(404, "提供商不存在，请先填写服务商配置")
+	}
+	if !p.Enabled || p.BaseURL == "" {
+		return p, fail(409, "请先填写并启用模型服务商")
+	}
+	if p.KeyCiphertext == "" {
+		return p, fail(409, "请先填写提供商 API Key")
+	}
+	return p, nil
+}
+
 func (a *App) discoverAIModels(w http.ResponseWriter, r *http.Request, u User) error {
 	if e := financeAdmin(u); e != nil {
 		return e
@@ -433,18 +475,16 @@ func (a *App) discoverAIModels(w http.ResponseWriter, r *http.Request, u User) e
 	if e != nil {
 		return e
 	}
-	var p aiProvider
-	for _, v := range s.Providers {
-		if v.ID == r.PathValue("id") {
-			p = v
-			break
+	var draft *aiDiscoveryRequest
+	if r.Body != nil && r.Body != http.NoBody {
+		draft = &aiDiscoveryRequest{}
+		if e = decode(r, draft); e != nil {
+			return e
 		}
 	}
-	if p.ID == "" {
-		return fail(404, "提供商不存在，请先保存配置")
-	}
-	if p.KeyCiphertext == "" {
-		return fail(409, "请先保存提供商 API Key")
+	p, e := a.aiDiscoveryProvider(s, r.PathValue("id"), draft)
+	if e != nil {
+		return e
 	}
 	done, e := startFinanceRecognition(u.ID)
 	if e != nil {

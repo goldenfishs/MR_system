@@ -45,7 +45,7 @@ function validate() {
   for (const m of config.value.models) if (!m.modelId.trim() || !m.name.trim()) return '请填写每个模型的名称和模型 ID。';
   for (const a of config.value.applications) {
     if (!a.name.trim()) return '请填写应用名称。';
-    if (a.enabled && !config.value.models.some(m => m.id === a.modelId)) return `「${a.name}」需选择一个模型。`;
+    if (a.enabled && !config.value.models.some(m => m.id === a.modelId)) return `请在「应用绑定」中为「${a.name}」选择模型，或先关闭该应用。`;
     if (a.enabled && a.inputMode === 'vision' && !config.value.models.find(m => m.id === a.modelId)?.vision) return `「${a.name}」使用图片识别，请选择支持图片的模型。`;
   }
   return '';
@@ -84,9 +84,11 @@ function removeModel(m: Model) {
   config.value.models = config.value.models.filter(item => item.id !== m.id);
 }
 async function discover() {
-  if (!provider.value || dirty.value || busy.value) return;
+  if (!provider.value.id || busy.value) return;
+  const current = provider.value;
+  error.value = ''; success.value = '';
   discovering.value = true; resetDiscovery();
-  try { discovered.value = (await api.post<{ items: { id: string; name: string; vision: boolean }[] }>(`/settings/ai/providers/${encodeURIComponent(provider.value.id)}/models`)).items; if (!discovered.value.length) discoveryError.value = '服务商未返回模型，可手动添加模型 ID。'; }
+  try { discovered.value = (await api.post<{ items: { id: string; name: string; vision: boolean }[] }>(`/settings/ai/providers/${encodeURIComponent(current.id)}/models`, { revision: config.value.revision, provider: { ...current } })).items; if (!discovered.value.length) discoveryError.value = '服务商未返回模型，可手动添加模型 ID。'; }
   catch (e) { discoveryError.value = (e as Error).message; }
   finally { discovering.value = false; }
 }
@@ -155,7 +157,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnExit));
 <div class="field-grid">
 <v-text-field v-model="provider.name" label="服务商名称" variant="outlined" density="comfortable" maxlength="80"/>
 <v-text-field v-model="provider.baseUrl" label="API Base URL" placeholder="https://api.example.com/v1" variant="outlined" density="comfortable" hint="填写基础地址，不包含 /chat/completions 或 /models" persistent-hint/>
-<v-text-field v-model="provider.apiKey" label="API Key" type="password" autocomplete="new-password" variant="outlined" density="comfortable" :disabled="provider.clearApiKey" :placeholder="provider.apiKeySet ? '已设置；留空保留原密钥' : '填写 API Key'" :hint="provider.apiKeySet ? '已有密钥不会回显；输入新密钥可替换。' : '保存后可获取模型列表及测试连接。'" persistent-hint/>
+<v-text-field v-model="provider.apiKey" label="API Key" type="password" autocomplete="new-password" variant="outlined" density="comfortable" :disabled="provider.clearApiKey" :placeholder="provider.apiKeySet ? '已设置；留空保留原密钥' : '填写 API Key'" :hint="provider.apiKeySet ? '已有密钥不会回显；输入新密钥可替换。' : '填写后即可获取模型列表，无需先保存。'" persistent-hint/>
 <v-checkbox v-if="provider.apiKeySet" v-model="provider.clearApiKey" label="清除已保存的密钥" color="error" hide-details />
 </div>
 </fieldset>
@@ -171,11 +173,11 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnExit));
 <p>添加需要使用的模型，并确认它是否支持图片输入。</p>
 </div>
 <div class="compact-actions">
-<v-btn variant="text" color="primary" prepend-icon="mdi-cloud-download-outline" :loading="discovering" :disabled="dirty || busy || !provider.enabled || !provider.apiKeySet" @click="discover">获取模型列表</v-btn>
+<v-btn variant="text" color="primary" prepend-icon="mdi-cloud-download-outline" :loading="discovering" :disabled="busy || !provider.enabled || !provider.baseUrl.trim() || provider.clearApiKey || !(provider.apiKey?.trim() || provider.apiKeySet)" @click="discover">获取模型列表</v-btn>
 <v-btn variant="tonal" color="primary" prepend-icon="mdi-plus" :disabled="busy" @click="addModel()">手动添加</v-btn>
 </div>
 </div>
-<p v-if="dirty" class="save-hint">先保存配置，再获取模型列表或测试连接。</p>
+<p class="save-hint">填写地址和密钥即可获取模型列表；选好模型并绑定应用后，再保存配置。测试连接需要先保存。</p>
 <v-alert v-if="discoveryError" type="info" variant="tonal" class="mb-4">{{ discoveryError }}</v-alert>
             <div v-if="discovered.length" class="discovery-panel">
 <div class="section-title">
@@ -188,7 +190,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnExit));
 </div>
 <v-btn color="primary" variant="tonal" :disabled="!selectedDiscovered.length" @click="importSelected">添加选中的 {{ selectedDiscovered.length }} 个模型</v-btn>
 </div>
-            <p v-if="!providerModels.length" class="empty-state">尚未添加模型。保存服务商后获取列表，或直接填写模型 ID。</p>
+            <p v-if="!providerModels.length" class="empty-state">尚未添加模型。点击「获取模型列表」选择添加，或手动填写模型 ID。</p>
             <div v-for="m in providerModels" :key="m.id" class="model-row">
 <fieldset :disabled="busy">
 <div class="field-grid">
