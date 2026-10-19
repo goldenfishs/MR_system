@@ -265,6 +265,7 @@ func (a *App) Handler() http.Handler {
 	a.registerAdminSettingsRoutes(m)
 	a.registerFinanceRoutes(m)
 	a.registerFinanceRecognitionRoutes(m)
+	a.registerAIConfigurationRoutes(m)
 	m.HandleFunc("GET /api/workspace-summary", a.wrap(true, a.workspaceSummary))
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, 404, map[string]string{"error": "接口不存在"})

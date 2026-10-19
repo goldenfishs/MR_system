@@ -7,8 +7,7 @@ const error = ref("");
 const loading = ref(true);
 const stats = ref<Record<string, number>>({});
 const cards = [
-  { title: "发票识别", description: "配置报销凭证识别的模型、接口地址与密钥，自动提取金额等信息。", icon: "mdi-text-recognition", to: "/settings#finance-recognition", color: "teal" },
-  { title: "AI 答疑", description: "设置聊天助手的服务地址、密钥、模型与回答规则。", icon: "mdi-robot-outline", to: "/settings#ai", color: "primary" },
+  { title: "AI 配置", description: "统一配置模型服务商、密钥和模型，为发票识别等应用绑定模型。", icon: "mdi-creation-outline", to: "/ai-settings", color: "primary" },
   { title: "网站外观", description: "修改网站标志、简洁名称、战队名称与赛季信息。", icon: "mdi-palette-outline", to: "/settings#branding", color: "primary" },
   { title: "邮箱设置", description: "配置发件邮箱与邮件服务，用于注册验证和通知。", icon: "mdi-email-edit-outline", to: "/settings#email", color: "teal" },
   { title: "用户管理", description: "管理用户账号、成员身份，按组分配管理权限。", icon: "mdi-account-key-outline", to: "/members", color: "purple" },

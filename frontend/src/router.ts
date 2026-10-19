@@ -131,6 +131,11 @@ const router = createRouter({
       },
     },
     {
+      path: "/ai-settings",
+      component: () => import("./views/AISettingsView.vue"),
+      meta: { title: "AI 配置", admin: true },
+    },
+    {
       path: "/settings",
       component: () => import("./views/SettingsView.vue"),
       meta: {

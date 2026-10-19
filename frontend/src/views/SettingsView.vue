@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { nextTick, onMounted, reactive, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { api } from "../lib/api";
 import type { MailServiceSettings, Settings } from "../lib/types";
-import FinanceRecognitionSettings from "../components/FinanceRecognitionSettings.vue";
 const route = useRoute();
+const router = useRouter();
 const form = reactive<Settings>({
   description: "",
   organization: "",
@@ -102,6 +102,7 @@ async function saveMail() {
   }
 }
 async function scrollToSection() {
+  if (["#finance-recognition", "#ai"].includes(route.hash)) { await router.replace("/ai-settings"); return; }
   await nextTick();
   if (["#branding", "#email", "#general", "#finance-recognition"].includes(route.hash)) document.getElementById(route.hash.slice(1))?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -190,7 +191,7 @@ onMounted(() => {
       <v-btn to="/members" variant="tonal" prepend-icon="mdi-account-cog-outline">用户管理</v-btn>
       <v-btn href="#branding" variant="text" prepend-icon="mdi-palette-outline">网站外观</v-btn>
       <v-btn href="#email" variant="text" prepend-icon="mdi-email-outline">邮件服务</v-btn>
-      <v-btn href="#finance-recognition" variant="text" prepend-icon="mdi-text-recognition">发票识别</v-btn>
+      <v-btn to="/ai-settings" variant="text" prepend-icon="mdi-creation-outline">AI 配置</v-btn>
     </div>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-5"
       >{{ error
@@ -321,7 +322,7 @@ onMounted(() => {
         </template>
       </v-card>
     </form>
-    <FinanceRecognitionSettings v-if="loaded" />
+
     <v-snackbar v-model="saved" color="success">{{ savedMessage }}</v-snackbar>
   </div>
 </template>

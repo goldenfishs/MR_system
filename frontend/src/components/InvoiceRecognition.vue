@@ -59,7 +59,7 @@ function apply() { if(result.value) {emit('result',result.value);result.value=nu
       <p>识别将把选中的发票发送给管理员配置的模型服务{{ config.providerHost ? `（${config.providerHost}）` : '' }}。请核对识别结果后填入，仍需财务审核。</p>
       <div class="recognition-actions"><v-select v-if="files.length>1" v-model="selected" :items="files" label="选择需要识别的发票" density="compact" hide-details :disabled="loading || disabled" /><v-btn variant="tonal" color="primary" prepend-icon="mdi-text-recognition" :disabled="disabled || !selected" :loading="loading" @click="recognize">识别发票</v-btn></div>
     </template>
-    <p v-else>可手动填写报销信息。管理员可在「系统设置 → 发票识别」配置识别模型。</p>
+    <p v-else>可手动填写报销信息。管理员可在「系统管理 → AI 配置 → 应用绑定」配置识别模型。</p>
     <v-alert v-if="error" type="warning" variant="tonal" density="compact" class="mt-3">{{ error }} 可继续手动填写。</v-alert>
     <div v-if="result" class="recognition-result"><strong>识别结果 · 请核对</strong><dl><dt>金额</dt><dd>{{ result.amountCents === null ? '未识别' : `¥${(result.amountCents/100).toFixed(2)}` }} {{result.currency}}</dd><dt>日期</dt><dd>{{result.incurredOn || '未识别'}}</dd><dt>内容</dt><dd>{{result.title || '未识别'}}</dd><dt>销售方</dt><dd>{{result.seller || '未识别'}}</dd><dt>发票号码</dt><dd>{{result.invoiceNumber || '未识别'}}</dd></dl><v-btn variant="tonal" color="primary" :disabled="disabled || (result.currency !== '' && result.currency !== 'CNY')" @click="apply">核对无误，填入表单</v-btn><p v-if="result.currency && result.currency!=='CNY'">目前仅支持人民币报销，请手动核对币种。</p></div>
   </div>

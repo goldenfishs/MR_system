@@ -36,7 +36,7 @@ async function request<T>(
   const requestSession = sessionGeneration;
   // Profile images are sent as base64 JSON. Allow the server enough time to
   // decode/store a 2 MiB image without changing the normal request timeout.
-  const timeoutMs = method === "POST" && (path === "/bank-sync/preview" || path === "/bank-sync/apply" || path === "/finance/recognize")
+  const timeoutMs = method === "POST" && (path === "/bank-sync/preview" || path === "/bank-sync/apply" || path === "/finance/recognize" || /^\/settings\/ai\/(providers\/[^/]+\/models|models\/[^/]+\/test)$/.test(path))
     ? 120000
     : method === "POST" && path.startsWith("/certificate-")
     ? 300000
