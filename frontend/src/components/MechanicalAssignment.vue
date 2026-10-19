@@ -17,6 +17,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   updated: [task: Task];
   notice: [message: string];
+  submissionChanged: [];
 }>();
 const questions = computed(() => props.task.questions || []);
 const maxScore = computed(() => questionScoreTotal(questions.value));
@@ -27,7 +28,7 @@ const latestSubmissions = computed(() => {
   const byUser = new Map<string, Submission>();
   for (const item of submissions.value) {
     const current = byUser.get(item.userId);
-    if (!current || item.version > current.version || item.version === current.version && item.createdAt > current.createdAt) byUser.set(item.userId, item);
+    if (!current || (Boolean(item.finalizedAt) && !current.finalizedAt) || Boolean(item.finalizedAt) === Boolean(current.finalizedAt) && (item.version > current.version || item.version === current.version && item.createdAt > current.createdAt)) byUser.set(item.userId, item);
   }
   return [...byUser.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 });
@@ -45,6 +46,15 @@ const judgeRunIds = reactive<Record<string, string>>({});
 const selectedChoices = reactive<Record<string, string[]>>({});
 const reviews = reactive<Record<string, Record<string, AssignmentAnswer>>>({});
 const reviewBusyId = ref("");
+const editingResubmission = ref(false);
+const returnReasons = reactive<Record<string, string>>({});
+const returnTarget = ref("");
+function hasNewerDraft(submission: Submission) {
+  return submissions.value.some(item => item.userId === submission.userId && item.version > submission.version && !item.finalizedAt);
+}
+function canReview(submission: Submission) {
+  return Boolean(submission.finalizedAt) && !hasNewerDraft(submission) && submission.status !== "changes_requested";
+}
 
 function questionType(question: AssignmentQuestion): AssignmentQuestionType {
   return question.type || "drawing";
@@ -95,8 +105,22 @@ function setUploadBusy(questionId: string, busy: boolean) {
 }
 const answerProgress = computed(() => Object.fromEntries(questions.value.map(question => [question.id, { response: responseFor(question), fileIds: answerFiles[question.id] || [], judgeRunId: judgeRunIds[question.id] || "" }])));
 const completedCount = computed(() => completedQuestionCount(questions.value, answerProgress.value));
-const isFinalized = computed(() => Boolean(mySubmission.value?.finalizedAt) && mySubmission.value?.status !== "changes_requested");
-const canEditAnswers = computed(() => props.canSubmit && published.value && !isFinalized.value);
+const isFinalized = computed(() => Boolean(mySubmission.value?.finalizedAt));
+const gradingConfirmed = computed(() => mySubmission.value?.status === "approved");
+const canResubmit = computed(() => props.canSubmit && published.value && isFinalized.value && !gradingConfirmed.value);
+const canEditAnswers = computed(() => props.canSubmit && published.value && !gradingConfirmed.value && (!isFinalized.value || mySubmission.value?.status === "changes_requested" || editingResubmission.value));
+function cancelUnsavedResubmission() {
+  if (!isFinalized.value || saving.value || uploadCount.value) return;
+  initializeAnswers();
+  editingResubmission.value = false;
+  savedNotice.value = "";
+}
+function beginResubmission() {
+  if (!canResubmit.value) return;
+  initializeAnswers();
+  editingResubmission.value = true;
+  savedNotice.value = "已载入上一版答案和附件，修改后请重新提交。";
+}
 const canInteract = computed(() => props.canManage && preview.value || canEditAnswers.value);
 const messageOf = (reason: unknown) => reason instanceof ApiError || reason instanceof Error ? reason.message : "操作失败，请稍后重试";
 const answerFor = (submission: Submission | null | undefined, questionId: string) => submission?.answers?.find(answer => answer.questionId === questionId);
@@ -187,17 +211,19 @@ async function saveDraft(finalize = false) {
     if (finalize) {
       const finalized = await api.post<{ item: Submission }>(`/tasks/${encodeURIComponent(props.task.id)}/submission-finalize`, {});
       mySubmission.value = finalized.item;
+      editingResubmission.value = false;
       submissions.value = [finalized.item, ...submissions.value.filter(item => item.id !== finalized.item.id)];
       emit("notice", finalized.item.status === "approved"
         ? `作业已完成评阅，得分 ${totalFor(finalized.item)} / ${maxScore.value}。`
         : hasAutomaticQuestions.value ? "作业已提交，客观题已自动判分，其余题目等待组长或管理员评阅。" : "作业已统一提交，等待组长或管理员逐题评阅。");
     } else {
-      savedNotice.value = "进度已保存，可以继续补交或替换每题文件。";
+      savedNotice.value = result.item.version > 1 ? "修改草稿已保存。请完成后重新提交；提交前管理员暂不能批改。" : "进度已保存，可以继续补交或替换每题文件。";
     }
   } catch (reason) {
     emit("notice", messageOf(reason));
   } finally {
     saving.value = false;
+    emit("submissionChanged");
   }
 }
 function responseSummary(question: AssignmentQuestion, answer: AssignmentAnswer | undefined) {
@@ -220,7 +246,7 @@ function responseSummary(question: AssignmentQuestion, answer: AssignmentAnswer 
   return answer.response || (answer.fileIds.length ? "已上传绘图 / 成果文件" : "尚未作答");
 }
 async function saveReview(submission: Submission) {
-  if (!props.canManage || reviewBusyId.value || !submission.finalizedAt) return;
+  if (!props.canManage || reviewBusyId.value || !canReview(submission)) return;
   const draft = ensureReview(submission);
   for (const question of questions.value) {
     const score = Number(draft[question.id]?.score);
@@ -255,12 +281,31 @@ async function saveReview(submission: Submission) {
     submissions.value = submissions.value.map(item => item.id === result.item.id ? result.item : item);
     if (mySubmission.value?.id === result.item.id) mySubmission.value = result.item;
     delete reviews[submission.id];
-    emit("notice", `逐题评分已保存，自动总分：${totalFor(result.item)} / ${maxScore.value}。`);
+    emit("notice", result.item.status === "approved"
+      ? `批改已确认，总分 ${totalFor(result.item)} / ${maxScore.value}。学生如需重交，请先打回重做。`
+      : result.item.status === "changes_requested" ? "作业已打回，学生可以修改后重新提交。" : "部分评阅已保存，批改尚未确认，学生仍可重新提交。");
   } catch (reason) {
     emit("notice", messageOf(reason));
   } finally {
     reviewBusyId.value = "";
+    emit("submissionChanged");
   }
+}
+
+async function returnForRedo(submission: Submission) {
+  if (!props.canManage || reviewBusyId.value || !canReview(submission)) return;
+  const feedback = (returnReasons[submission.id] || "").trim();
+  if (!feedback) { emit("notice", "请填写打回原因，说明需要重做的内容。"); return; }
+  reviewBusyId.value = submission.id;
+  try {
+    const result = await api.patch<{ item: Submission }>(`/submissions/${encodeURIComponent(submission.id)}`, { returnForRedo: true, feedback });
+    submissions.value = submissions.value.map(item => item.id === result.item.id ? result.item : item);
+    if (mySubmission.value?.id === result.item.id) mySubmission.value = result.item;
+    delete reviews[submission.id];
+    returnTarget.value = "";
+    emit("notice", "已打回重做，学生现在可以修改并重新提交。");
+  } catch (reason) { emit("notice", messageOf(reason)); }
+  finally { reviewBusyId.value = ""; emit("submissionChanged"); }
 }
 
 onMounted(() => {
@@ -268,6 +313,11 @@ onMounted(() => {
   if (props.canManage || props.canSubmit) void loadSubmissions();
 });
 watch(() => questions.value.map(question => question.id).join("|"), initializeAnswers);
+watch(() => props.task.mySubmission, item => {
+  if (!item || saving.value) return;
+  mySubmission.value = item;
+  if (!editingResubmission.value) initializeAnswers();
+});
 </script>
 
 <template>
@@ -290,7 +340,8 @@ watch(() => questions.value.map(question => question.id).join("|"), initializeAn
     <v-alert v-if="canManage && preview" type="info" variant="tonal">管理测试：可在发布前或截止后试做题目、运行代码，不产生学生提交或成绩。测试后仍可编辑题目。</v-alert>
     <template v-if="canManage && !preview">
       <div class="assignment-manager-heading">
-        <div><h3>成员作业与逐题评阅</h3><p>下载全部已提交成果，逐题打分与反馈，总分由系统自动汇总。</p></div>
+        <div><h3>成员作业与逐题评阅</h3><p>逐题评分后保存；全部题目评阅完成即确认批改并锁定提交，之后可打回重做。</p></div>
+        <v-btn variant="text" prepend-icon="mdi-refresh" :loading="loading" @click="loadSubmissions">刷新提交</v-btn>
         <v-btn :href="`/api/tasks/${encodeURIComponent(task.id)}/submissions/export`" :disabled="!latestSubmissions.some(item => item.finalizedAt)" color="primary" variant="tonal" prepend-icon="mdi-folder-download-outline">批量下载 ZIP</v-btn>
       </div>
       <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}<template #append><v-btn variant="text" @click="loadSubmissions">重试</v-btn></template></v-alert>
@@ -302,6 +353,8 @@ watch(() => questions.value.map(question => question.id).join("|"), initializeAn
             <div class="member-summary"><strong>{{ submission.userName }}</strong><span>{{ submission.finalizedAt ? `已提交 · ${new Date(submission.finalizedAt).toLocaleString('zh-CN')}` : '进度草稿' }}</span><v-chip size="small" :color="submission.finalizedAt ? submission.status === 'approved' ? 'success' : submission.status === 'changes_requested' ? 'deep-orange' : 'primary' : 'blue-grey'" variant="tonal">{{ submission.finalizedAt ? `${progressFor(submission)} / ${questions.length} 题` : '未最终提交' }}</v-chip><v-chip v-if="submission.finalizedAt && submission.status !== 'pending'" size="small" color="teal" variant="tonal">{{ totalFor(submission) }} / {{ maxScore }} 分</v-chip></div>
           </v-expansion-panel-title>
           <v-expansion-panel-text>
+            <v-alert v-if="hasNewerDraft(submission)" type="info" variant="tonal" class="mb-4">该成员正在修改新版本，下方保留上一版已交作业，暂不可批改。请等待重新提交后刷新。</v-alert>
+            <v-alert v-else-if="submission.status === 'changes_requested'" type="warning" variant="tonal" class="mb-4">已打回重做，等待成员重新提交。{{ submission.feedback }}</v-alert>
             <div v-for="(question, index) in questions" :key="question.id" class="review-question">
               <div v-if="question.groupId && (index === 0 || questions[index - 1]?.groupId !== question.groupId)" class="assignment-group-heading"><h3>{{ question.groupTitle }}</h3><p>{{ question.groupDescription }}</p></div>
           <div class="question-heading"><div><span>{{ questionGroupLabel(questions, index) }} · {{ questionTypeLabel(question) }} · {{ question.maxScore }} 分</span><h4>{{ question.title }}</h4></div><v-chip v-if="answerFor(submission, question.id)?.status" size="small" :color="answerFor(submission, question.id)?.status === 'approved' ? 'success' : answerFor(submission, question.id)?.status === 'changes_requested' ? 'deep-orange' : 'blue-grey'" variant="tonal">{{ answerFor(submission, question.id)?.status === 'approved' ? answerFor(submission, question.id)?.autoGraded ? '自动评阅完成' : '已评阅' : answerFor(submission, question.id)?.status === 'changes_requested' ? '需修改' : '待评阅' }}</v-chip></div>
@@ -312,24 +365,29 @@ watch(() => questions.value.map(question => question.id).join("|"), initializeAn
               <div v-if="questionType(question) !== 'drawing'" class="answer-response"><strong>成员答案</strong><p>{{ responseSummary(question, answerFor(submission, question.id)) }}</p></div>
               <JudgePanel v-if="questionType(question) === 'code' && answerFor(submission, question.id)?.judgeRunId" :task="questionJudgeTask(question)" :question-id="question.id" :model-value="answerFor(submission, question.id)?.judgeRunId" readonly />
               <AttachmentList :ids="answerFor(submission, question.id)?.fileIds" />
-              <div v-if="submission.finalizedAt" class="question-review-form">
+              <div v-if="canReview(submission)" class="question-review-form">
                 <v-text-field v-model.number="ensureReview(submission)[question.id]!.score" type="number" :min="0" :max="question.maxScore" :label="`得分 / ${question.maxScore}`" variant="outlined" density="compact" hide-details />
                 <v-select v-model="ensureReview(submission)[question.id]!.status" :items="[{ title: '待评阅', value: 'pending' }, { title: '已评阅', value: 'approved' }, { title: '需要修改', value: 'changes_requested' }]" label="评阅状态" variant="outlined" density="compact" hide-details />
                 <v-textarea v-model="ensureReview(submission)[question.id]!.feedback" label="本题反馈（选填）" rows="2" auto-grow variant="outlined" density="compact" hide-details />
               </div>
-              <v-alert v-else type="info" variant="tonal" density="compact">成员已保存进度，等待其统一提交。</v-alert>
+              <v-alert v-else-if="!submission.finalizedAt" type="info" variant="tonal" density="compact">成员已保存进度，等待其统一提交。</v-alert>
             </div>
-            <div v-if="submission.finalizedAt" class="review-footer"><strong>本次总分：{{ reviewTotal(submission) }} / {{ maxScore }}</strong><v-btn color="primary" :loading="reviewBusyId === submission.id" @click="saveReview(submission)">保存全部评阅</v-btn></div>
+            <div v-if="canReview(submission)" class="review-footer"><strong>本次总分：{{ reviewTotal(submission) }} / {{ maxScore }}</strong><div class="student-buttons"><v-btn variant="tonal" color="warning" :disabled="Boolean(reviewBusyId)" @click="returnTarget = returnTarget === submission.id ? '' : submission.id">打回重做</v-btn><v-btn color="primary" :loading="reviewBusyId === submission.id" :disabled="Boolean(reviewBusyId)" @click="saveReview(submission)">{{ questions.every(question => ensureReview(submission)[question.id]?.status === 'approved') ? '确认全部批改' : '保存评阅进度' }}</v-btn></div></div>
+            <div v-if="returnTarget === submission.id && canReview(submission)" class="return-redo-form"><v-textarea v-model="returnReasons[submission.id]" label="打回原因（必填）" placeholder="说明需要修改的题目及要求" rows="2" auto-grow maxlength="10000" variant="outlined" hide-details /><v-btn color="warning" :loading="reviewBusyId === submission.id" :disabled="!returnReasons[submission.id]?.trim() || Boolean(reviewBusyId)" @click="returnForRedo(submission)">确认打回，允许重新提交</v-btn></div>
           </v-expansion-panel-text>
         </v-expansion-panel>
       </v-expansion-panels>
     </template>
 
     <template v-else>
-      <v-alert v-if="!canSubmit && !canManage" type="info" variant="tonal" class="mb-4">报名并通过{{ task.direction }}组审核后，才能提交本组作业。</v-alert>
+      <v-alert v-if="!canSubmit && !canManage && !mySubmission" type="info" variant="tonal" class="mb-4">报名并通过{{ task.direction }}组审核后，才能提交本组作业。</v-alert>
       <template v-if="published || canManage && preview">
         <v-alert v-if="hasAutomaticQuestions" type="info" variant="tonal" density="compact">选择题和填空题在统一提交后自动判分；代码题先运行测试，提交作业时按通过用例比例计分。保存进度不会评分。</v-alert>
         <v-alert v-if="mySubmission?.feedback" :type="mySubmission.status === 'changes_requested' ? 'warning' : 'success'" variant="tonal" class="mb-4"><strong>管理员评阅反馈</strong><p class="mt-1">{{ mySubmission.feedback }}</p></v-alert>
+        <v-alert v-if="!canManage && isFinalized" :type="gradingConfirmed ? 'success' : 'info'" variant="tonal">
+          {{ gradingConfirmed ? '批改已确认，当前作业不能修改。如需重新提交，请联系管理员打回重做。' : mySubmission?.status === 'changes_requested' ? '作业已打回，请根据反馈修改并重新提交。' : '已提交，批改确认前可以重新提交。原答案和附件会保留，部分评阅也不会阻止修改。' }}
+          <div v-if="canResubmit && !canEditAnswers" class="mt-3"><v-btn color="primary" variant="flat" prepend-icon="mdi-pencil-outline" @click="beginResubmission">修改并重新提交</v-btn></div>
+        </v-alert>
         <div class="student-progress"><div><strong>逐题完成情况</strong><span>{{ completedCount }} / {{ questions.length }} 题</span></div><v-progress-linear :model-value="questions.length ? completedCount / questions.length * 100 : 0" color="primary" rounded /></div>
         <article v-for="(question, index) in questions" :key="question.id" class="student-question">
           <div v-if="question.groupId && (index === 0 || questions[index - 1]?.groupId !== question.groupId)" class="assignment-group-heading"><h3>{{ question.groupTitle }}</h3><p>{{ question.groupDescription }}</p></div>
@@ -358,10 +416,12 @@ watch(() => questions.value.map(question => question.id).join("|"), initializeAn
           <div v-if="answerFor(mySubmission, question.id)?.score != null" class="question-score">本题得分：{{ answerFor(mySubmission, question.id)?.score }} / {{ question.maxScore }}</div>
         </article>
         <div v-if="!canManage" class="student-actions">
-          <span v-if="isFinalized">{{ mySubmission?.status === 'approved' ? '本次作业已完成评阅，可查看逐题成绩和反馈。' : '已提交全部题目，已评题目显示得分，其余题目等待管理员评阅。' }}</span>
-          <span v-else-if="canEditAnswers">可逐题作答并保存进度；全部完成前可以随时修改。</span>
+          <span v-if="gradingConfirmed">批改已确认；需要重交时，请联系管理员打回重做。</span>
+          <span v-else-if="canEditAnswers">{{ mySubmission ? '已保留现有答案和附件，修改完成后请重新提交。' : '可逐题作答并保存进度，全部完成后统一提交。' }}</span>
+          <span v-else-if="isFinalized">批改确认前可修改并重新提交。</span>
           <span v-else>当前可以浏览题目要求和附件，报名审核通过后可提交作业。</span>
-          <div v-if="canEditAnswers" class="student-buttons"><v-btn variant="tonal" :loading="saving && !savedNotice" :disabled="saving || uploadCount > 0" @click="saveDraft(false)">保存进度</v-btn><v-btn color="primary" :loading="saving && !savedNotice" :disabled="saving || uploadCount > 0 || completedCount !== questions.length" @click="saveDraft(true)">全部完成，统一提交</v-btn></div>
+          <div v-if="canEditAnswers" class="student-buttons"><v-btn v-if="editingResubmission && isFinalized" variant="text" :disabled="saving || uploadCount > 0" @click="cancelUnsavedResubmission">取消本次修改</v-btn><v-btn variant="tonal" :loading="saving && !savedNotice" :disabled="saving || uploadCount > 0" @click="saveDraft(false)">保存进度</v-btn><v-btn color="primary" :loading="saving && !savedNotice" :disabled="saving || uploadCount > 0 || completedCount !== questions.length" @click="saveDraft(true)">{{ (mySubmission?.version || 0) > 1 || isFinalized ? '重新提交作业' : '全部完成，统一提交' }}</v-btn></div>
+          <v-btn v-else-if="canResubmit" color="primary" @click="beginResubmission">修改并重新提交</v-btn>
           <v-chip v-else-if="isFinalized" color="success" variant="tonal" prepend-icon="mdi-check-circle-outline">已统一提交</v-chip>
         </div>
         <v-alert v-if="savedNotice" type="success" variant="tonal" density="compact" class="mt-3">{{ savedNotice }}</v-alert>
@@ -381,6 +441,8 @@ watch(() => questions.value.map(question => question.id).join("|"), initializeAn
 .assignment-summary span, .question-heading span, .member-summary span { color: #65758b; font-size: 13px; }
 .assignment-summary strong { color: #1c3656; font-size: 17px; }
 .assignment-manager-heading, .review-footer, .student-actions, .student-progress > div, .member-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.assignment-manager-heading { flex-wrap: wrap; }
+.assignment-manager-heading > div { flex: 1; min-width: min(100%, 260px); }
 .assignment-manager-heading h3 { margin-bottom: 4px; }
 .assignment-manager-heading p, .question-description { color: #64748b; white-space: pre-wrap; }
 .answer-response { margin: 14px 0; padding: 12px 14px; border-radius: 8px; background: #f5f8fc; }
@@ -398,7 +460,9 @@ watch(() => questions.value.map(question => question.id).join("|"), initializeAn
 .question-description { margin: 12px 0; }
 .question-review-form { display: grid; grid-template-columns: minmax(120px, .6fr) minmax(160px, 1fr); gap: 12px; align-items: start; }
 .question-review-form :deep(.v-textarea) { grid-column: 1 / -1; }
-.review-footer { padding-top: 18px; }
+.review-footer { padding-top: 18px; flex-wrap: wrap; }
+.return-redo-form { display: grid; gap: 12px; padding: 16px; margin-top: 14px; border: 1px solid #f3cf97; border-radius: 10px; }
+.return-redo-form .v-btn { justify-self: start; white-space: normal; }
 .assignment-empty { min-height: 100px; display: flex; align-items: center; justify-content: center; gap: 10px; color: #718096; }
 .student-progress { display: grid; gap: 9px; padding: 15px 17px; background: #f4f7fb; border-radius: 10px; }
 .student-progress span { color: #64748b; }

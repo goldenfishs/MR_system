@@ -124,7 +124,6 @@ func TestMechanicalAssignmentDraftPublishAndQuestionWorkflow(t *testing.T) {
 	if finalized.Status != "pending" || finalized.FinalizedAt == "" || len(finalized.FileIDs) != 2 {
 		t.Fatalf("finalization should submit the complete assignment: %+v", finalized)
 	}
-	student.request("POST", "/api/tasks/"+task.ID+"/submission-draft", map[string]any{"answers": finalized.Answers}, 409)
 
 	partialReview := unmarshal[Submission](t, manager.request("PATCH", "/api/submissions/"+finalized.ID, map[string]any{
 		"questionReviews": []map[string]any{

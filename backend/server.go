@@ -1014,7 +1014,30 @@ func (a *App) listSubmissions(w http.ResponseWriter, r *http.Request, u User) er
 	respond(w, 200, map[string]any{"items": items})
 	return nil
 }
+
+// Serialize a student's replacement and a teacher's confirmation on the task row.
+// Taking a database write lock (also on SQLite) before reading submissions avoids
+// stale reviews and duplicate versions across independent server processes.
+func (a *App) beginSubmissionWrite(r *http.Request, taskID string) (*App, *sql.Tx, error) {
+	tx, err := a.store.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	s := &Store{db: a.store.db, postgres: a.store.postgres, tx: tx, fileDir: a.store.fileDir}
+	if err = s.exec("UPDATE tasks SET payload=payload WHERE id=?", taskID); err != nil {
+		tx.Rollback()
+		return nil, nil, err
+	}
+	return &App{store: s, config: a.config}, tx, nil
+}
+
 func (a *App) submitTask(w http.ResponseWriter, r *http.Request, u User) error {
+	scoped, tx, err := a.beginSubmissionWrite(r, r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	a = scoped
 	t, err := a.store.task(r.PathValue("id"))
 	if err != nil {
 		return err
@@ -1058,6 +1081,9 @@ func (a *App) submitTask(w http.ResponseWriter, r *http.Request, u User) error {
 		return err
 	}
 	a.activity(u, "提交任务成果", t.Title)
+	if err = tx.Commit(); err != nil {
+		return err
+	}
 	respond(w, 201, map[string]any{"item": s})
 	return nil
 }
@@ -1173,6 +1199,12 @@ func latestSubmissionForUser(items []Submission, userID string) *Submission {
 }
 
 func (a *App) saveTaskSubmissionDraft(w http.ResponseWriter, r *http.Request, u User) error {
+	scoped, tx, err := a.beginSubmissionWrite(r, r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	a = scoped
 	task, err := a.store.task(r.PathValue("id"))
 	if err != nil {
 		return err
@@ -1213,21 +1245,19 @@ func (a *App) saveTaskSubmissionDraft(w http.ResponseWriter, r *http.Request, u 
 		return err
 	}
 	latest := latestSubmissionForUser(items, u.ID)
-	if latest != nil && latest.Status == "pending" {
-		return fail(409, "作业已提交，等待管理员审核")
-	}
 	if latest != nil && latest.Status == "approved" {
-		return fail(409, "作业已通过审核，不能再修改")
+		return fail(409, "作业已批改确认，请联系管理员打回重做后再提交")
 	}
 	submission := Submission{Answers: answers, FileIDs: fileIDs, ID: randomID(), TaskID: task.ID, UserID: u.ID, UserName: u.Name, Status: "draft", CreatedAt: now()}
 	if latest != nil {
+		submission.RedoAllowed = latest.Status == "changes_requested" || (latest.Status == "draft" && latest.RedoAllowed)
 		if latest.Status == "draft" && latest.FinalizedAt == "" {
 			submission.ID = latest.ID
 			submission.Version = latest.Version
 			if err = a.store.exec("UPDATE submissions SET payload=? WHERE id=?", encoded(submission), latest.ID); err != nil {
 				return err
 			}
-		} else if latest.Status == "changes_requested" {
+		} else if latest.Status == "changes_requested" || latest.Status == "pending" {
 			submission.Version = latest.Version + 1
 			if err = a.store.exec("INSERT INTO submissions(id,task_id,user_id,version,payload) VALUES(?,?,?,?,?)", submission.ID, submission.TaskID, submission.UserID, submission.Version, encoded(submission)); err != nil {
 				return err
@@ -1242,11 +1272,20 @@ func (a *App) saveTaskSubmissionDraft(w http.ResponseWriter, r *http.Request, u 
 		}
 	}
 	a.activity(u, "保存作业答案草稿", task.Title)
+	if err = tx.Commit(); err != nil {
+		return err
+	}
 	respond(w, 200, map[string]any{"item": submission})
 	return nil
 }
 
 func (a *App) finalizeTaskSubmission(w http.ResponseWriter, r *http.Request, u User) error {
+	scoped, tx, err := a.beginSubmissionWrite(r, r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	a = scoped
 	task, err := a.store.task(r.PathValue("id"))
 	if err != nil {
 		return err
@@ -1292,12 +1331,16 @@ func (a *App) finalizeTaskSubmission(w http.ResponseWriter, r *http.Request, u U
 	latest.Answers = answers
 	latest.FileIDs = fileIDs
 	latest.Status = "pending"
+	latest.RedoAllowed = false
 	latest.FinalizedAt = now()
 	autoGradeTaskSubmission(task, latest, verifiedRuns)
 	if err = a.store.exec("UPDATE submissions SET payload=? WHERE id=?", encoded(*latest), latest.ID); err != nil {
 		return err
 	}
 	a.activity(u, "提交作业", task.Title)
+	if err = tx.Commit(); err != nil {
+		return err
+	}
 	respond(w, 200, map[string]any{"item": latest})
 	return nil
 }
@@ -1307,6 +1350,16 @@ func (a *App) reviewSubmission(w http.ResponseWriter, r *http.Request, u User) e
 		return fail(403, "没有任务评阅权限")
 	}
 	s, err := readOne[Submission](a.store, "SELECT payload FROM submissions WHERE id=?", r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	scoped, tx, err := a.beginSubmissionWrite(r, s.TaskID)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	a = scoped
+	s, err = readOne[Submission](a.store, "SELECT payload FROM submissions WHERE id=?", r.PathValue("id"))
 	if err != nil {
 		return err
 	}
@@ -1331,35 +1384,55 @@ func (a *App) reviewSubmission(w http.ResponseWriter, r *http.Request, u User) e
 		return fail(409, "已有新版本，请审核最新提交")
 	}
 	normalizeTask(&t)
-	if len(t.Questions) > 0 {
-		if s.FinalizedAt == "" || s.Status == "draft" {
-			return fail(409, "作业尚未正式提交，不能审核")
-		}
-		return a.reviewQuestionSubmission(w, r, u, t, s)
-	}
-	var in struct {
-		Status   string   `json:"status"`
-		Score    *float64 `json:"score"`
-		Feedback string   `json:"feedback"`
-	}
+	var in submissionReviewInput
 	if err = decode(r, &in); err != nil {
 		return err
 	}
-	if (in.Status != "approved" && in.Status != "changes_requested") || in.Score == nil || !finite(*in.Score) || *in.Score < 0 || *in.Score > t.MaxScore || len(in.Feedback) > 20000 {
-		return fail(400, "审核状态或分值不合法")
+	if s.Status == "draft" || (len(t.Questions) > 0 && s.FinalizedAt == "") {
+		return fail(409, "作业尚未正式提交，不能审核")
 	}
-	if in.Status == "changes_requested" && strings.TrimSpace(in.Feedback) == "" {
-		return fail(400, "请说明需要修改的内容")
+	if in.ReturnForRedo {
+		if t.Category != "assignment" {
+			return fail(400, "只有作业可以打回重做")
+		}
+		if in.Status != "" || in.Score != nil || len(in.QuestionReviews) > 0 {
+			return fail(400, "打回重做不能同时提交评分")
+		}
+		in.Feedback = strings.TrimSpace(in.Feedback)
+		if in.Feedback == "" || len(in.Feedback) > 20000 {
+			return fail(400, "请填写打回重做原因（不超过 20000 字节）")
+		}
+		s.Status, s.Feedback = "changes_requested", in.Feedback
+	} else if len(t.Questions) > 0 {
+		if in.Status != "" || in.Score != nil || in.Feedback != "" {
+			return fail(400, "多题作业请逐题评分")
+		}
+		s, err = reviewedQuestionSubmission(t, s, in)
+		if err != nil {
+			return err
+		}
+	} else {
+		if len(in.QuestionReviews) > 0 || (in.Status != "approved" && in.Status != "changes_requested") || in.Score == nil || !finite(*in.Score) || *in.Score < 0 || *in.Score > t.MaxScore || len(in.Feedback) > 20000 {
+			return fail(400, "审核状态或分值不合法")
+		}
+		if in.Status == "changes_requested" && strings.TrimSpace(in.Feedback) == "" {
+			return fail(400, "请说明需要修改的内容")
+		}
+		s.Status, s.Score, s.Feedback = in.Status, in.Score, in.Feedback
 	}
-	s.Status = in.Status
-	s.Score = in.Score
-	s.Feedback = in.Feedback
 	s.ReviewedBy = u.ID
 	s.ReviewedAt = now()
 	if err = a.store.exec("UPDATE submissions SET payload=? WHERE id=?", encoded(s), s.ID); err != nil {
 		return err
 	}
-	a.activity(u, "审核任务成果", t.Title+" · "+s.UserName)
+	action := "审核任务成果"
+	if in.ReturnForRedo {
+		action = "打回作业重做"
+	}
+	a.activity(u, action, t.Title+" · "+s.UserName)
+	if err = tx.Commit(); err != nil {
+		return err
+	}
 	respond(w, 200, map[string]any{"item": s})
 	return nil
 }
@@ -1483,20 +1556,22 @@ func aggregateTaskSubmission(task Task, submission *Submission) {
 	}
 }
 
-func (a *App) reviewQuestionSubmission(w http.ResponseWriter, r *http.Request, u User, task Task, submission Submission) error {
-	var in struct {
-		QuestionReviews []struct {
-			QuestionID string  `json:"questionId"`
-			Score      float64 `json:"score"`
-			Feedback   string  `json:"feedback"`
-			Status     string  `json:"status"`
-		} `json:"questionReviews"`
-	}
-	if err := decode(r, &in); err != nil {
-		return err
-	}
+type submissionReviewInput struct {
+	ReturnForRedo   bool     `json:"returnForRedo"`
+	Status          string   `json:"status"`
+	Score           *float64 `json:"score"`
+	Feedback        string   `json:"feedback"`
+	QuestionReviews []struct {
+		QuestionID string  `json:"questionId"`
+		Score      float64 `json:"score"`
+		Feedback   string  `json:"feedback"`
+		Status     string  `json:"status"`
+	} `json:"questionReviews"`
+}
+
+func reviewedQuestionSubmission(task Task, submission Submission, in submissionReviewInput) (Submission, error) {
 	if len(in.QuestionReviews) == 0 || len(in.QuestionReviews) > len(task.Questions) {
-		return fail(400, "请至少提交一道题的评分")
+		return Submission{}, fail(400, "请至少提交一道题的评分")
 	}
 	questions := map[string]TaskQuestion{}
 	for _, question := range task.Questions {
@@ -1511,13 +1586,13 @@ func (a *App) reviewQuestionSubmission(w http.ResponseWriter, r *http.Request, u
 		question, ok := questions[review.QuestionID]
 		answerIndex, answerExists := answers[review.QuestionID]
 		if !ok || !answerExists || seen[review.QuestionID] {
-			return fail(400, "评分题目不存在或重复")
+			return Submission{}, fail(400, "评分题目不存在或重复")
 		}
 		if (review.Status != "approved" && review.Status != "changes_requested") || !finite(review.Score) || review.Score < 0 || review.Score > question.MaxScore || len(review.Feedback) > 20000 {
-			return fail(400, "题目审核状态或分数无效")
+			return Submission{}, fail(400, "题目审核状态或分数无效")
 		}
 		if review.Status == "changes_requested" && strings.TrimSpace(review.Feedback) == "" {
-			return fail(400, "请说明该题需要修改的内容")
+			return Submission{}, fail(400, "请说明该题需要修改的内容")
 		}
 		answer := &submission.Answers[answerIndex]
 		score := review.Score
@@ -1529,14 +1604,7 @@ func (a *App) reviewQuestionSubmission(w http.ResponseWriter, r *http.Request, u
 	}
 
 	aggregateTaskSubmission(task, &submission)
-	submission.ReviewedBy = u.ID
-	submission.ReviewedAt = now()
-	if err := a.store.exec("UPDATE submissions SET payload=? WHERE id=?", encoded(submission), submission.ID); err != nil {
-		return err
-	}
-	a.activity(u, "逐题审核作业成果", task.Title+" · "+submission.UserName)
-	respond(w, 200, map[string]any{"item": submission})
-	return nil
+	return submission, nil
 }
 
 func (a *App) dashboard(w http.ResponseWriter, r *http.Request, u User) error {

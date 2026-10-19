@@ -248,6 +248,7 @@ func TestPostgreSQLPersistence(t *testing.T) {
 		t.Fatalf("reinitialization changed application count: count=%d err=%v", count, err)
 	}
 	exerciseLearningPostgres(t, client)
+	exerciseSubmissionResubmissionPostgres(t, isolatedURL, newApp(reopened, Config{Demo: true, WebDir: t.TempDir(), Mailer: mailer, UploadDir: uploadDir}))
 
 	client.login("admin")
 	bankReopened, err := loadBankSyncState(reopened)

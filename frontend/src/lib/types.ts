@@ -123,6 +123,7 @@ export interface Task {
   mySubmission: Submission | null;
 }
 export interface Submission {
+  redoAllowed?: boolean;
   fileIds?: string[];
   answers?: AssignmentAnswer[];
   finalizedAt?: string;

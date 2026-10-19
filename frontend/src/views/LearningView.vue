@@ -406,6 +406,27 @@ const latestSubmissions = computed(() => {
   );
 });
 const selectedSubmission = computed(() => selected.value?.mySubmission);
+const assignmentRedoAllowed = computed(() => Boolean(selected.value && categoryOf(selected.value) === "assignment" && (selectedSubmission.value?.status === "changes_requested" || selectedSubmission.value?.redoAllowed)));
+const assignmentGradingConfirmed = computed(() => Boolean(selected.value && categoryOf(selected.value) === "assignment" && selectedSubmission.value?.status === "approved"));
+const returnRedoTarget = ref("");
+const returnRedoReason = ref("");
+function openReturnForRedo(submission: Submission) {
+  returnRedoTarget.value = returnRedoTarget.value === submission.id ? "" : submission.id;
+  returnRedoReason.value = "";
+}
+async function returnSubmissionForRedo(submission: Submission) {
+  if (!selected.value || !canManageTask(selected.value) || saving.value || !returnRedoReason.value.trim()) return;
+  saving.value = true;
+  try {
+    const { item } = await api.patch<{ item: Submission }>(`/submissions/${submission.id}`, { returnForRedo: true, feedback: returnRedoReason.value.trim() });
+    submissions.value = submissions.value.map(existing => existing.id === item.id ? item : existing);
+    if (selected.value.mySubmission?.id === item.id) selected.value = { ...selected.value, mySubmission: item };
+    returnRedoTarget.value = "";
+    notice.value = "已打回重做，学生可以修改并重新提交。";
+    await load(true);
+  } catch (reason) { notice.value = messageOf(reason); }
+  finally { saving.value = false; }
+}
 const eligibility = computed(() => {
   if (!isStudent.value || !selected.value) return "";
   if (categoryOf(selected.value) === "problem") return selected.value.canSubmit === false ? "本题暂未开放或已截止，请在开放时间内练习。" : "";
@@ -440,10 +461,11 @@ const eligibility = computed(() => {
   )
     return `考试开始时间：${formatDate(selected.value.startsAt)}。`;
   if (
-    selected.value.dueAt &&
+    !assignmentRedoAllowed.value && selected.value.dueAt &&
     new Date(selected.value.dueAt).getTime() < currentTime.value
   )
     return "此任务已截止，仍可查看任务说明、提交历史与反馈。";
+  if (assignmentGradingConfirmed.value) return "批改已确认，如需重新提交，请联系管理员打回重做。";
   if (selected.value.canSubmit === false) return "当前无法提交此任务，请刷新确认本组录取资格与任务状态。";
   return "";
 });
@@ -668,6 +690,7 @@ async function submitWork() {
   if (
     !task ||
     !canSubmitSelected.value ||
+    assignmentGradingConfirmed.value ||
     saving.value ||
     eligibility.value ||
     uploadBusy.value ||
@@ -712,6 +735,7 @@ async function submitWork() {
     submissions.value = [item, ...submissions.value];
     detailTab.value = "history";
     notice.value = `第 ${item.version} 版已提交，等待管理员审核`;
+    await load(true);
   } catch (e) {
     notice.value = messageOf(e);
   } finally {
@@ -1108,6 +1132,7 @@ async function saveReview() {
     );
     reviewTarget.value = null;
     notice.value = "审核结果已保存";
+    await load(true);
   } catch (e) {
     notice.value = messageOf(e);
   } finally {
@@ -1447,7 +1472,7 @@ onUnmounted(() => clearInterval(timeTicker));
           ><v-divider />
           <v-card-text v-if="questionAssignmentSelected" class="task-dialog-body">
             <div class="brief-description">{{ selected.description }}</div>
-            <MechanicalAssignment :key="selected.id" :task="selected" :can-manage="canManageTask(selected)" :can-submit="canSubmitSelected" @updated="onMechanicalAssignmentUpdated" @notice="notice = $event" />
+            <MechanicalAssignment :key="selected.id" :task="selected" :can-manage="canManageTask(selected)" :can-submit="canSubmitSelected" @updated="onMechanicalAssignmentUpdated" @notice="notice = $event" @submission-changed="load(true)" />
             <div v-if="canManageTask(selected)" class="task-management-actions mt-5">
               <v-btn color="primary" variant="tonal" prepend-icon="mdi-pencil-outline" :disabled="selected.submissionCount > 0" @click="startEdit(selected)">编辑作业</v-btn>
               <v-btn v-if="selected.status === 'draft'" variant="text" prepend-icon="mdi-content-copy" @click="startEdit(selected, true)">复制为新草稿</v-btn>
@@ -1512,12 +1537,12 @@ onUnmounted(() => clearInterval(timeTicker));
                     eligibility
                   }}</v-alert
                   ><v-btn
-                    v-else-if="canSubmitSelected && !objectiveProblem(selected) && !inlineCodeProblem"
+                    v-else-if="canSubmitSelected && !objectiveProblem(selected) && !inlineCodeProblem && !assignmentGradingConfirmed"
                     color="primary"
                     append-icon="mdi-arrow-right"
                     @click="detailTab = 'submit'"
                     >{{
-                      selected.mySubmission ? "提交新版本" : "开始提交成果"
+                      selected.mySubmission ? "修改并重新提交" : "开始提交成果"
                     }}</v-btn
                   ><v-btn
                     v-else-if="canManage && selected.mechanicalProblem?.type !== 'drawing'"
@@ -1530,7 +1555,7 @@ onUnmounted(() => clearInterval(timeTicker));
                 </div></v-window-item
               >
               <v-window-item v-if="canSubmitSelected && !objectiveProblem(selected) && !inlineCodeProblem" value="submit"
-                ><v-alert v-if="eligibility && !objectiveProblem(selected)" type="info" variant="tonal">{{
+                ><v-alert v-if="assignmentGradingConfirmed" type="success" variant="tonal">批改已确认，当前作业不能修改。如需重新提交，请联系管理员打回重做。</v-alert><v-alert v-else-if="eligibility && !objectiveProblem(selected)" type="info" variant="tonal">{{
                   eligibility
                 }}</v-alert
                 ><template v-else
@@ -1550,7 +1575,7 @@ onUnmounted(() => clearInterval(timeTicker));
                   >
                   <h3 class="content-title">让你的成果有迹可循</h3>
                   <p class="content-hint">
-                    说明做了什么、如何验证，以及还有哪些问题。每次提交都会保留独立版本。
+                    说明做了什么、如何验证，以及还有哪些问题。批改确认前可重新提交，每次保留独立版本；确认后需管理员打回重做。
                   </p>
                   <v-form @submit.prevent="submitWork"
                     ><v-textarea
@@ -1762,6 +1787,10 @@ onUnmounted(() => clearInterval(timeTicker));
                             : "修改评价"
                         }}</v-btn
                       >
+                    </div>
+                    <div v-if="canManage && categoryOf(selected) === 'assignment' && submission.status !== 'changes_requested'" class="redo-actions">
+                      <v-btn color="warning" variant="tonal" size="small" :disabled="saving" @click="openReturnForRedo(submission)">打回重做</v-btn>
+                      <div v-if="returnRedoTarget === submission.id" class="redo-form"><v-textarea v-model="returnRedoReason" label="打回原因（必填）" placeholder="说明需要重做的内容和要求" rows="2" auto-grow maxlength="10000" variant="outlined" hide-details /><v-btn color="warning" :disabled="saving || !returnRedoReason.trim()" :loading="saving" @click="returnSubmissionForRedo(submission)">确认打回，允许重新提交</v-btn></div>
                     </div>
                     <details
                       v-if="canManage && submission.version > 1"
@@ -2810,6 +2839,9 @@ onUnmounted(() => clearInterval(timeTicker));
   line-height: 1.8;
   margin-bottom: 20px;
 }
+.redo-actions { margin-top: 12px; }
+.redo-form { display: grid; gap: 12px; margin-top: 12px; padding: 16px; border: 1px solid #f3cf97; border-radius: 10px; }
+.redo-form .v-btn { justify-self: start; }
 .submit-footer {
   display: flex;
   justify-content: space-between;

@@ -111,6 +111,7 @@ type SubmissionAnswer struct {
 	Status     string   `json:"status,omitempty"`
 }
 type Submission struct {
+	RedoAllowed bool               `json:"redoAllowed,omitempty"`
 	Answers     []SubmissionAnswer `json:"answers,omitempty"`
 	FinalizedAt string             `json:"finalizedAt,omitempty"`
 	FileIDs     []string           `json:"fileIds"`

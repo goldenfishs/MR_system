@@ -140,7 +140,20 @@ func (a *App) requireTaskSubmission(t Task, u User) error {
 			return fail(409, "该任务尚未开始")
 		}
 	}
-	if expired(t.DueAt) {
+	redoAllowed := false
+	if t.Category == "assignment" {
+		items, err := a.store.submissions(t.ID)
+		if err != nil {
+			return err
+		}
+		if latest := latestSubmissionForUser(items, u.ID); latest != nil {
+			if latest.Status == "approved" {
+				return fail(409, "作业已批改确认，请联系管理员打回重做后再提交")
+			}
+			redoAllowed = latest.Status == "changes_requested" || (latest.Status == "draft" && latest.RedoAllowed)
+		}
+	}
+	if expired(t.DueAt) && !redoAllowed {
 		return fail(409, "该任务已截止")
 	}
 	return nil
