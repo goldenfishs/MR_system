@@ -150,6 +150,10 @@ func TestPostgreSQLPersistence(t *testing.T) {
 		"direction": "机械", "resumeFileId": resume.ID, "motivation": "补充团队报名说明",
 	}, 201)
 	client.login("admin")
+	// A new team admission now requires an interview decision; a direct status
+	// edit cannot bypass that gate. Repeating the final admission is idempotent.
+	client.request("PATCH", "/api/team-applications/"+teamApplication.ID, map[string]string{"status": "accepted"}, 409)
+	client.request("POST", "/api/interviews/"+teamApplication.ID+"/decision", map[string]string{"status": "passed", "note": "PostgreSQL 面试录取持久化验证"}, 200)
 	for i := 0; i < 2; i++ {
 		client.request("PATCH", "/api/team-applications/"+teamApplication.ID, map[string]string{"status": "accepted"}, 200)
 	}
@@ -166,6 +170,28 @@ func TestPostgreSQLPersistence(t *testing.T) {
 		"content": "机械项目成果", "fileIds": []string{project.ID},
 	}, 201)["item"])
 	downloadForTest(t, client, material.ID, "download", 200)
+
+	// Exercise bank sync's transactional task writes, JSON settings upsert and
+	// visibility changes against PostgreSQL, without making network requests.
+	client.login("admin")
+	bankState := bankSyncFixture(t, app)
+	bankCommit := bankState.Snapshot.Commit
+	bankResult := client.request("POST", "/api/bank-sync/apply", map[string]string{"commit": bankCommit}, 200)
+	if unmarshal[int](t, bankResult["imported"]) != len(bankState.Snapshot.Records) {
+		t.Fatal("PostgreSQL bank import incomplete")
+	}
+	bankPersisted, err := loadBankSyncState(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bankKey := bankState.Settings.Repository + "/" + bankState.Snapshot.Records[0].Key
+	bankTaskID := bankPersisted.Mappings[bankKey].TaskID
+	client.request("POST", "/api/bank-sync/visibility", map[string]any{"ids": []string{bankTaskID, "missing-bank-task"}, "visibility": "public"}, 404)
+	bankTask, err := store.task(bankTaskID)
+	if err != nil || bankTask.BankVisibility != "internal" {
+		t.Fatal("PostgreSQL visibility transaction did not roll back", err)
+	}
+	client.request("POST", "/api/bank-sync/visibility", map[string]any{"ids": []string{bankTaskID}, "visibility": "public"}, 200)
 	client.login("mentor")
 
 	// Reopen the SQL connection and application instance, retaining the original
@@ -222,4 +248,26 @@ func TestPostgreSQLPersistence(t *testing.T) {
 		t.Fatalf("reinitialization changed application count: count=%d err=%v", count, err)
 	}
 	exerciseLearningPostgres(t, client)
+
+	client.login("admin")
+	bankReopened, err := loadBankSyncState(reopened)
+	if err != nil || bankReopened.LastSync == nil || bankReopened.LastSync.Commit != bankCommit || bankReopened.Mappings[bankKey].TaskID != bankTaskID {
+		t.Fatal("PostgreSQL bank sync metadata did not survive reconnect", err)
+	}
+	bankTask, err = reopened.task(bankTaskID)
+	if err != nil || bankTask.BankVisibility != "public" {
+		t.Fatal("PostgreSQL bank visibility did not persist", err)
+	}
+	bankReopened.Snapshot = bankState.Snapshot
+	if err = saveBankSyncState(reopened, bankReopened); err != nil {
+		t.Fatal(err)
+	}
+	bankResult = client.request("POST", "/api/bank-sync/apply", map[string]string{"commit": bankCommit}, 200)
+	if unmarshal[int](t, bankResult["imported"]) != 0 || unmarshal[int](t, bankResult["unchanged"]) != len(bankState.Snapshot.Records) {
+		t.Fatal("PostgreSQL repeated bank sync duplicated records")
+	}
+	bankTask, err = reopened.task(bankTaskID)
+	if err != nil || bankTask.BankVisibility != "public" {
+		t.Fatal("PostgreSQL repeated sync overwrote local visibility", err)
+	}
 }
