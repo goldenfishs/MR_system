@@ -20,7 +20,7 @@
 
 ## 扩展方式
 
-新业务仍需编写自己的权限检查、输入整理、提示词、输出校验与限流，再通过 `callAIApplication(ctx, applicationID, userContent, maxTokens)` 解析应用绑定并发送请求。更复杂的业务可使用 `resolveAIApplication`、`aiClient` 和 `requestAICompletion` 组合输入与固定输出约束；发票识别沿用自己的结构校验并共用底层调用。上传文件与业务数据不能因为配置了模型就自动开放给模型服务。自定义提示词不应替代业务侧固定的输出结构及数据校验。
+新业务仍需编写自己的权限检查、输入整理、提示词、输出校验与限流，再通过 `callAIApplication(ctx, applicationID, userContent, maxTokens)` 解析应用绑定并发送请求。更复杂的业务可使用 `resolveAIApplication`、`aiProviderClient` 和 `requestAICompletion` 组合输入与固定输出约束；发票识别沿用自己的结构校验并共用底层调用。上传文件与业务数据不能因为配置了模型就自动开放给模型服务。自定义提示词不应替代业务侧固定的输出结构及数据校验。
 
 当前实现文本及图片消息的 OpenAI-compatible 调用、模型列表与连接测试。语音、Embedding、Rerank、原生 Anthropic/Gemini 协议、工具执行与 Agent 工作流不在此版本内；需要时可增加适配器和业务应用，沿用服务商和模型引用关系。
 

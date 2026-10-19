@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func aiFixture() aiConfiguration {
+func aiConfigurationFixture() aiConfiguration {
 	app := builtinFinanceAI()
 	app.Enabled = true
 	app.ModelID = "vision"
@@ -49,12 +49,12 @@ func TestAISettingsPrivacyRevisionAndEndpointChange(t *testing.T) {
 	a, _ := setup(t)
 	admin := User{ID: "ai-admin", Role: "admin"}
 	student := User{ID: "ai-student", Role: "student"}
-	_, e := putAI(t, a, aiFixture(), student)
+	_, e := putAI(t, a, aiConfigurationFixture(), student)
 	requireAIStatus(t, e, 403)
 	for _, handler := range []func(http.ResponseWriter, *http.Request, User) error{a.getAIConfiguration, a.discoverAIModels, a.testAIModel} {
 		requireAIStatus(t, handler(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil), student), 403)
 	}
-	w, e := putAI(t, a, aiFixture(), admin)
+	w, e := putAI(t, a, aiConfigurationFixture(), admin)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -171,7 +171,7 @@ func TestAIMigrationAndFinanceBinding(t *testing.T) {
 func TestAIConfigReferencesAndCapabilities(t *testing.T) {
 	a, _ := setup(t)
 	admin := User{ID: "validation-admin", Role: "admin"}
-	if _, e := putAI(t, a, aiFixture(), admin); e != nil {
+	if _, e := putAI(t, a, aiConfigurationFixture(), admin); e != nil {
 		t.Fatal(e)
 	}
 	cases := map[string]func(*aiConfiguration){"delete provider": func(s *aiConfiguration) { s.Providers = nil }, "delete bound model": func(s *aiConfiguration) { s.Models = nil }, "no vision": func(s *aiConfiguration) { s.Models[0].Vision = false }, "duplicate model": func(s *aiConfiguration) { s.Models = append(s.Models, s.Models[0]) }, "duplicate provider": func(s *aiConfiguration) { s.Providers = append(s.Providers, s.Providers[0]) }, "remove builtin": func(s *aiConfiguration) { s.Applications = nil }, "private endpoint": func(s *aiConfiguration) { s.Providers[0].BaseURL = "https://127.0.0.1/v1" }, "encoded path": func(s *aiConfiguration) { s.Providers[0].BaseURL = "https://api.example.com/%2e%2e/v1" }, "injected ciphertext": func(s *aiConfiguration) { s.Providers[0].KeyCiphertext = "foreign" }}

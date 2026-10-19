@@ -297,7 +297,7 @@ func (a *App) resolveAIApplication(id string) (aiResolvedApplication, error) {
 }
 
 // aiClient is shared by every internal AI application; no browser completion proxy.
-func (a *App) aiClient(ctx context.Context, p aiProvider) (*http.Client, string, error) {
+func (a *App) aiProviderClient(ctx context.Context, p aiProvider) (*http.Client, string, error) {
 	endpoint, e := financeRecognitionURL(p.BaseURL)
 	if e != nil {
 		return nil, "", e
@@ -369,7 +369,7 @@ func (a *App) callAIApplication(ctx context.Context, id string, userContent any,
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	client, key, e := a.aiClient(ctx, resolved.Provider)
+	client, key, e := a.aiProviderClient(ctx, resolved.Provider)
 	if e != nil {
 		return "", e
 	}
@@ -453,7 +453,7 @@ func (a *App) discoverAIModels(w http.ResponseWriter, r *http.Request, u User) e
 	defer done()
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	client, key, e := a.aiClient(ctx, p)
+	client, key, e := a.aiProviderClient(ctx, p)
 	if e != nil {
 		return e
 	}
@@ -501,7 +501,7 @@ func (a *App) testAIModel(w http.ResponseWriter, r *http.Request, u User) error 
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	client, key, e := a.aiClient(ctx, p)
+	client, key, e := a.aiProviderClient(ctx, p)
 	if e != nil {
 		return e
 	}
