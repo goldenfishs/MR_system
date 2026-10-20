@@ -2,10 +2,9 @@
 import { computed, onMounted, ref } from "vue";
 import { api } from "../lib/api";
 import { hasPermission } from "../lib/permissions";
-import type { Settings, Task } from "../lib/types";
+import type { Task } from "../lib/types";
 import { dateTime, type JudgeService } from "../lib/platform";
-const settings = ref<Settings | null>(null),
-  service = ref<JudgeService | null>(null),
+const service = ref<JudgeService | null>(null),
   tasks = ref<Task[]>([]),
   loading = ref(true),
   error = ref("");
@@ -16,12 +15,10 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const [s, j, t] = await Promise.all([
-      api.get<{ settings: Settings }>("/settings"),
+    const [j, t] = await Promise.all([
       api.get<JudgeService>("/judge/config"),
       api.get<{ items: Task[] }>("/tasks"),
     ]);
-    settings.value = s.settings;
     service.value = j;
     tasks.value = t.items;
   } catch (e) {
@@ -109,22 +106,20 @@ onMounted(load);
       </div>
       <v-card v-else class="pa-10 text-center text-medium-emphasis mb-5"
         >暂时没有代码测评或考试。管理员发布后会显示在这里。</v-card
-      ><v-card v-if="settings?.hydroUrl" class="pa-5 mt-6"
+      ><v-card class="pa-5 mt-6"
         ><div class="d-flex align-center flex-wrap ga-4">
           <v-icon size="32" color="primary">mdi-open-in-new</v-icon>
           <div>
-            <h2 class="text-subtitle-1">Hydro 外部题库</h2>
+            <h2 class="text-subtitle-1">本站题库</h2>
             <p class="text-caption text-medium-emphasis">
-              在独立平台登录，成绩暂不自动同步。
+              按分类查找题目，在本站练习和查看提交结果。
             </p>
           </div>
           <v-spacer /><v-btn
-            :href="settings.hydroUrl"
-            target="_blank"
-            rel="noopener noreferrer"
+            to="/learning?section=bank"
             color="primary"
             variant="tonal"
-            >打开外部题库</v-btn
+            >进入题库</v-btn
           >
         </div></v-card
       ></template

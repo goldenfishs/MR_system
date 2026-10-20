@@ -151,10 +151,6 @@ async function save() {
     error.value = "标志地址需为公开静态路径，或以 https:// / http:// 开头；不能使用需登录的个人附件地址。";
     return;
   }
-  if (form.hydroUrl && !/^https?:\/\//i.test(form.hydroUrl)) {
-    error.value = "Hydro 地址需以 https:// 或 http:// 开头。";
-    return;
-  }
   saving.value = true;
   error.value = "";
   try {
@@ -183,15 +179,16 @@ onMounted(() => {
 });
 </script>
 <template>
-  <div class="page-content">
+  <div class="page-content settings-page">
     <h1 class="page-title">系统设置</h1>
-    <p class="page-subtitle">管理网站名称、标志、招新安排、发信邮箱与发票识别。修改后立即生效。</p>
+    <p class="page-subtitle">管理网站信息、招新与邮件服务；题库和 AI 使用各自的管理入口。</p>
     <div class="settings-shortcuts mb-6">
       <v-btn to="/admin" variant="tonal" prepend-icon="mdi-shield-crown-outline">系统管理</v-btn>
       <v-btn to="/members" variant="tonal" prepend-icon="mdi-account-cog-outline">用户管理</v-btn>
       <v-btn href="#branding" variant="text" prepend-icon="mdi-palette-outline">网站外观</v-btn>
       <v-btn href="#email" variant="text" prepend-icon="mdi-email-outline">邮件服务</v-btn>
       <v-btn to="/ai-settings" variant="text" prepend-icon="mdi-creation-outline">AI 配置</v-btn>
+      <v-btn to="/bank-management" variant="text" prepend-icon="mdi-bookshelf">题库管理</v-btn>
     </div>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-5"
       >{{ error
@@ -199,7 +196,8 @@ onMounted(() => {
         >重试</v-btn
       ></v-alert
     ><v-progress-linear v-if="loading" indeterminate color="primary" />
-    <form v-else-if="loaded" @submit.prevent="save" class="settings-form">
+    <div v-else-if="loaded" class="settings-layout">
+    <form @submit.prevent="save" class="settings-form website-form">
       <v-card id="branding" class="settings-card"
         ><div class="settings-heading">
           <v-icon color="primary">mdi-office-building-outline</v-icon>
@@ -262,23 +260,8 @@ onMounted(() => {
           label="报名截止时间（本地时间）"
           hint="留空表示不设时间限制；关闭报名开关仍会立即停止接收。"
           persistent-hint /></v-card
-      ><v-card class="settings-card"
-        ><div class="settings-heading">
-          <v-icon color="primary">mdi-code-braces</v-icon>
-          <div>
-            <h2>Hydro 测评入口</h2>
-            <p>配置独立部署的在线评测平台地址</p>
-          </div>
-        </div>
-        <v-text-field
-          v-model="form.hydroUrl"
-          label="Hydro 站点地址"
-          placeholder="https://oj.example.com"
-          type="url"
-          hint="当前版本提供外部入口，成绩与账号同步尚未接入。"
-          persistent-hint
-      /></v-card>
-      <div class="d-flex align-center justify-space-between ga-4">
+      >
+      <div class="settings-save">
         <span class="save-hint">修改会写入操作记录</span
         ><v-btn
           type="submit"
@@ -290,7 +273,19 @@ onMounted(() => {
         >
       </div>
     </form>
-    <form v-if="loaded" @submit.prevent="saveMail" class="settings-form">
+    <aside class="settings-sidebar">
+      <v-card class="settings-card bank-settings-card">
+        <div class="settings-heading">
+          <v-icon color="primary">mdi-bookshelf</v-icon>
+          <div><h2>题库与仓库同步</h2><p>本地题库直接使用，GitHub 仓库用于共同维护与更新。</p></div>
+        </div>
+        <p class="bank-description">成员在本站刷题。管理员可在「题库管理」检查 GitHub 仓库更新、同步题目，并设置公开或内部可见；也可以在「学习与任务」自主添加题目。</p>
+        <div class="bank-actions">
+          <v-btn to="/bank-management" color="primary" variant="tonal" prepend-icon="mdi-sync">管理题库与同步</v-btn>
+          <v-btn to="/learning?section=bank" variant="text" append-icon="mdi-arrow-right">查看题库</v-btn>
+        </div>
+      </v-card>
+    <form @submit.prevent="saveMail" class="settings-form">
       <v-card id="email" class="settings-card">
         <div class="settings-heading">
           <v-icon color="primary">mdi-email-outline</v-icon>
@@ -322,6 +317,8 @@ onMounted(() => {
         </template>
       </v-card>
     </form>
+    </aside>
+    </div>
 
     <v-snackbar v-model="saved" color="success">{{ savedMessage }}</v-snackbar>
   </div>
@@ -341,15 +338,22 @@ onMounted(() => {
 .logo-preview strong, .logo-preview span { display: block; }
 .logo-preview strong { font-size: 16px; font-weight: 500; }
 .logo-preview span { font-size: 13px; color: #757575; margin-top: 5px; }
-.settings-form {
-  max-width: 850px;
-  margin-bottom: 22px;
+.settings-page { container: settings / inline-size; }
+.settings-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; }
+.settings-form, .settings-sidebar { min-width: 0; }
+.settings-sidebar { display: grid; gap: 24px; }
+.settings-save, .bank-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.bank-actions { justify-content: flex-start; margin-top: 18px; }
+.bank-description { font-size: 14px; line-height: 1.9; color: rgba(var(--v-theme-on-surface), .7); }
+@container settings (min-width: 1100px) {
+  .settings-layout { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
 }
 .settings-shortcuts { display: flex; flex-wrap: wrap; gap: 8px; }
 .settings-card {
   scroll-margin-top: 90px;
   padding: 27px 30px;
   margin-bottom: 22px;
+  min-width: 0;
 }
 .settings-heading {
   display: flex;
@@ -357,18 +361,23 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 24px;
 }
+.settings-heading > div { min-width: 0; }
+.settings-heading > .v-icon { flex-shrink: 0; }
+.settings-card :deep(.v-input) { min-width: 0; }
+.settings-card :deep(.v-messages), .settings-heading p { overflow-wrap: anywhere; }
+.bank-settings-card, #email { margin-bottom: 0; }
 .settings-heading h2 {
   font-size: 16px;
   margin: 0 0 6px;
 }
 .settings-heading p {
   font-size: 13px;
-  color: #757575;
+  color: rgba(var(--v-theme-on-surface), .65);
   margin: 0;
 }
 .save-hint {
   font-size: 13px;
-  color: #757575;
+  color: rgba(var(--v-theme-on-surface), .65);
 }
 .email-status-text {
   margin: 0 0 6px;

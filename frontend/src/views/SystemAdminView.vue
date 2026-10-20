@@ -16,10 +16,11 @@ const cards = [
   { title: "考核阶段配置", description: "按组设置阶段数量、名称、说明与顺序，同步尚未考核的新生。", icon: "mdi-account-school-outline", to: "/training?section=plans", color: "purple" },
   { title: "荣誉与证书", description: "管理证书与荣誉，按用户资料生成并批量发放。", icon: "mdi-certificate-outline", to: "/records", color: "orange-darken-2" },
   { title: "邮件管理", description: "选择收件人、编辑通知，查看发送进度与结果。", icon: "mdi-email-multiple-outline", to: "/mail", color: "primary" },
+  { title: "题库管理", description: "管理本地题目，从 GitHub 仓库同步更新，设置公开与内部可见。", icon: "mdi-bookshelf", to: "/bank-management", color: "primary" },
   { title: "学习内容", description: "发布知识库、作业、考试和题库，查看作答与评阅。", icon: "mdi-book-open-page-variant-outline", to: "/learning", color: "teal" },
   { title: "讨论区管理", description: "解答各组问题，将重要解答公开给全队查阅。", icon: "mdi-forum-outline", to: "/discussions", color: "purple" },
   { title: "面试管理", description: "报名自动进入面试，安排教室和顺序，发送通知并确认录取。", icon: "mdi-account-clock-outline", to: "/recruitment", color: "orange-darken-2" },
-  { title: "通用设置", description: "管理网站公告、报名设置和在线测评服务入口。", icon: "mdi-cog-outline", to: "/settings#general", color: "blue-grey" },
+  { title: "通用设置", description: "管理网站公告、报名开放时间与通用网站信息。", icon: "mdi-cog-outline", to: "/settings#general", color: "blue-grey" },
 ];
 const summary = computed(() => [
   { label: "待审核报名", value: stats.value.pendingApplications, to: "/applications" },
