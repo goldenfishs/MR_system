@@ -6,7 +6,7 @@ import { api, ApiError } from "../lib/api";
 import { groupOptions, groupLabel, hasPermission, isParticipant } from "../lib/permissions";
 import { canAccessLearning, canAccessLearningModule, learningAccess, learningDirections } from "../lib/learning-access";
 import { auth } from "../lib/auth";
-import { algorithmGroups, algorithmCourseGroups, compareAlgorithmCourse } from "../lib/problem-curriculum";
+import { algorithmGroups, algorithmCourseGroups, compareAlgorithmCourse, problemCourses, problemCourse, problemTopics } from "../lib/problem-curriculum";
 import type { Task, Submission, Applicant, AssignmentQuestion, AssignmentQuestionType } from "../lib/types";
 import type { JudgeConfig, JudgeRun, JudgeService, Membership, TeamSpace } from "../lib/platform";
 import FileUpload from "../components/FileUpload.vue";
@@ -290,39 +290,40 @@ const assignments = computed(() => scopedTasks.value.filter((task) => categoryOf
 const upcomingExams = computed(() => exams.value.filter((task) => !isExpired(task.dueAt)).sort((a, b) => (a.startsAt || "").localeCompare(b.startsAt || "")).slice(0, 4));
 const recentTasks = computed(() => assignments.value.slice(0, 4));
 const problemTag = ref("全部标签"), problemGroup = ref("全部题目"), problemDifficulty = ref("全部难度"), problemSort = ref("course"), problemPage = ref(1);
-const controlCourses = ["C语言基础", "C语言进阶", "STM32单片机基础", "单片机通用基础"];
 const bankVisibility = ref<"public" | "internal">("public");
 const bankTasks = computed(() => scopedTasks.value.filter(task => categoryOf(task) === "problem" && (task.bankVisibility || "public") === bankVisibility.value));
-const controlBank = computed(() => selectedDirection.value === "电控");
-const algorithmBank = computed(() => selectedDirection.value === "视觉算法");
-const courseBank = computed(() => controlBank.value || algorithmBank.value);
-const taskProblemGroups = (task: Task) => {
-  const tags = task.tags || [];
-  const groups = controlBank.value ? controlCourses.filter(course => tags.includes(course)) : algorithmBank.value ? algorithmGroups(task) : tags;
-  return groups.length ? groups : ["未分组"];
-};
+const problemChapter = ref("全部章节");
+const taskProblemGroups = (task: Task) => [problemCourse(task)];
 const problemGroups = computed(() => {
   const counts = new Map<string, number>();
   for (const task of bankTasks.value) {
     for (const group of new Set(taskProblemGroups(task))) counts.set(group, (counts.get(group) || 0) + 1);
   }
-  const names = controlBank.value
-    ? [...controlCourses.filter(course => counts.has(course)), ...(counts.has("未分组") ? ["未分组"] : [])]
-    : algorithmBank.value ? algorithmCourseGroups.filter(name => counts.has(name))
-    : [...counts.keys()].sort((a, b) => a === "未分组" ? 1 : b === "未分组" ? -1 : a.localeCompare(b, "zh-CN"));
+  const names = problemCourses.filter(name => counts.has(name));
   return [{ name: "全部题目", count: bankTasks.value.length }, ...names.map(name => ({ name, count: counts.get(name) || 0 }))];
 });
 const problemTags = computed(() => [...new Set(bankTasks.value.flatMap(task => task.tags || []))].sort());
-const filteredProblemTags = computed(() => [...new Set(bankTasks.value
-  .filter(task => problemGroup.value === "全部题目" || taskProblemGroups(task).includes(problemGroup.value))
-  .flatMap(task => task.tags || []))].filter(tag => !controlBank.value || !controlCourses.includes(tag)).filter(tag => !algorithmBank.value || !algorithmCourseGroups.includes(tag)).sort());
+const courseProblems = computed(() => bankTasks.value.filter(task => problemGroup.value === "全部题目" || problemCourse(task) === problemGroup.value));
+const problemChapters = computed(() => algorithmCourseGroups.filter(chapter => courseProblems.value.some(task =>
+  problemCourse(task) === "数据结构与算法" && algorithmGroups(task).includes(chapter))));
+const filteredProblemTags = computed(() => [...new Set(courseProblems.value
+  .filter(task => problemChapter.value === "全部章节" || problemCourse(task) === "数据结构与算法" && algorithmGroups(task).includes(problemChapter.value))
+  .flatMap(problemTopics))].sort((a, b) => a.localeCompare(b, "zh-CN")));
 function selectProblemGroup(group: string) {
   problemGroup.value = group;
+  problemChapter.value = "全部章节";
   problemTag.value = "全部标签";
 }
+function visibleProblemTopics(task: Task) {
+  const topics = problemTopics(task);
+  return problemTag.value !== "全部标签" && topics.includes(problemTag.value)
+    ? [problemTag.value, ...topics.filter(tag => tag !== problemTag.value)].slice(0, 2) : topics.slice(0, 2);
+}
+watch(problemChapter, () => problemTag.value = "全部标签");
 function resetProblemFilters() {
   search.value = "";
   problemGroup.value = "全部题目";
+  problemChapter.value = "全部章节";
   problemTag.value = "全部标签";
   problemDifficulty.value = "全部难度";
 }
@@ -330,23 +331,20 @@ watch([directionFilter, bankVisibility], resetProblemFilters);
 const problems = computed(() => {
   const result = filtered.value.filter(task =>
     (problemGroup.value === "全部题目" || taskProblemGroups(task).includes(problemGroup.value)) &&
+    (problemChapter.value === "全部章节" || problemCourse(task) === "数据结构与算法" && algorithmGroups(task).includes(problemChapter.value)) &&
     (problemTag.value === "全部标签" || task.tags?.includes(problemTag.value)) &&
     (problemDifficulty.value === "全部难度" || task.difficulty === problemDifficulty.value),
   );
   if (problemSort.value === "title") result.sort((a, b) => a.title.localeCompare(b.title, "zh-CN"));
   else if (problemSort.value === "accepted") result.sort((a, b) => (b.acceptedCount || 0) - (a.acceptedCount || 0));
-  else if (problemSort.value === "course" && algorithmBank.value) result.sort(compareAlgorithmCourse);
-  else if (problemSort.value === "course" && controlBank.value) {
-    const rank = (task: Task) => {
-      const index = controlCourses.findIndex(course => task.tags?.includes(course));
-      return index < 0 ? controlCourses.length : index;
-    };
-    result.sort((a, b) => rank(a) - rank(b) || b.createdAt.localeCompare(a.createdAt));
-  } else result.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  else if (problemSort.value === "course") result.sort((a, b) =>
+    problemCourses.indexOf(problemCourse(a)) - problemCourses.indexOf(problemCourse(b)) ||
+    (problemCourse(a) === "数据结构与算法" ? compareAlgorithmCourse(a, b) : a.title.localeCompare(b.title, "zh-CN", { numeric: true })));
+  else result.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return result;
 });
 const pagedProblems = computed(() => problems.value.slice((problemPage.value - 1) * 15, problemPage.value * 15));
-watch([search, problemGroup, problemTag, problemDifficulty, problemSort, directionFilter, bankVisibility], () => problemPage.value = 1);
+watch([search, problemGroup, problemChapter, problemTag, problemDifficulty, problemSort, directionFilter, bankVisibility], () => problemPage.value = 1);
 function goSection(value: string) {
   router.push({ path: "/learning", query: { direction: selectedDirection.value || undefined, section: value } });
 }
@@ -1305,11 +1303,10 @@ onUnmounted(() => clearInterval(timeTicker));
           </div>
         </div>
         <div v-if="section === 'bank'" class="bank-visibility-tabs"><v-btn-toggle v-model="bankVisibility" mandatory color="primary" variant="outlined"><v-btn value="public" prepend-icon="mdi-earth">公开题库</v-btn><v-btn v-if="canManage" value="internal" prepend-icon="mdi-lock-outline">内部题库</v-btn></v-btn-toggle><p>{{ bankVisibility === 'internal' ? '仅有本组任务管理权限的管理者可见，可选入作业后向学生开放。' : '所有登录成员均可跨组练习。' }}</p></div>
-        <section v-if="section === 'bank'" class="problem-groups" :aria-label="courseBank ? '课程分组' : '标签分组'">
+        <section v-if="section === 'bank'" class="problem-groups" aria-label="课程分类">
           <div class="problem-groups-heading">
-            <h3>{{ courseBank ? '课程分组' : '标签分组' }}</h3>
-            <p v-if="controlBank">先掌握 C 语言基础，再学习进阶编程和 STM32 单片机。</p>
-            <p v-else-if="algorithmBank">按 01–12 章由基础编程逐步学习数据结构与算法；也可选择已有阶段练习，或按知识标签筛选。</p>
+            <h3>课程分类</h3>
+            <p>先选课程，再按章节或知识点筛选；也可以直接搜索题目。</p>
           </div>
           <div class="problem-group-options">
             <button v-for="group in problemGroups" :key="group.name" type="button"
@@ -1322,11 +1319,21 @@ onUnmounted(() => clearInterval(timeTicker));
         <div v-if="section === 'bank'" class="problem-layout">
           <v-card class="problem-list" elevation="1">
             <div class="problem-list-tools"><v-select v-model="problemSort" :items="[{value:'course',title:'学习顺序'},{value:'newest',title:'最新发布'},{value:'title',title:'题目名称'},{value:'accepted',title:'通过次数'}]" density="compact" variant="outlined" hide-details aria-label="题库排序" /><span>{{ problems.length }} 道题目</span></div>
-            <div class="problem-table-scroll"><table class="problem-table"><thead><tr><th>状态</th><th>题目</th><th>标签</th><th>通过 / 尝试</th><th>难度</th></tr></thead><tbody><tr v-for="task in pagedProblems" :key="task.id"><td><v-icon v-if="task.mechanicalProblem?.type === 'drawing'" size="19" color="blue-grey" title="自主练习，无需提交">mdi-ruler-square</v-icon><v-icon v-else size="19" :color="task.myAccepted ? 'teal' : 'grey-lighten-1'">{{ task.myAccepted ? 'mdi-check-circle-outline' : 'mdi-circle-outline' }}</v-icon></td><td><button class="problem-title" @click="openTask(task)"><span>#{{ task.id.slice(0, 6).toUpperCase() }}</span><strong>{{ task.title }}</strong><span v-if="task.mechanicalProblem">{{ objectiveTypeLabel(task) }}</span></button></td><td><div class="problem-tags"><v-chip v-for="tag in task.tags || []" :key="tag" size="x-small" color="primary" variant="tonal" @click="(controlBank && controlCourses.includes(tag)) || (algorithmBank && algorithmCourseGroups.includes(tag)) ? selectProblemGroup(tag) : problemTag = tag">{{ tag }}</v-chip><span v-if="!task.tags?.length">{{ task.direction }}</span></div></td><td>{{ task.mechanicalProblem?.type === 'drawing' ? '自主练习' : `${task.acceptedCount || 0} / ${task.attemptCount || 0}` }}</td><td><v-chip size="x-small" :color="task.difficulty === '挑战' ? 'deep-orange' : task.difficulty === '进阶' ? 'amber-darken-2' : 'teal'" variant="tonal">{{ task.difficulty }}</v-chip></td></tr></tbody></table></div>
+            <div class="problem-table-scroll"><table class="problem-table"><thead><tr><th>状态</th><th>题目</th><th>标签</th><th>通过 / 尝试</th><th>难度</th></tr></thead><tbody><tr v-for="task in pagedProblems" :key="task.id"><td><v-icon v-if="task.mechanicalProblem?.type === 'drawing'" size="19" color="blue-grey" title="自主练习，无需提交">mdi-ruler-square</v-icon><v-icon v-else size="19" :color="task.myAccepted ? 'teal' : 'grey-lighten-1'">{{ task.myAccepted ? 'mdi-check-circle-outline' : 'mdi-circle-outline' }}</v-icon></td><td><button class="problem-title" @click="openTask(task)"><span>#{{ task.id.slice(0, 6).toUpperCase() }}</span><strong>{{ task.title }}</strong><span v-if="task.mechanicalProblem">{{ objectiveTypeLabel(task) }}</span></button></td><td><div class="problem-course-label">{{ problemCourse(task) }}</div><div class="problem-tags"><v-chip v-for="tag in visibleProblemTopics(task)" :key="tag" size="x-small" color="primary" variant="tonal" @click="problemTag = tag">{{ tag }}</v-chip><span v-if="problemTopics(task).length > 2" class="problem-more-tags" :title="problemTopics(task).join('、')">+{{ problemTopics(task).length - 2 }}</span></div></td><td>{{ task.mechanicalProblem?.type === 'drawing' ? '自主练习' : `${task.acceptedCount || 0} / ${task.attemptCount || 0}` }}</td><td><v-chip size="x-small" :color="task.difficulty === '挑战' ? 'deep-orange' : task.difficulty === '进阶' ? 'amber-darken-2' : 'teal'" variant="tonal">{{ task.difficulty }}</v-chip></td></tr></tbody></table></div>
             <div v-if="!problems.length" class="problem-empty"><v-icon size="38" color="indigo-lighten-3">{{ mechanicalBank ? 'mdi-pencil-ruler' : 'mdi-code-braces' }}</v-icon><h2>暂无匹配的题目</h2><p>{{ canManage ? mechanicalBank ? '发布选择、填空题或练习图纸，参考答案可按需提供。' : auth.user?.role === 'admin' ? '在「题库管理」中同步 GitHub 题库并设置公开范围，或直接发布新题目。' : '发布新的练习题目，或通过「更多」导入系统内置示例题。' : '更换搜索条件，或等待管理员发布新的练习题目。' }}</p></div>
             <v-pagination v-if="problems.length > 15" v-model="problemPage" :length="Math.ceil(problems.length / 15)" :total-visible="5" density="compact" class="my-3" />
           </v-card>
-          <aside class="problem-sidebar"><v-card elevation="1"><h3>题目分类</h3><v-select v-model="problemTag" :items="['全部标签', ...filteredProblemTags]" label="知识标签" density="compact" variant="outlined" hide-details /><v-select v-model="problemDifficulty" :items="['全部难度', '入门', '进阶', '挑战']" label="题目难度" density="compact" variant="outlined" hide-details class="mt-4" /><v-btn color="primary" variant="text" class="mt-3" @click="resetProblemFilters">清除筛选</v-btn></v-card><v-card elevation="1"><h3>练习一道题</h3><p>从当前筛选结果中随机挑选，开始今天的练习。</p><v-btn color="primary" variant="tonal" block prepend-icon="mdi-shuffle-variant" :disabled="!problems.length" @click="randomProblem">随机题目</v-btn></v-card></aside>
+          <aside class="problem-sidebar">
+            <v-card elevation="1">
+              <h3>细化筛选</h3>
+              <v-autocomplete v-if="problemChapters.length" :model-value="problemChapter === '全部章节' ? null : problemChapter" @update:model-value="problemChapter = $event || '全部章节'" :items="problemChapters" clearable placeholder="全部章节" label="课程章节" density="compact" variant="outlined" hide-details no-data-text="没有匹配的章节" class="mb-4" />
+              <v-autocomplete :model-value="problemTag === '全部标签' ? null : problemTag" @update:model-value="problemTag = $event || '全部标签'" :items="filteredProblemTags" clearable placeholder="全部知识点" label="搜索知识点" density="compact" variant="outlined" hide-details no-data-text="没有匹配的知识点" />
+              <v-select v-model="problemDifficulty" :items="['全部难度', '入门', '进阶', '挑战']" label="题目难度" density="compact" variant="outlined" hide-details class="mt-4" />
+              <p class="problem-filter-hint">知识点随课程与章节变化，无需翻找全部标签。</p>
+              <v-btn color="primary" variant="text" @click="resetProblemFilters">清除筛选</v-btn>
+            </v-card>
+            <v-card elevation="1"><h3>练习一道题</h3><p>从当前筛选结果中随机挑选，开始今天的练习。</p><v-btn color="primary" variant="tonal" block prepend-icon="mdi-shuffle-variant" :disabled="!problems.length" @click="randomProblem">随机题目</v-btn></v-card>
+          </aside>
         </div>
         <div v-else-if="filtered.length" class="task-grid">
           <v-card
@@ -2451,6 +2458,9 @@ onUnmounted(() => clearInterval(timeTicker));
   font-weight: 500;
   color: #1976d2;
 }
+.problem-course-label { font-size: 12px; color: rgba(var(--v-theme-on-surface), .65); margin-bottom: 6px; }
+.problem-more-tags { font-size: 11px; color: rgba(var(--v-theme-on-surface), .6); align-self: center; cursor: help; }
+.problem-sidebar .problem-filter-hint { margin: 14px 0 6px; font-size: 12px; }
 .problem-tags {
   display: flex;
   flex-wrap: wrap;

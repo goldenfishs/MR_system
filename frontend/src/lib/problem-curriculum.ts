@@ -5,6 +5,31 @@ export const algorithmChapters = [
 ];
 const ladderStages = ['第一阶段·编程入门', '第二阶段·数组与容器', '第三阶段·贪心与搜索', '第四阶段·动态规划'];
 export const algorithmCourseGroups = [...algorithmChapters, ...ladderStages, '课程内部练习', '基础知识与练习'];
+export const problemCourses = [
+  'C语言基础', 'C语言进阶', 'C++基础', 'Python基础', '数据结构与算法',
+  'STM32单片机基础', '单片机通用基础', '硬件与电路', '机械与制图', '其他练习',
+];
+type CategorizedProblem = { direction?: string; tags?: string[] };
+
+// Presentation categories only: preserve the original tags and question data.
+export function problemCourse(task: CategorizedProblem): string {
+  const tags = task.tags || [];
+  if (task.direction === '机械') return '机械与制图';
+  for (const course of ['C语言基础', 'C语言进阶', 'STM32单片机基础', '单片机通用基础']) {
+    if (tags.includes(course)) return course;
+  }
+  if (task.direction === '硬件') return '硬件与电路';
+  if (tags.some(tag => algorithmChapters.includes(tag) || ladderStages.includes(tag) || ['算法', '算法阶梯', '系统学习路径'].includes(tag))) return '数据结构与算法';
+  if (tags.includes('Python')) return 'Python基础';
+  if (tags.includes('C++') || tags.includes('视觉培训')) return 'C++基础';
+  if (tags.includes('C语言')) return 'C语言基础';
+  return '其他练习';
+}
+
+export function problemTopics(task: CategorizedProblem): string[] {
+  const categoryTags = new Set([...problemCourses, ...algorithmCourseGroups, 'C++', 'Python', 'C语言', '系统学习路径', '算法阶梯', '视觉培训', '算法']);
+  return [...new Set(task.tags || [])].filter(tag => !categoryTags.has(tag));
+}
 type Problem = { title: string; tags?: string[]; createdAt: string };
 
 export function algorithmGroups(task: Pick<Problem, 'tags'>): string[] {
